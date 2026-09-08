@@ -56,6 +56,13 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 		return err
 	}
 
+	// Whatever ends this attempt, whether the stream fails outright or the
+	// supervisor is about to back off and retry, the fps and bitrate gauges
+	// must not keep reporting the last rate seen while nothing is actually
+	// arriving. DroppedAudio and AudioFrames are untouched by this: those
+	// are cumulative counters meant to survive a reconnect, not a rate.
+	defer h.MarkDisconnected()
+
 	kind, ok := streamKind(cfg.Stream)
 	if !ok {
 		return fmt.Errorf("stream: %s: unknown stream %q", cfg.Name, cfg.Stream)
@@ -156,15 +163,16 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 
 					case baichuan.FrameAAC, baichuan.FrameADPCM:
 						if mux == nil {
-							// No video frame yet, so no muxer to carry this
-							// on and no codec to build one with. Dropped
-							// without counting: this is a startup ordering
-							// gap, not the unsupported-codec condition
-							// DroppedAudio exists to catch.
+							// No video frame yet, so no muxer exists to carry
+							// this on and no codec to build one with.
+							if droppedEarlyAudio(f.Kind) {
+								h.AddDroppedAudio(1)
+							}
 							continue
 						}
 						if pkt := mux.Frame(f); pkt != nil {
 							h.Publish(pkt)
+							h.AddAudioFrames(1)
 						}
 						if dropped := mux.DroppedAudio(); dropped > reportedDroppedAudio {
 							h.AddDroppedAudio(dropped - reportedDroppedAudio)
@@ -195,4 +203,17 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 // without a real connection or a live camera clock.
 func shouldPing(last, now time.Time, every time.Duration) bool {
 	return now.Sub(last) >= every
+}
+
+// droppedEarlyAudio reports whether an audio frame that arrived before any
+// video frame, and so before a muxer exists to carry it, should still count
+// toward DroppedAudio. ADPCM is never carried regardless of when it arrives
+// (see ts.NewMuxerWithAudio), so counting it here, rather than waiting for a
+// muxer to exist first, is what keeps a camera whose audio leads its video,
+// which is the ordering seen on every reconnect, from under-reporting
+// DroppedAudio until the next video frame happens to land. AAC arriving
+// this early is a genuine loss too, but not an unsupported-codec drop, so
+// it does not count here.
+func droppedEarlyAudio(kind baichuan.FrameKind) bool {
+	return kind == baichuan.FrameADPCM
 }

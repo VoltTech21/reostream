@@ -223,3 +223,58 @@ func TestAddDroppedAudioAccumulatesAcrossCalls(t *testing.T) {
 		t.Fatalf("DroppedAudio = %d, want 5", got)
 	}
 }
+
+func TestAddAudioFramesAccumulates(t *testing.T) {
+	h := New(4)
+	h.AddAudioFrames(1)
+	h.AddAudioFrames(1)
+	if got := h.Stats().AudioFrames; got != 2 {
+		t.Fatalf("AudioFrames = %d, want 2", got)
+	}
+}
+
+func TestThreeAudioStatesAreDistinguishable(t *testing.T) {
+	// A camera with no audio at all, one whose audio is being dropped for
+	// an unsupported codec, and one whose audio is flowing must all report
+	// different combinations of AudioFrames and DroppedAudio: this is what
+	// makes a silent camera diagnosable now that every stream declares an
+	// audio track regardless of whether one ever arrives.
+	silent := New(4)
+	dropping := New(4)
+	dropping.AddDroppedAudio(5)
+	healthy := New(4)
+	healthy.AddAudioFrames(5)
+
+	if s := silent.Stats(); s.AudioFrames != 0 || s.DroppedAudio != 0 {
+		t.Fatalf("silent camera: AudioFrames=%d DroppedAudio=%d, want both 0", s.AudioFrames, s.DroppedAudio)
+	}
+	if s := dropping.Stats(); s.AudioFrames != 0 || s.DroppedAudio == 0 {
+		t.Fatalf("dropping camera: AudioFrames=%d DroppedAudio=%d, want AudioFrames 0 and DroppedAudio nonzero", s.AudioFrames, s.DroppedAudio)
+	}
+	if s := healthy.Stats(); s.AudioFrames == 0 || s.DroppedAudio != 0 {
+		t.Fatalf("healthy camera: AudioFrames=%d DroppedAudio=%d, want AudioFrames nonzero and DroppedAudio 0", s.AudioFrames, s.DroppedAudio)
+	}
+}
+
+func TestMarkDisconnectedZeroesRateNotCounters(t *testing.T) {
+	h := New(4)
+	h.AddAudioFrames(3)
+	h.AddDroppedAudio(2)
+	// Force a rate to actually land by crossing the stats window.
+	h.RecordFrame(1000)
+	time.Sleep(statsWindow + 10*time.Millisecond)
+	h.RecordFrame(1000)
+	before := h.Stats()
+	if before.FPS == 0 && before.BitrateBps == 0 {
+		t.Skip("rate window did not roll over in time; not what this test is about")
+	}
+
+	h.MarkDisconnected()
+	after := h.Stats()
+	if after.FPS != 0 || after.BitrateBps != 0 {
+		t.Fatalf("after MarkDisconnected: FPS=%v BitrateBps=%v, want both 0", after.FPS, after.BitrateBps)
+	}
+	if after.AudioFrames != 3 || after.DroppedAudio != 2 {
+		t.Fatalf("MarkDisconnected touched cumulative counters: AudioFrames=%d DroppedAudio=%d, want 3 and 2", after.AudioFrames, after.DroppedAudio)
+	}
+}

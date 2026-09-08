@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/VoltTech21/reostream/internal/baichuan"
 )
 
 func TestRunStopsWhenTheContextIsCancelled(t *testing.T) {
@@ -36,5 +38,19 @@ func TestPingIsNotSelectedAgainstTheFrameChannel(t *testing.T) {
 	}
 	if !shouldPing(now, now.Add(11*time.Second), 10*time.Second) {
 		t.Error("did not ping after 11s with a 10s interval")
+	}
+}
+
+func TestDroppedEarlyAudioCountsADPCMNotAAC(t *testing.T) {
+	// An ADPCM camera whose audio leads its video, which happens on every
+	// reconnect, must still count toward DroppedAudio even before a muxer
+	// exists to carry anything: ADPCM is never carried regardless of
+	// arrival order, so waiting for a muxer before counting it would
+	// under-report until the next video frame lands.
+	if !droppedEarlyAudio(baichuan.FrameADPCM) {
+		t.Error("ADPCM arriving before video should count toward DroppedAudio")
+	}
+	if droppedEarlyAudio(baichuan.FrameAAC) {
+		t.Error("AAC arriving before video is a genuine loss, but not an unsupported-codec drop")
 	}
 }

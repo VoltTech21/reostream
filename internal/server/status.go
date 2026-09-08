@@ -31,6 +31,16 @@ import (
 // declaring an audio role, is exactly the failure that went unnoticed in
 // production for days before anyone thought to check. A count that only
 // lived inside a log line would have the same problem again.
+//
+// AudioFrames exists alongside DroppedAudio, not instead of it, because
+// every stream now declares an audio track whether or not its camera ever
+// sends one (see ts.NewMuxerWithAudio): DroppedAudio and AudioFrames both
+// read 0 for a camera with no audio at all, exactly the same as for one
+// whose audio is flowing perfectly, and an ffprobe of either looks
+// identical too since the declared track is there regardless. AudioFrames
+// > 0 is the only signal that audio is actually reaching a client;
+// AudioFrames == 0 with DroppedAudio == 0 means no audio ever arrived,
+// distinct from DroppedAudio > 0 meaning audio arrives but gets discarded.
 type StreamStatus struct {
 	Connected           bool    `json:"connected"`
 	Clients             int     `json:"clients"`
@@ -40,6 +50,7 @@ type StreamStatus struct {
 	FPS                 float64 `json:"fps"`
 	BitrateBps          float64 `json:"bitrate_bps"`
 	LastFrameAgeSeconds float64 `json:"last_frame_age_seconds"`
+	AudioFrames         int     `json:"audio_frames"`
 	DroppedAudio        int     `json:"dropped_audio"`
 }
 
@@ -78,6 +89,7 @@ func (s *Server) streamStats() map[string]StreamStatus {
 			FPS:                 fs.FPS,
 			BitrateBps:          fs.BitrateBps,
 			LastFrameAgeSeconds: fs.Age().Seconds(),
+			AudioFrames:         fs.AudioFrames,
 			DroppedAudio:        fs.DroppedAudio,
 		}
 		if sup, ok := bySup[name]; ok {
@@ -156,10 +168,17 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "reostream_stream_last_frame_age_seconds{stream=%q} %g\n", name, stats[name].LastFrameAgeSeconds)
 	}
 
-	// Given its own metric, not folded into a generic "dropped" count: an
-	// ADPCM camera whose audio is being silently dropped is a
-	// configuration problem worth alerting on by itself, and merging it
-	// with dropped_clients would hide that behind ordinary client churn.
+	// audio_frames_total is what makes a silent camera diagnosable at all:
+	// every stream declares an audio track regardless of whether its camera
+	// sends one, so 0 dropped and 0 published together mean "no audio ever
+	// arrives", distinct from audio arriving and being discarded (dropped >
+	// 0) and from audio working normally (published > 0). Without this
+	// series a silent camera and a healthy one report identically.
+	writeCounterHeader(&b, "reostream_stream_audio_frames_total", "Audio frames actually muxed and published, since start.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "reostream_stream_audio_frames_total{stream=%q} %d\n", name, stats[name].AudioFrames)
+	}
+
 	writeCounterHeader(&b, "reostream_stream_dropped_audio_total", "Audio frames dropped for lacking a supported codec, since start.")
 	for _, name := range names {
 		fmt.Fprintf(&b, "reostream_stream_dropped_audio_total{stream=%q} %d\n", name, stats[name].DroppedAudio)

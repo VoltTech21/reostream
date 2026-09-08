@@ -205,16 +205,26 @@ func (m *Muxer) Frame(f baichuan.Frame) []byte {
 	return out
 }
 
-// audioFrame encodes one audio frame onto PIDAudio, or drops it. A frame
-// arriving before this muxer's own header has gone out is still emitted:
-// unlike video, there is no GOP structure to wait on, and a joining client
-// gets the header itself from the cached copy in internal/hub, not from
-// this call.
+// audioFrame encodes one audio frame onto PIDAudio, or drops it.
+//
+// Unlike video, an audio frame has no GOP structure to wait on: any AAC
+// frame is self contained and a decoder can start on any of them. It does
+// still wait for this muxer's own tables (PAT/PMT) to have gone out at
+// least once, though, so nothing carrying stream_id 0xC0 can reach a client
+// that has no PMT yet to say what that stream_id means. internal/stream
+// never triggers this in practice: it always builds a muxer from a video
+// frame, and that same call sends the tables before returning, so the two
+// events are never actually reordered there. This exists for a direct
+// ts.Muxer caller that feeds audio before ever feeding video, which would
+// otherwise see audio PES packets with no header at all.
 func (m *Muxer) audioFrame(f baichuan.Frame) []byte {
 	if m.audioType == 0 {
 		// This muxer was never given an audio codec: audio is dropped
 		// without counting it, the same as NewMuxer's video-only callers
 		// have always seen for any non video frame.
+		return nil
+	}
+	if !m.sentTables {
 		return nil
 	}
 	if f.Kind != baichuan.FrameAAC {

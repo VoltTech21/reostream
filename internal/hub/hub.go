@@ -34,6 +34,7 @@ type FrameStats struct {
 	FPS          float64
 	BitrateBps   float64
 	LastFrameAt  time.Time
+	AudioFrames  int
 	DroppedAudio int
 }
 
@@ -298,6 +299,42 @@ func (h *Hub) AddDroppedAudio(n int) {
 	}
 	h.statsMu.Lock()
 	h.stats.DroppedAudio += n
+	h.statsMu.Unlock()
+}
+
+// AddAudioFrames adds n to the running count of audio frames actually
+// muxed and published. Every stream now declares an audio track whether or
+// not its camera ever sends one (see NewMuxerWithAudio), so DroppedAudio
+// alone cannot tell "no audio arrives" from "audio is flowing fine": both
+// read as 0. AudioFrames closes that gap. A camera with AudioFrames > 0 has
+// working audio; one with AudioFrames == 0 and DroppedAudio == 0 sends no
+// audio at all, which is a config or wiring question, not a codec one;
+// DroppedAudio > 0 on its own means audio arrives but in a codec that gets
+// discarded. All three are distinguishable only with both counters present.
+func (h *Hub) AddAudioFrames(n int) {
+	if n == 0 {
+		return
+	}
+	h.statsMu.Lock()
+	h.stats.AudioFrames += n
+	h.statsMu.Unlock()
+}
+
+// MarkDisconnected zeroes the fps and bitrate gauges. Call it whenever the
+// stream feeding this hub stops, whether for good or just for the next
+// backoff cycle: without this, a camera that drops off mid-stream keeps
+// reporting its last known rate on /api/status and /metrics forever,
+// looking healthy to anyone glancing at fps or bitrate alone rather than
+// cross-checking last_frame_age_seconds too. AudioFrames and DroppedAudio
+// are untouched: those are cumulative health counters meant to survive a
+// reconnect, not an instantaneous rate.
+func (h *Hub) MarkDisconnected() {
+	h.statsMu.Lock()
+	h.stats.FPS = 0
+	h.stats.BitrateBps = 0
+	h.windowStart = time.Time{}
+	h.windowVideo = 0
+	h.windowBytes = 0
 	h.statsMu.Unlock()
 }
 

@@ -89,23 +89,43 @@ func main() {
 	sig := <-sigs
 	log.Printf("reostream: got %s, shutting down", sig)
 
-	// Cancel first, then wait for Run to actually return, then shut down
-	// HTTP: that order, not the reverse. Cancelling releases every camera's
-	// session by sending its stream-stop message; shutting down HTTP first
-	// would drop clients without buying anything, since a hub is closed by
-	// the supervisor itself the moment its stream exits for good (see
-	// internal/supervisor's runStream), and closing HTTP before that leaves
-	// nothing achieved but a slower exit.
-	cancelSup()
-	select {
-	case <-runDone:
-	case <-time.After(runStopGrace):
-		log.Printf("reostream: streams did not all stop within %s, shutting down anyway", runStopGrace)
-	}
-
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelShutdown()
-	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+	if err := runShutdown(cancelSup, runDone, httpSrv, runStopGrace, httpShutdownTimeout); err != nil {
 		log.Printf("reostream: http shutdown: %v", err)
 	}
+}
+
+// httpShutdownTimeout bounds http.Server.Shutdown itself, once the stream
+// side has already stopped or been given up on.
+const httpShutdownTimeout = 5 * time.Second
+
+// httpShutdowner is the subset of *http.Server that runShutdown needs, so a
+// test can substitute a fake and check the shutdown sequence without
+// opening a real listener.
+type httpShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// runShutdown performs the cancel-then-wait-then-shutdown sequence: cancel
+// the supervisor's context, wait up to grace for it to actually finish, then
+// shut down HTTP.
+//
+// This order is not incidental. Supervisor.Run does not return until every
+// stream's stream-stop message has gone out, which is what releases each
+// camera's session; shutting down HTTP before that, or not waiting for Run
+// at all, buys nothing and risks leaving every camera in the fleet refusing
+// its next connection for minutes. Getting this backwards, or skipping the
+// wait, cost nine minutes of live camera footage during testing on
+// 2026-09-08. Pulling it out of main into its own function is what lets
+// that fact be checked by a test instead of only asserted in a comment.
+func runShutdown(cancel context.CancelFunc, runDone <-chan error, srv httpShutdowner, grace, httpTimeout time.Duration) error {
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(grace):
+		log.Printf("reostream: streams did not all stop within %s, shutting down anyway", grace)
+	}
+
+	ctx, cancelShutdown := context.WithTimeout(context.Background(), httpTimeout)
+	defer cancelShutdown()
+	return srv.Shutdown(ctx)
 }

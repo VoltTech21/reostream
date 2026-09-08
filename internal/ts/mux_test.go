@@ -628,3 +628,24 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 		t.Error("ffprobe reported no audio stream: a joining client cannot decode the audio track")
 	}
 }
+
+func TestAudioWaitsForTablesBeforeGoingOut(t *testing.T) {
+	// A direct caller that feeds audio before ever feeding video would
+	// otherwise get audio PES packets with no PAT/PMT ahead of them: nothing
+	// says what stream_id 0xC0 belongs to yet. internal/stream never
+	// triggers this (it always builds a muxer from a video frame, and that
+	// same call sends the tables before returning), but ts.Muxer must not
+	// rely on that.
+	m, err := NewMuxerWithAudio("h264", "aac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Codec: "aac", Micros: 1000, Data: []byte{0xFF, 0xF1, 0, 0}}); len(got) != 0 {
+		t.Fatal("audio was emitted before any tables had gone out")
+	}
+	// Once a video keyframe has gone out, tables exist and audio is carried.
+	m.Frame(frame(baichuan.FrameIFrame, 2000, 1, 2, 3))
+	if got := m.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Codec: "aac", Micros: 3000, Data: []byte{0xFF, 0xF1, 0, 0}}); len(got) == 0 {
+		t.Fatal("audio was not carried once tables had gone out")
+	}
+}
