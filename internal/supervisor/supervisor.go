@@ -22,17 +22,24 @@ import (
 // tested without a camera.
 type Runner func(ctx context.Context, cfg stream.Config, h *hub.Hub) error
 
-// backoffStart, backoffMax and backoffReset: a camera refusing connections
-// must not become a tight reconnect loop that hammers it and fills the log,
-// but a stream that has been healthy for a while should not carry a long
-// backoff into its next, unrelated failure. backoffStart is short enough
-// that a transient drop recovers quickly; backoffMax is where a camera that
-// is genuinely down settles, low enough to notice recovery within seconds
-// of it coming back.
+// defaultBackoffStart, defaultBackoffMax and defaultBackoffReset: a camera
+// refusing connections must not become a tight reconnect loop that hammers
+// it and fills the log, but a stream that has been healthy for a while
+// should not carry a long backoff into its next, unrelated failure.
+//
+// defaultBackoffStart is 1s, not something faster, for a reason specific to
+// these cameras: the most common cause of a refused or empty connection is
+// the camera still holding a session from a client that died without
+// sending stream-stop, and that clears in minutes, not milliseconds.
+// Retrying eight times in the first second accomplishes nothing but load on
+// a camera that is already unhappy, and buries the log entry that would
+// have shown the actual cause. defaultBackoffMax is where a camera that is
+// genuinely down settles, low enough to notice recovery within seconds of
+// it coming back.
 const (
-	backoffStart = 100 * time.Millisecond
-	backoffMax   = 15 * time.Second
-	backoffReset = 1 * time.Minute
+	defaultBackoffStart = 1 * time.Second
+	defaultBackoffMax   = 15 * time.Second
+	defaultBackoffReset = 1 * time.Minute
 )
 
 // StreamStat reports one stream's current state for status endpoints.
@@ -56,6 +63,15 @@ type entry struct {
 type Supervisor struct {
 	run Runner
 
+	// backoffStart, backoffMax and backoffReset default to the package
+	// constants above and are only ever changed by setBackoff, which exists
+	// so tests can use a short, deterministic backoff instead of bending
+	// the production value to fit a test's timeout. See
+	// TestDefaultBackoffStartIsOneSecond for the regression guard on that.
+	backoffStart time.Duration
+	backoffMax   time.Duration
+	backoffReset time.Duration
+
 	hubs map[string]*hub.Hub
 
 	mu      sync.Mutex
@@ -66,8 +82,11 @@ type Supervisor struct {
 // starts until Run is called.
 func New(cams []config.Camera, run Runner) *Supervisor {
 	s := &Supervisor{
-		run:  run,
-		hubs: make(map[string]*hub.Hub),
+		run:          run,
+		backoffStart: defaultBackoffStart,
+		backoffMax:   defaultBackoffMax,
+		backoffReset: defaultBackoffReset,
+		hubs:         make(map[string]*hub.Hub),
 	}
 	for _, cam := range cams {
 		for _, st := range cam.Streams {
@@ -90,6 +109,15 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 		}
 	}
 	return s
+}
+
+// setBackoff overrides the backoff parameters. Unexported: production code
+// always runs on the defaults, and only this package's own tests, which
+// share the package, can reach into a Supervisor to shorten them.
+func (s *Supervisor) setBackoff(start, max, reset time.Duration) {
+	s.backoffStart = start
+	s.backoffMax = max
+	s.backoffReset = reset
 }
 
 // hubName is the key streams are published under and looked up by:
@@ -133,7 +161,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 // stream, and a second one gets a session that delivers nothing and blocks
 // its own replacement until the camera times the dead one out.
 func (s *Supervisor) runStream(ctx context.Context, e *entry) {
-	backoff := backoffStart
+	backoff := s.backoffStart
 	for {
 		if ctx.Err() != nil {
 			return
@@ -153,8 +181,8 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 			return
 		}
 
-		if ran > backoffReset {
-			backoff = backoffStart
+		if ran > s.backoffReset {
+			backoff = s.backoffStart
 		}
 
 		select {
@@ -165,8 +193,8 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 		}
 
 		backoff *= 2
-		if backoff > backoffMax {
-			backoff = backoffMax
+		if backoff > s.backoffMax {
+			backoff = s.backoffMax
 		}
 	}
 }

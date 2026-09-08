@@ -20,7 +20,12 @@ func TestRestartsAFailedStreamWithBackoff(t *testing.T) {
 		return errors.New("connection refused")
 	}
 	s := New([]config.Camera{{Name: "a", Address: "192.0.2.1", Streams: []string{"main"}}}, run)
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	// The production backoff starts at 1s deliberately (see the comment on
+	// defaultBackoffStart), which would make this test either slow or
+	// unable to observe more than one attempt. setBackoff exists so tests
+	// can use a short, deterministic value instead.
+	s.setBackoff(20*time.Millisecond, 15*time.Second, time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	s.Run(ctx)
 
@@ -28,10 +33,26 @@ func TestRestartsAFailedStreamWithBackoff(t *testing.T) {
 	if n < 2 {
 		t.Fatalf("attempted %d times, expected a retry", n)
 	}
-	// Backoff must actually back off. Without it a refused camera becomes a
-	// tight reconnect loop that hammers the camera and fills the log.
-	if n > 12 {
-		t.Fatalf("attempted %d times in 700ms, backoff is not being applied", n)
+	// The upper bound is the half that matters: doubling 20ms across 300ms
+	// caps out at 4-5 attempts (20+40+80+160 already exceeds the window),
+	// so a much higher count means the delay is not actually growing and
+	// the camera would be hammered with no backoff at all.
+	if n > 8 {
+		t.Fatalf("attempted %d times in 300ms, backoff is not being applied", n)
+	}
+}
+
+func TestDefaultBackoffStartIsOneSecond(t *testing.T) {
+	// Regression guard: the backoff start was once quietly shortened to
+	// make a test pass instead of making the test inject its own value.
+	// The 1s default is load-bearing, not a style choice: the common cause
+	// of a refused connection is the camera still holding a session from a
+	// client that died without sending stream-stop, and that clears in
+	// minutes, so retrying faster than 1s only adds load and log noise
+	// without any chance of succeeding sooner.
+	s := New(nil, nil)
+	if s.backoffStart != time.Second {
+		t.Fatalf("default backoffStart = %v, want 1s", s.backoffStart)
 	}
 }
 
