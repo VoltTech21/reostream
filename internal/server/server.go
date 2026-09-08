@@ -30,10 +30,23 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) serveStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".ts")
 	h, ok := s.streams[name]
 	if !ok || !strings.HasSuffix(r.URL.Path, ".ts") {
 		http.NotFound(w, r)
+		return
+	}
+
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
