@@ -1,0 +1,74 @@
+# Measurements
+
+These are measurements taken on the author's own cameras. Anyone reproducing them should
+expect their own numbers to differ by camera model and firmware.
+
+## RTSP vs Baichuan, Duo 3 PoE
+
+Camera: Reolink Duo 3 PoE, firmware v3.0.0.5049_2506302188, 4096x1152 HEVC.
+
+Method: both transports captured simultaneously for 30 minutes, then compared at
+identical wall-clock seconds. This comparison is exact rather than approximate because
+the camera burns its clock into the image, so a given second on one transport can be
+matched pixel-for-pixel to the same second on the other.
+
+| transport | segments | segments with bitstream errors | worst corruption score |
+|---|---|---|---|
+| Baichuan | 184 | 0 | 1.79 |
+| RTSP | 178 | 147 (83%) | 122.98 |
+
+Same encoder, same camera, same second, so the only variable is the delivery path.
+
+The RTSP defects were all slices of one picture disagreeing with each other:
+
+- `Ignoring POC change between slices`
+- `Non-matching NAL types of the VCL NALUs`
+- `Could not find ref with POC N`
+
+RTSP also reported a ragged 24.75 fps (99/4) where Baichuan reported exactly 20/1, which
+is what the camera is configured for.
+
+## A method trap: zero decode errors is not clean
+
+Zero ffmpeg decode errors does not mean clean video. A full hour of 360 segments scanned
+as zero errors while being visibly corrupt, because the RTSP path emits syntactically
+valid HEVC that decodes to the wrong picture. There is no substitute for rendering frames
+and looking at them.
+
+Whole-frame metrics do not separate corrupt from clean either. Scene score and saturation
+were both tried and both failed, because the garbage from the defects above is too small a
+fraction of a 4096x1152 frame to move a whole-frame statistic.
+
+What did work was a difference blend across a cropped strip of the frame, used as a
+ranker to sort candidates for eyeballing rather than as an automatic detector.
+
+## Fleet comparison, fisheye camera
+
+25 second samples, Baichuan vs the camera's own RTSP:
+
+| transport | fps |
+|---|---|
+| Baichuan | 24.6 |
+| RTSP | 19.3 |
+
+That is about a 21% frame loss over RTSP, on a camera whose RTSP metadata claims 40/1.
+Both Baichuan feeds measured 0 bitstream errors in the sample; healthy RTSP cameras in
+the same fleet showed 1 to 3 per 25 seconds.
+
+## Three streams per camera
+
+Cameras carry three streams, not the two the Reolink app exposes. Measured on one camera:
+
+| stream | codec | resolution |
+|---|---|---|
+| sub | H.264 | 640x360 |
+| main | HEVC | 3840x2160 |
+| extern (undocumented) | H.264 | 896x512 |
+
+Frame counts from the Go client, 20 second captures: sub delivered 199 frames with 0
+decode errors, main delivered 497 frames with 1.
+
+## Neolink, as of September 2026
+
+Neolink is the prior art this project learned the protocol from. As of this writing: last
+commit 2025-01-30, 124 open issues, and a memory leak reported since 2022.

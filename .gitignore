@@ -1,0 +1,19 @@
+# Build output
+/bcprobe
+/reostream
+/dist/
+
+# Captures and recordings, which are large and often contain credentials
+*.pcap
+*.pcapng
+*.ts
+*.h264
+*.h265
+
+# Local configuration and secrets
+reostream.toml
+*.local.toml
+
+# Editor and OS noise
+.DS_Store
+*.swp

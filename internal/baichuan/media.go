@@ -1,0 +1,210 @@
+package baichuan
+
+import "encoding/binary"
+
+// FrameKind identifies a media packet type.
+type FrameKind int
+
+const (
+	FrameUnknown FrameKind = iota
+	FrameInfo
+	FrameIFrame
+	FramePFrame
+	FrameAAC
+	FrameADPCM
+)
+
+// Video returns the frame's video data starting at its first NAL start code.
+//
+// HEVC frames from these cameras carry a variable-length proprietary prefix
+// before the first start code -- 80, 112 or 152 bytes have been observed --
+// while H.264 frames start at the start code directly. Feeding that prefix to
+// a decoder produces sporadic errors, so anything writing an elementary
+// stream should use this rather than Data.
+func (f Frame) Video() []byte {
+	if i := indexStartCode(f.Data); i > 0 {
+		return f.Data[i:]
+	}
+	return f.Data
+}
+
+func indexStartCode(b []byte) int {
+	for i := 0; i+4 <= len(b); i++ {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 {
+			return i
+		}
+	}
+	return -1
+}
+
+func (k FrameKind) String() string {
+	switch k {
+	case FrameInfo:
+		return "info"
+	case FrameIFrame:
+		return "iframe"
+	case FramePFrame:
+		return "pframe"
+	case FrameAAC:
+		return "aac"
+	case FrameADPCM:
+		return "adpcm"
+	}
+	return "unknown"
+}
+
+// Frame is one decoded media packet.
+//
+// Micros is the camera's own capture time. Emitting it downstream is what
+// keeps timing correct: a raw elementary stream carries no timing at all, so
+// anything muxing it has to invent timestamps, and invents them badly.
+type Frame struct {
+	Kind   FrameKind
+	Codec  string
+	Micros uint32
+	Data   []byte
+	Width  int
+	Height int
+	FPS    int
+}
+
+var (
+	magicInfoV1 = []byte{0x31, 0x30, 0x30, 0x31}
+	magicInfoV2 = []byte{0x31, 0x30, 0x30, 0x32}
+	magicIFrame = []byte{0x30, 0x30, 0x64, 0x63}
+	magicPFrame = []byte{0x30, 0x31, 0x64, 0x63}
+	magicAAC    = []byte{0x30, 0x35, 0x77, 0x62}
+	magicADPCM  = []byte{0x30, 0x31, 0x77, 0x62}
+)
+
+// Depacketiser reassembles media packets from the byte stream carried in
+// message id 3. A media packet may straddle message boundaries, so bytes are
+// buffered until a whole packet is present.
+type Depacketiser struct {
+	buf     []byte
+	filler  int
+	skipped int
+}
+
+func NewDepacketiser() *Depacketiser { return &Depacketiser{} }
+
+// Write adds the payload of one message. startsPacket must be true when the
+// message carried an extension header, which is what marks the start of a new
+// media packet: anything still buffered at that point is trailing filler from
+// the previous packet's last message and is dropped.
+func (d *Depacketiser) Write(b []byte, startsPacket bool) {
+	if startsPacket {
+		d.filler += len(d.buf)
+		d.buf = d.buf[:0]
+	}
+	d.buf = append(d.buf, b...)
+}
+
+// Skipped reports bytes discarded because the buffer did not begin with a
+// packet magic where one was required. It should stay zero; a climbing count
+// means packets are being mis-framed.
+func (d *Depacketiser) Skipped() int { return d.skipped }
+
+// Filler reports bytes dropped between a packet's end and the end of the
+// message carrying it. A healthy stream has a nonzero, slowly growing count:
+// this is the camera's own padding, not a parsing error.
+func (d *Depacketiser) Filler() int { return d.filler }
+
+func match(b, magic []byte) bool {
+	return len(b) >= 4 && b[0] == magic[0] && b[1] == magic[1] &&
+		b[2] == magic[2] && b[3] == magic[3]
+}
+
+// Next returns the next complete frame, or false if more bytes are needed.
+func (d *Depacketiser) Next() (Frame, bool) {
+	for {
+		if len(d.buf) < 8 {
+			return Frame{}, false
+		}
+		switch {
+		case match(d.buf, magicIFrame), match(d.buf, magicPFrame):
+			// magic(4) type(4) size(4) unknown(4) micros(4) unknown(4),
+			// and for I frames a further time_t(4) and unknown(4).
+			hdr, kind := 24, FramePFrame
+			if match(d.buf, magicIFrame) {
+				hdr, kind = 32, FrameIFrame
+			}
+			if len(d.buf) < hdr {
+				return Frame{}, false
+			}
+			size := int(binary.LittleEndian.Uint32(d.buf[8:]))
+			if size < 0 || size > 1<<24 {
+				d.buf, d.skipped = d.buf[1:], d.skipped+1
+				continue
+			}
+			if len(d.buf) < hdr+size {
+				return Frame{}, false
+			}
+			f := Frame{
+				Kind:   kind,
+				Codec:  string(trimNul(d.buf[4:8])),
+				Micros: binary.LittleEndian.Uint32(d.buf[16:]),
+				Data:   append([]byte(nil), d.buf[hdr:hdr+size]...),
+			}
+			d.consume(hdr + size)
+			return f, true
+
+		case match(d.buf, magicAAC), match(d.buf, magicADPCM):
+			// magic(4) size(2) size(2)
+			size := int(binary.LittleEndian.Uint16(d.buf[4:]))
+			if len(d.buf) < 8+size {
+				return Frame{}, false
+			}
+			kind := FrameAAC
+			if match(d.buf, magicADPCM) {
+				kind = FrameADPCM
+			}
+			f := Frame{Kind: kind, Data: append([]byte(nil), d.buf[8:8+size]...)}
+			d.consume(8 + size)
+			return f, true
+
+		case match(d.buf, magicInfoV1), match(d.buf, magicInfoV2):
+			// magic(4) headerlen(4) width(4) height(4) unknown(1) fps(1) ...
+			n := int(binary.LittleEndian.Uint32(d.buf[4:]))
+			if n < 8 || n > 1<<16 {
+				d.buf, d.skipped = d.buf[1:], d.skipped+1
+				continue
+			}
+			if len(d.buf) < n {
+				return Frame{}, false
+			}
+			f := Frame{Kind: FrameInfo}
+			if n >= 16 {
+				f.Width = int(binary.LittleEndian.Uint32(d.buf[8:]))
+				f.Height = int(binary.LittleEndian.Uint32(d.buf[12:]))
+			}
+			if n > 17 {
+				f.FPS = int(d.buf[17])
+			}
+			d.consume(n)
+			return f, true
+
+		default:
+			// Not at a packet boundary. Packets always begin at the start of a
+			// message carrying an extension header, so anything here is
+			// trailing filler from the packet just emitted: leave it for the
+			// next packet start to discard rather than byte-scanning through
+			// it, which risks matching a magic inside the filler.
+			return Frame{}, false
+		}
+	}
+}
+
+// consume drops a packet of length n. Any bytes left in the buffer afterwards
+// are filler to the end of the message and are dropped when the next packet
+// starts.
+func (d *Depacketiser) consume(n int) { d.buf = d.buf[n:] }
+
+func trimNul(b []byte) []byte {
+	for i, c := range b {
+		if c == 0 {
+			return b[:i]
+		}
+	}
+	return b
+}

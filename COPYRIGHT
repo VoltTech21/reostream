@@ -1,0 +1,26 @@
+reostream
+Copyright (c) 2026 Riley Poe
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
+
+Commercial licensing
+--------------------
+
+The AGPL requires that anyone who distributes a modified version of this
+program, or runs one as a network service for others, makes their source
+available under the same terms.
+
+If that does not suit your product, a separate commercial licence is available
+which carries no such obligation. Contact riley@audiotronix.co.
+
+Prior art
+---------
+
+No code from Neolink is used here. The Baichuan protocol implementation in this
+repository was written from packet captures taken against cameras on my own
+network. Neolink, by thirtythreeforty and later QuantumEntangledAndy, is what
+made the protocol legible in the first place, and its Wireshark dissector was a
+reference throughout.
