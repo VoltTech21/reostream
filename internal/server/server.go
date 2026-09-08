@@ -6,11 +6,16 @@ import (
 	"strings"
 
 	"github.com/VoltTech21/reostream/internal/hub"
+	"github.com/VoltTech21/reostream/internal/supervisor"
 )
 
-// Server routes GET /<name>.ts to the matching hub.
+// Server routes GET /<name>.ts to the matching hub, plus /api/status and
+// /metrics for the whole fleet.
 type Server struct {
 	streams map[string]*hub.Hub
+
+	// sup is optional; see SetSupervisor in status.go.
+	sup *supervisor.Supervisor
 }
 
 // New builds a Server over the given named streams. The header each client
@@ -25,6 +30,8 @@ func New(streams map[string]*hub.Hub) *Server {
 // Handler returns the HTTP handler serving all configured streams.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/status", s.serveStatus)
+	mux.HandleFunc("/metrics", s.serveMetrics)
 	mux.HandleFunc("/", s.serveStream)
 	return mux
 }
