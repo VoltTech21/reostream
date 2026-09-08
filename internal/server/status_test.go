@@ -34,6 +34,40 @@ func TestStatusReportsEveryStream(t *testing.T) {
 	}
 }
 
+func TestDroppedAudioSurfacesInStatus(t *testing.T) {
+	// An ADPCM camera silently dropping its audio is exactly the condition
+	// that went unnoticed in production for days; the count must reach
+	// status, not just live inside internal/ts.
+	h := hub.New(4)
+	h.AddDroppedAudio(7)
+	s := New(map[string]*hub.Hub{"a": h})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
+	var body struct {
+		Streams map[string]struct {
+			DroppedAudio int `json:"dropped_audio"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := body.Streams["a"].DroppedAudio; got != 7 {
+		t.Fatalf("dropped_audio = %d, want 7", got)
+	}
+}
+
+func TestDroppedAudioSurfacesInMetrics(t *testing.T) {
+	h := hub.New(4)
+	h.AddDroppedAudio(7)
+	s := New(map[string]*hub.Hub{"a": h})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `reostream_stream_dropped_audio_total{stream="a"} 7`) {
+		t.Errorf("metrics missing the dropped audio count\n%s", body)
+	}
+}
+
 func TestMetricsAreValidPrometheusText(t *testing.T) {
 	s := New(map[string]*hub.Hub{"a": hub.New(4)})
 	rec := httptest.NewRecorder()

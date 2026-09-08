@@ -94,6 +94,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 
 	d := baichuan.NewDepacketiser()
 	var mux *ts.Muxer
+	var reportedDroppedAudio int
 	lastPing := time.Now()
 
 	for {
@@ -114,28 +115,61 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 					if !ok {
 						break
 					}
-					if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
-						continue
-					}
-					if mux == nil {
-						// The codec is not known until the first frame
-						// arrives, so the muxer is built here rather than
-						// guessed at connect time. NewMuxer itself handles
-						// the wire's uppercase spelling.
-						nm, err := ts.NewMuxer(f.Codec)
-						if err != nil {
-							return fmt.Errorf("stream: %s: %w", cfg.Name, err)
+					switch f.Kind {
+					case baichuan.FrameIFrame, baichuan.FramePFrame:
+						if mux == nil {
+							// The video codec is not known until the first
+							// frame arrives, so the muxer is built here
+							// rather than guessed at connect time.
+							// NewMuxerWithAudio itself handles the wire's
+							// uppercase codec spelling.
+							//
+							// Audio is always declared, whether or not this
+							// camera turns out to send any: the recorder's
+							// config, not a frame the stream has not seen
+							// yet, is what says a stream should carry sound,
+							// and this package has no view of that config.
+							// A PMT that declares a silent audio track costs
+							// nothing a client would notice; a stream that
+							// only adds one after guessing right is exactly
+							// how the previous tool lost audio without
+							// anyone noticing for days. An AAC frame is
+							// carried; anything else, ADPCM in particular,
+							// is dropped and counted (see DroppedAudio
+							// below), never relabelled.
+							nm, err := ts.NewMuxerWithAudio(f.Codec, "aac")
+							if err != nil {
+								return fmt.Errorf("stream: %s: %w", cfg.Name, err)
+							}
+							mux = nm
+							// Set the header before the first Publish. A client
+							// that subscribes between Publish and SetHeader gets
+							// no PAT/PMT and stalls until the next table repeat.
+							h.SetHeader(mux.Header())
 						}
-						mux = nm
-						// Set the header before the first Publish. A client
-						// that subscribes between Publish and SetHeader gets
-						// no PAT/PMT and stalls until the next table repeat.
-						h.SetHeader(mux.Header())
-					}
-					// Frame returns a fresh slice per call, so it is safe to
-					// hand straight to Publish, which does not copy it.
-					if pkt := mux.Frame(f); pkt != nil {
-						h.Publish(pkt)
+						// Frame returns a fresh slice per call, so it is safe to
+						// hand straight to Publish, which does not copy it.
+						if pkt := mux.Frame(f); pkt != nil {
+							h.Publish(pkt)
+							h.RecordFrame(len(pkt))
+						}
+
+					case baichuan.FrameAAC, baichuan.FrameADPCM:
+						if mux == nil {
+							// No video frame yet, so no muxer to carry this
+							// on and no codec to build one with. Dropped
+							// without counting: this is a startup ordering
+							// gap, not the unsupported-codec condition
+							// DroppedAudio exists to catch.
+							continue
+						}
+						if pkt := mux.Frame(f); pkt != nil {
+							h.Publish(pkt)
+						}
+						if dropped := mux.DroppedAudio(); dropped > reportedDroppedAudio {
+							h.AddDroppedAudio(dropped - reportedDroppedAudio)
+							reportedDroppedAudio = dropped
+						}
 					}
 				}
 			}

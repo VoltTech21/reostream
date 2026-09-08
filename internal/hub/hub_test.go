@@ -187,3 +187,39 @@ func TestSetHeaderIsRaceFreeWithPublishAndSubscribe(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestRecordFrameUpdatesLastFrameAtImmediately(t *testing.T) {
+	// LastFrameAt must update on every call, not only once the rate window
+	// rolls over: a status page reading it right after a single frame
+	// should not see a zero time and report a stream as having no age at
+	// all.
+	h := New(4)
+	before := time.Now()
+	h.RecordFrame(100)
+	stats := h.Stats()
+	if stats.LastFrameAt.Before(before) {
+		t.Fatal("LastFrameAt was not updated by RecordFrame")
+	}
+	if age := stats.Age(); age < 0 || age > time.Second {
+		t.Fatalf("Age() = %v, want a small positive duration", age)
+	}
+}
+
+func TestAgeIsZeroBeforeAnyFrame(t *testing.T) {
+	h := New(4)
+	if got := h.Stats().Age(); got != 0 {
+		t.Fatalf("Age() = %v before any frame, want 0", got)
+	}
+}
+
+func TestAddDroppedAudioAccumulatesAcrossCalls(t *testing.T) {
+	// This total must survive a muxer being rebuilt on reconnect: see the
+	// comment on AddDroppedAudio for why it lives on the hub rather than
+	// being read fresh off the current muxer.
+	h := New(4)
+	h.AddDroppedAudio(3)
+	h.AddDroppedAudio(2)
+	if got := h.Stats().DroppedAudio; got != 5 {
+		t.Fatalf("DroppedAudio = %d, want 5", got)
+	}
+}

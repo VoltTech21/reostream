@@ -9,7 +9,42 @@
 // not buffered.
 package hub
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// statsWindow is how long RecordFrame accumulates frames and bytes before
+// turning them into a rate. A shorter window makes fps and bitrate jump
+// around between individual frames arriving at slightly uneven intervals;
+// 1 second smooths that out while still updating often enough that a status
+// page reads as live rather than stale.
+const statsWindow = 1 * time.Second
+
+// FrameStats is a stream's throughput and health, as last reported by
+// whatever is publishing to this hub.
+//
+// The hub does not compute any of this itself: it has no idea whether a
+// published chunk is video or audio, or whether a frame just got dropped
+// for an unsupported codec, only internal/stream does. Pushing the numbers
+// up from there, rather than the hub or internal/server reaching down past
+// it, is what keeps a hub a plain byte broadcaster and keeps HTTP concerns
+// out of internal/stream.
+type FrameStats struct {
+	FPS          float64
+	BitrateBps   float64
+	LastFrameAt  time.Time
+	DroppedAudio int
+}
+
+// Age reports how long ago the last frame was recorded, or zero if none
+// ever was.
+func (s FrameStats) Age() time.Duration {
+	if s.LastFrameAt.IsZero() {
+		return 0
+	}
+	return time.Since(s.LastFrameAt)
+}
 
 // subscriber pairs a channel with the small lock that makes closing it safe.
 // Sending to and closing a channel from different goroutines is only safe if
@@ -47,6 +82,12 @@ type Hub struct {
 	dropped int
 	header  []byte
 	closed  bool
+
+	statsMu     sync.Mutex
+	stats       FrameStats
+	windowStart time.Time
+	windowVideo int
+	windowBytes int
 }
 
 // New creates a Hub whose subscriber channels each hold up to buffer frames
@@ -212,4 +253,57 @@ func (h *Hub) Header() []byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.header
+}
+
+// RecordFrame reports that n bytes of a published packet came from a video
+// frame, for fps and bitrate. It is not the same call as Publish: a caller
+// still calls Publish separately to actually deliver the bytes, since a
+// muxer's PAT/PMT repeats and PCR-only packets also flow through Publish
+// but are not a "frame" in any sense worth counting here.
+//
+// fps and bitrate are only ever computed from video: audio here is a
+// constant-rate AAC track with no frame-rate concept worth reporting
+// alongside it, and folding its bytes into "bitrate" would make the number
+// jump depending on whether the camera happens to be sending audio this
+// second, without saying why.
+func (h *Hub) RecordFrame(n int) {
+	h.statsMu.Lock()
+	defer h.statsMu.Unlock()
+	now := time.Now()
+	h.stats.LastFrameAt = now
+	if h.windowStart.IsZero() {
+		h.windowStart = now
+	}
+	h.windowVideo++
+	h.windowBytes += n
+	if elapsed := now.Sub(h.windowStart); elapsed >= statsWindow {
+		secs := elapsed.Seconds()
+		h.stats.FPS = float64(h.windowVideo) / secs
+		h.stats.BitrateBps = float64(h.windowBytes) * 8 / secs
+		h.windowStart = now
+		h.windowVideo = 0
+		h.windowBytes = 0
+	}
+}
+
+// AddDroppedAudio adds n to the running count of audio frames dropped for
+// lacking a supported codec (see ts.Muxer.DroppedAudio). This total lives on
+// the hub, not the muxer, because a muxer is rebuilt on every reconnect: a
+// camera stuck sending ADPCM would otherwise look healthy again after every
+// backoff cycle, resetting to 0 each time, which is exactly the kind of
+// silent-audio condition this counter exists to catch.
+func (h *Hub) AddDroppedAudio(n int) {
+	if n == 0 {
+		return
+	}
+	h.statsMu.Lock()
+	h.stats.DroppedAudio += n
+	h.statsMu.Unlock()
+}
+
+// Stats returns a snapshot of the hub's current frame statistics.
+func (h *Hub) Stats() FrameStats {
+	h.statsMu.Lock()
+	defer h.statsMu.Unlock()
+	return h.stats
 }

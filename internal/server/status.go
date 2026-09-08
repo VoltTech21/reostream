@@ -18,17 +18,29 @@ import (
 // the fields, which would make "never restarted" indistinguishable from
 // "no supervisor is wired up".
 //
-// FPS, bitrate, last-frame age and dropped-audio count are not reported
-// here yet: producing them needs stream.Run to surface its per-connection
-// ts.Muxer (for DroppedAudio) and a running rate, which no current caller
-// exposes. Adding those is follow-up work, not a reason to hold back the
-// fields this data already supports.
+// FPS, BitrateBps, LastFrameAgeSeconds and DroppedAudio come from
+// hub.Hub.Stats(), which internal/stream updates as it publishes: the hub
+// itself has no notion of a frame or a codec, only bytes to broadcast, so
+// this is the one place that data is allowed to surface above it. Before a
+// stream has published anything, LastFrameAgeSeconds is 0 rather than a
+// large or negative number: hub.FrameStats.Age reports 0 for a stream with
+// no frame yet, and that is passed straight through.
+//
+// DroppedAudio existing here at all is the point of exposing it: an ADPCM
+// camera silently losing its audio, with the recorder's config still
+// declaring an audio role, is exactly the failure that went unnoticed in
+// production for days before anyone thought to check. A count that only
+// lived inside a log line would have the same problem again.
 type StreamStatus struct {
-	Connected      bool   `json:"connected"`
-	Clients        int    `json:"clients"`
-	DroppedClients int    `json:"dropped_clients"`
-	Restarts       int    `json:"restarts"`
-	LastError      string `json:"last_error,omitempty"`
+	Connected           bool    `json:"connected"`
+	Clients             int     `json:"clients"`
+	DroppedClients      int     `json:"dropped_clients"`
+	Restarts            int     `json:"restarts"`
+	LastError           string  `json:"last_error,omitempty"`
+	FPS                 float64 `json:"fps"`
+	BitrateBps          float64 `json:"bitrate_bps"`
+	LastFrameAgeSeconds float64 `json:"last_frame_age_seconds"`
+	DroppedAudio        int     `json:"dropped_audio"`
 }
 
 // statusBody is the shape of GET /api/status.
@@ -59,9 +71,14 @@ func (s *Server) streamStats() map[string]StreamStatus {
 
 	out := make(map[string]StreamStatus, len(s.streams))
 	for name, h := range s.streams {
+		fs := h.Stats()
 		st := StreamStatus{
-			Clients:        h.Clients(),
-			DroppedClients: h.Dropped(),
+			Clients:             h.Clients(),
+			DroppedClients:      h.Dropped(),
+			FPS:                 fs.FPS,
+			BitrateBps:          fs.BitrateBps,
+			LastFrameAgeSeconds: fs.Age().Seconds(),
+			DroppedAudio:        fs.DroppedAudio,
 		}
 		if sup, ok := bySup[name]; ok {
 			st.Connected = sup.Running
@@ -122,6 +139,30 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	writeCounterHeader(&b, "reostream_stream_restarts_total", "Times the stream has reconnected after a failure, since start.")
 	for _, name := range names {
 		fmt.Fprintf(&b, "reostream_stream_restarts_total{stream=%q} %d\n", name, stats[name].Restarts)
+	}
+
+	writeGaugeHeader(&b, "reostream_stream_fps", "Video frames per second, averaged over the last measurement window.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "reostream_stream_fps{stream=%q} %g\n", name, stats[name].FPS)
+	}
+
+	writeGaugeHeader(&b, "reostream_stream_bitrate_bps", "MPEG-TS output bitrate, averaged over the last measurement window.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "reostream_stream_bitrate_bps{stream=%q} %g\n", name, stats[name].BitrateBps)
+	}
+
+	writeGaugeHeader(&b, "reostream_stream_last_frame_age_seconds", "Time since the last frame was published, 0 if none ever was.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "reostream_stream_last_frame_age_seconds{stream=%q} %g\n", name, stats[name].LastFrameAgeSeconds)
+	}
+
+	// Given its own metric, not folded into a generic "dropped" count: an
+	// ADPCM camera whose audio is being silently dropped is a
+	// configuration problem worth alerting on by itself, and merging it
+	// with dropped_clients would hide that behind ordinary client churn.
+	writeCounterHeader(&b, "reostream_stream_dropped_audio_total", "Audio frames dropped for lacking a supported codec, since start.")
+	for _, name := range names {
+		fmt.Fprintf(&b, "reostream_stream_dropped_audio_total{stream=%q} %d\n", name, stats[name].DroppedAudio)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
