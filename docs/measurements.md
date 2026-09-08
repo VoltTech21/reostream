@@ -72,3 +72,48 @@ decode errors, main delivered 497 frames with 1.
 
 Neolink is the prior art this project learned the protocol from. As of this writing: last
 commit 2025-01-30, 124 open issues, and a memory leak reported since 2022.
+
+## reostream serving MPEG-TS over HTTP, 2026-09-08
+
+First end to end measurements of the daemon against live cameras. Six cameras, all on
+their substreams, because every main stream on this fleet was in use at the time.
+
+One camera measured through the full path, camera to Baichuan to muxer to HTTP to ffmpeg:
+
+| run | frames | duration | fps | stream rate | RSS |
+|---|---|---|---|---|---|
+| 60s | 591 | 59.158s | 9.99 | 10 | 13.4 MB |
+| 30s | 292 | 29.178s | 10.01 | 10 | 13.4 MB |
+
+Frame count matching wall clock is the result that matters. An elementary stream carries
+no timing of its own, so a muxer that invents timestamps produces a frame count wildly out
+of step with real time. Getting this wrong previously produced a 216 fps stream from a
+20 fps camera and a player dropping 10,387 frames.
+
+Resident memory stayed flat with a client attached, which is the other thing being watched:
+a climbing figure would mean the fan-out was buffering for a slow reader instead of
+dropping it.
+
+Five further cameras were checked with the protocol probe alone, 6 second captures, and all
+five returned an identical 59 frames with 6 keyframes, H.264, and no resynchronisation.
+
+### Decode errors at connect, and why
+
+A capture started mid stream reports a small number of `non-existing PPS`,
+`decode_slice_header error` and `no frame` messages, roughly 9 groups in 60 seconds, and
+then nothing. The saved file re-reads with zero errors.
+
+The cause is that a client currently joins wherever the stream happens to be rather than at
+a keyframe, so its decoder sees slices before the parameter sets that describe them and
+complains until the next keyframe arrives. It is bounded to connect time and costs nothing
+after that, but it is a real gap: keyframe aligned join is specified in the design and is
+not yet implemented.
+
+### Not yet measured
+
+No live HEVC stream has been tested. Every live measurement above is H.264 substream. HEVC
+is covered only by the committed capture in the test suite. Every HEVC main stream on this
+fleet was held by the tool being replaced, and a camera permits only one connection per
+stream, so there was no free HEVC stream to measure. This is worth closing during the
+per camera migration, when a camera moves across permanently and the measurement costs
+nothing.
