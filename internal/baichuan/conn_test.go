@@ -2,6 +2,7 @@ package baichuan
 
 import (
 	"context"
+	"net"
 	"runtime"
 	"strings"
 	"testing"
@@ -202,18 +203,10 @@ func TestMidStreamDisconnectReturnsAnError(t *testing.T) {
 // nonce comes back, and zero frames follow. This was observed for real on
 // 2026-09-08.
 //
-// As of this writing, Conn has no idle-read timeout for that case: newConn
-// clears the dial deadline once login succeeds (nc.SetDeadline(time.Time{}))
-// and nothing replaces it, so readLoop's r.Next() blocks on the raw socket
-// read forever, and so does any caller of Messages(). That is a genuine gap
-// in the file this task exists to test, reported here rather than quietly
-// patched. The body below documents the desired behaviour and is bounded so
-// it cannot hang the test run even unskipped; it is skipped because, as
-// written today, it would fail (correctly) rather than pass.
+// The idle timeout is set short via Options here (see conn.go's
+// DefaultIdleTimeout for the reasoning behind the production value) so this
+// test resolves in milliseconds rather than waiting out a real 15s window.
 func TestSilentServerDoesNotHangForever(t *testing.T) {
-	t.Skip("known gap: Conn has no idle-read timeout after login succeeds (conn.go newConn); " +
-		"see this test's body and internal/baichuan/conn_test.go for detail")
-
 	loginOnly := fixturePrefixLen(t, "h265_s2c.bin", 2)
 	cam := fakecam.NewPartial(t, loadFixture(t, "h265_s2c.bin"), loginOnly)
 
@@ -221,14 +214,14 @@ func TestSilentServerDoesNotHangForever(t *testing.T) {
 	var conn *Conn
 	var dialErr error
 	go func() {
-		conn, dialErr = Dial(context.Background(), cam.Addr(), Options{Password: ""})
+		conn, dialErr = Dial(context.Background(), cam.Addr(), Options{Password: "", IdleTimeout: 50 * time.Millisecond})
 		close(dialDone)
 	}()
 
 	select {
 	case <-dialDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Dial did not return within 5s against a camera that completes login and then goes silent")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dial did not return within 2s against a camera that completes login and then goes silent")
 	}
 	if dialErr != nil {
 		// Login itself reporting the silence (e.g. via a deadline that
@@ -246,8 +239,116 @@ func TestSilentServerDoesNotHangForever(t *testing.T) {
 		if conn.Err() == nil {
 			t.Fatal("Messages closed but Err() is nil; want a timeout error")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("no idle timeout: Messages() never closed for a camera that went silent after login")
+	}
+}
+
+// The idle timeout must be a gap detector, not a connection lifetime limit:
+// a deadline that is set once and never refreshed would eventually kill any
+// long-running stream regardless of how healthy it is, which would be a far
+// worse regression than the hang this timeout exists to fix. fakecam's
+// existing camera types either replay a fixture once and then stop sending
+// (fakecam.New) or vanish (NewDropAfter), neither of which stays alive long
+// enough to prove a *sustained* stream survives, so this test runs its own
+// minimal camera that keeps writing in small, delayed chunks well past the
+// configured idle window and requires that the connection survive that.
+func TestHealthyStreamSurvivesPastIdleTimeout(t *testing.T) {
+	const idle = 30 * time.Millisecond
+	const numSteps = 40
+
+	fixture := loadFixture(t, "h265_s2c.bin")
+	loginLen := fixturePrefixLen(t, "h265_s2c.bin", 2)
+	media := fixture[loginLen:]
+	chunk := len(media) / numSteps
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, err := conn.Write(fixture[:loginLen]); err != nil {
+			return
+		}
+		// Drip media out in numSteps pieces, each well under idle apart, so
+		// the whole write spans several multiples of idle. This never wraps
+		// back to the start of media: doing so mid-message would splice a
+		// fresh header into the middle of a body and corrupt framing, which
+		// would fail this test for the wrong reason (a decode error, not an
+		// idle timeout).
+		for i := 0; i < numSteps; i++ {
+			start := i * chunk
+			end := start + chunk
+			if i == numSteps-1 {
+				end = len(media)
+			}
+			if _, err := conn.Write(media[start:end]); err != nil {
+				return
+			}
+			time.Sleep(idle / 3)
+		}
+	}()
+
+	conn, err := Dial(context.Background(), ln.Addr().String(), Options{Password: "", IdleTimeout: idle})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(10 * idle)
+	got := 0
+	for time.Now().Before(deadline) {
+		select {
+		case _, open := <-conn.Messages():
+			if !open {
+				t.Fatalf("connection dropped after %d messages while camera was still sending; Err(): %v", got, conn.Err())
+			}
+			got++
+		case <-time.After(time.Until(deadline)):
+		}
+	}
+	if got == 0 {
+		t.Fatal("received no messages at all; camera goroutine may not have started")
+	}
+	if err := conn.Err(); err != nil {
+		t.Fatalf("connection reported an error while camera was healthy: %v", err)
+	}
+}
+
+// An idle timeout and a network failure both end up as a closed Messages()
+// channel with a non-nil Err(), and an operator reading a log line has to be
+// able to tell which one happened without cross-referencing timestamps
+// against a stream's expected cadence. The error text is the only signal
+// available at that point, so it must name the timeout.
+func TestIdleTimeoutErrorNamesItself(t *testing.T) {
+	loginOnly := fixturePrefixLen(t, "h265_s2c.bin", 2)
+	cam := fakecam.NewPartial(t, loadFixture(t, "h265_s2c.bin"), loginOnly)
+
+	conn, err := Dial(context.Background(), cam.Addr(), Options{Password: "", IdleTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	select {
+	case <-conn.Messages():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Messages() never closed for a camera that went silent after login")
+	}
+
+	err = conn.Err()
+	if err == nil {
+		t.Fatal("Err() is nil after the idle timeout fired")
+	}
+	if !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("Err() = %q, want it to name the idle timeout so an operator can tell it apart from a network failure", err)
 	}
 }
 

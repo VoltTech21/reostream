@@ -2,6 +2,7 @@ package baichuan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -13,7 +14,28 @@ type Options struct {
 	Username string
 	Password string
 	Channel  int
+
+	// IdleTimeout bounds how long a read may wait for the camera to send
+	// anything before Conn gives up on it. Zero means DefaultIdleTimeout.
+	IdleTimeout time.Duration
 }
+
+// DefaultIdleTimeout is how long a post-login connection tolerates the
+// camera sending nothing before readLoop gives up.
+//
+// docs/measurements.md and internal/stream/stream.go's own ping-cadence
+// comment establish the baseline this is set against: on a live stream
+// frames arrive roughly every 40ms, and the client pings the camera every
+// 10 seconds purely to hold the session open (the ping is never acked, so it
+// does not by itself put anything on the read side). A healthy camera
+// therefore has no legitimate reason to be silent for more than a fraction
+// of a second, ping cadence included. 15s is chosen as several multiples of
+// that 10s ping interval, not tuned close to it, so ordinary jitter, a
+// stalled TCP segment, or a camera stuttering under load cannot trip it, while
+// still being short enough that a supervisor built on top of Conn notices a
+// held or dead session in seconds rather than the minutes the 2026-09-08
+// incident actually ran for.
+const DefaultIdleTimeout = 15 * time.Second
 
 // Conn is one Baichuan session carrying one stream.
 //
@@ -39,6 +61,34 @@ type Conn struct {
 
 	readMu  sync.Mutex
 	readErr error
+
+	idleTimeout time.Duration
+}
+
+// idleTimeoutConn resets the underlying connection's read deadline on every
+// call to Read, not once per message.
+//
+// Reader.Next takes an io.Reader and issues several io.ReadFull calls per
+// message (header, then body), each of which can itself take several
+// syscall-level Reads if the peer trickles bytes in. A deadline set once
+// before Next is called would therefore cap the time to receive one whole
+// message, not the gap between bytes; the largest single message this
+// protocol allows is a full 4K keyframe's worth of data (MaxMessageSize),
+// and a deadline sized for "no data at all" would be far too short for that
+// to arrive whole on a loaded network. Resetting on every Read instead makes
+// the timeout genuinely an idle timeout: it only fires when nothing at all
+// arrives for the whole window, regardless of how a message's bytes are
+// split across reads.
+type idleTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *idleTimeoutConn) Read(b []byte) (int, error) {
+	if c.timeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	}
+	return c.Conn.Read(b)
 }
 
 // Dial connects to a camera and logs in. addr may omit the port, in which
@@ -61,13 +111,29 @@ func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
 }
 
 func newConn(ctx context.Context, nc net.Conn, opts Options) (*Conn, error) {
+	idle := opts.IdleTimeout
+	if idle <= 0 {
+		idle = DefaultIdleTimeout
+	}
+
+	// idleConn wraps nc for the whole connection lifetime, but its timeout
+	// field stays zero (disabled) through login so login keeps using the
+	// dial context's own deadline below rather than having that overridden
+	// by a Read call resetting the deadline to now+idle first. It is armed
+	// only once login succeeds and the dial deadline is cleared, which is
+	// safe to do without a lock: the field is written here, before
+	// readLoop's goroutine is started, and never written again, so the
+	// go statement's happens-before guarantee is all the synchronisation
+	// this needs.
+	idleConn := &idleTimeoutConn{Conn: nc}
 	c := &Conn{
-		nc:   nc,
-		r:    NewReader(nc),
-		w:    NewWriter(nc),
-		opts: opts,
-		msgs: make(chan Message, 256),
-		done: make(chan struct{}),
+		nc:          nc,
+		r:           NewReader(idleConn),
+		w:           NewWriter(nc),
+		opts:        opts,
+		idleTimeout: idle,
+		msgs:        make(chan Message, 256),
+		done:        make(chan struct{}),
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		_ = nc.SetDeadline(dl)
@@ -76,6 +142,7 @@ func newConn(ctx context.Context, nc net.Conn, opts Options) (*Conn, error) {
 		return nil, err
 	}
 	_ = nc.SetDeadline(time.Time{})
+	idleConn.timeout = idle
 	go c.readLoop()
 	return c, nil
 }
@@ -151,6 +218,16 @@ func (c *Conn) readLoop() {
 	for {
 		m, err := c.r.Next()
 		if err != nil {
+			// A deadline exceeded error here is idleTimeoutConn firing, not
+			// a network failure, and the two need to read differently in an
+			// operator's log: this one means the camera accepted a
+			// connection and then never sent anything, the signature of a
+			// held session (see DefaultIdleTimeout), while a plain network
+			// error means the connection itself broke.
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				err = fmt.Errorf("baichuan: idle timeout: no data from camera in %s: %w", c.idleTimeout, err)
+			}
 			c.readMu.Lock()
 			c.readErr = err
 			c.readMu.Unlock()
