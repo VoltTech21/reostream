@@ -8,8 +8,8 @@ func TestPacketsAreAlways188BytesAndStartWithSync(t *testing.T) {
 		got  []byte
 	}{
 		{"PAT", writePAT(nil, 0)},
-		{"PMT h264", writePMT(nil, 0, StreamTypeH264)},
-		{"PMT hevc", writePMT(nil, 0, StreamTypeHEVC)},
+		{"PMT h264", writePMT(nil, 0, StreamTypeH264, 0)},
+		{"PMT hevc", writePMT(nil, 0, StreamTypeHEVC, 0)},
 	} {
 		if len(tc.got) != PacketSize {
 			t.Errorf("%s: length %d, want %d", tc.name, len(tc.got), PacketSize)
@@ -42,7 +42,7 @@ func TestPMTDeclaresTheVideoStreamType(t *testing.T) {
 		{"h264", StreamTypeH264},
 		{"hevc", StreamTypeHEVC},
 	} {
-		p := writePMT(nil, 0, tc.st)
+		p := writePMT(nil, 0, tc.st, 0)
 		if pid := PID(p[1]&0x1F)<<8 | PID(p[2]); pid != PIDPMT {
 			t.Errorf("%s: PMT on PID %#x, want %#x", tc.name, pid, PIDPMT)
 		}

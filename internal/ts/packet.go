@@ -61,13 +61,24 @@ func writePAT(dst []byte, cc byte) []byte {
 	return writeSection(dst, PIDPAT, cc, psiSection(0x00, 0x0001, body))
 }
 
-func writePMT(dst []byte, cc byte, streamType byte) []byte {
+// writePMT builds the program map, declaring the video stream and, when
+// audioType is nonzero, a second entry for the audio stream on PIDAudio.
+// The PCR PID is always PIDVideo: there is never a case here with audio and
+// no video, so a second clock reference is never needed.
+func writePMT(dst []byte, cc byte, streamType byte, audioType byte) []byte {
 	body := []byte{
 		0xE0 | byte(PIDVideo>>8&0x1F), byte(PIDVideo & 0xFF), // PCR PID
 		0xF0, 0x00, // program_info_length 0
 		streamType,
 		0xE0 | byte(PIDVideo>>8&0x1F), byte(PIDVideo & 0xFF),
 		0xF0, 0x00, // ES_info_length 0
+	}
+	if audioType != 0 {
+		body = append(body,
+			audioType,
+			0xE0|byte(PIDAudio>>8&0x1F), byte(PIDAudio&0xFF),
+			0xF0, 0x00, // ES_info_length 0
+		)
 	}
 	return writeSection(dst, PIDPMT, cc, psiSection(0x02, 0x0001, body))
 }

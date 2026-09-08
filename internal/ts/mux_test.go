@@ -414,6 +414,61 @@ func findPTS(b []byte) (uint64, bool) {
 	return 0, false
 }
 
+func TestPMTDeclaresBothStreamsWhenAudioIsPresent(t *testing.T) {
+	m, err := NewMuxerWithAudio("h265", "aac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := m.Header()
+	// The PMT must carry an entry for each of the two elementary streams.
+	if !containsSeq(h, []byte{StreamTypeHEVC, 0xE0 | byte(PIDVideo>>8), byte(PIDVideo & 0xFF)}) {
+		t.Error("PMT does not declare the video stream")
+	}
+	if !containsSeq(h, []byte{StreamTypeAAC, 0xE0 | byte(PIDAudio>>8), byte(PIDAudio & 0xFF)}) {
+		t.Error("PMT does not declare the audio stream")
+	}
+}
+
+func TestAudioFramesAreMuxedOnTheirOwnPID(t *testing.T) {
+	m, _ := NewMuxerWithAudio("h264", "aac")
+	m.Frame(frame(baichuan.FrameIFrame, 1000, 1, 2, 3))
+	out := m.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Codec: "aac", Micros: 2000, Data: []byte{0xFF, 0xF1, 0, 0}})
+	if len(out) == 0 {
+		t.Fatal("audio frame produced no packets")
+	}
+	var sawAudio bool
+	for i := 0; i < len(out); i += PacketSize {
+		if PID(out[i+1]&0x1F)<<8|PID(out[i+2]) == PIDAudio {
+			sawAudio = true
+		}
+	}
+	if !sawAudio {
+		t.Fatal("audio was not carried on the audio PID")
+	}
+}
+
+func TestAudioIsDroppedWhenTheMuxerIsVideoOnly(t *testing.T) {
+	m, _ := NewMuxer("h264")
+	m.Frame(frame(baichuan.FrameIFrame, 1000, 1))
+	if got := m.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Micros: 2000, Data: []byte{1, 2}}); len(got) != 0 {
+		t.Fatal("a video only muxer emitted audio")
+	}
+}
+
+func TestADPCMIsDroppedRatherThanMuxedAsAAC(t *testing.T) {
+	// Some cameras emit ADPCM, which has no MPEG-TS stream type here. It is
+	// reported and dropped, never relabelled: transcoding would put ffmpeg
+	// back in the serving path, which is a non-goal.
+	m, _ := NewMuxerWithAudio("h264", "aac")
+	m.Frame(frame(baichuan.FrameIFrame, 1000, 1))
+	if got := m.Frame(baichuan.Frame{Kind: baichuan.FrameADPCM, Micros: 2000, Data: []byte{1, 2}}); len(got) != 0 {
+		t.Fatal("ADPCM was muxed; it should be dropped and counted")
+	}
+	if m.DroppedAudio() == 0 {
+		t.Fatal("dropped ADPCM was not counted")
+	}
+}
+
 func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 	// internal/baichuan/testdata/h265_s2c.bin is a real camera capture. If
 	// the muxer can turn it into a stream ffprobe accepts, the format is
@@ -438,7 +493,14 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 
 	r := baichuan.NewReader(bytes.NewReader(b))
 	d := baichuan.NewDepacketiser()
-	m, err := NewMuxer("h265")
+	// The capture is known to carry 56 AAC frames alongside its video (see
+	// TestDepacketiserOnH265Capture's audio= count). Muxing with audio here,
+	// rather than NewMuxer's video-only form, is the whole point: production
+	// lost audio silently for days because a video-only path never surfaces
+	// that a second elementary stream even exists. If a future capture has
+	// none, this falls back to a video-only assertion and says why in the
+	// skip log rather than asserting nothing.
+	m, err := NewMuxerWithAudio("h265", "aac")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +508,7 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 	var out bytes.Buffer
 	out.Write(m.Header())
 
-	var fedFrames int
+	var fedVideoFrames, fedAudioFrames int
 	for i := 0; ; i++ {
 		msg, err := r.Next()
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -470,15 +532,24 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 			if !ok {
 				break
 			}
-			if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
-				continue
+			switch f.Kind {
+			case baichuan.FrameIFrame, baichuan.FramePFrame:
+				out.Write(m.Frame(f))
+				fedVideoFrames++
+			case baichuan.FrameAAC:
+				out.Write(m.Frame(f))
+				fedAudioFrames++
 			}
-			out.Write(m.Frame(f))
-			fedFrames++
 		}
 	}
-	if fedFrames == 0 {
+	if fedVideoFrames == 0 {
 		t.Fatal("no video frames decoded from the capture")
+	}
+	if fedAudioFrames == 0 {
+		t.Skip("capture has no AAC frames; cannot assert a second elementary stream from it")
+	}
+	if m.DroppedAudio() != 0 {
+		t.Errorf("DroppedAudio = %d, want 0: every frame fed here is video or AAC", m.DroppedAudio())
 	}
 
 	tmp, err := os.CreateTemp(t.TempDir(), "reostream-*.ts")
@@ -492,11 +563,13 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 		t.Fatalf("close temp file: %v", err)
 	}
 
+	// -v error was used here previously and hid the exact class of error
+	// this test exists to catch: warning level is what surfaces a demuxer
+	// silently unable to find or decode the second stream.
 	cmd := exec.Command("ffprobe",
 		"-v", "warning",
 		"-count_frames",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=nb_read_frames,codec_name",
+		"-show_entries", "stream=index,codec_type,codec_name,nb_read_frames",
 		"-of", "csv=p=0",
 		tmp.Name(),
 	)
@@ -509,28 +582,49 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("ffprobe wrote to stderr: %s", stderr.String())
 	}
+	t.Logf("ffprobe output:\n%s", stdout.String())
 
-	var line string
-	for _, l := range strings.Split(stdout.String(), "\n") {
-		if strings.TrimSpace(l) != "" {
-			line = strings.TrimSpace(l)
-			break
+	var sawVideo, sawAudio bool
+	for _, l := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		fields := strings.Split(l, ",")
+		if len(fields) != 4 {
+			t.Fatalf("unexpected ffprobe line: %q", l)
+		}
+		// ffprobe's csv writer emits struct fields alphabetically regardless
+		// of the order given to -show_entries, hence codec_name before
+		// codec_type here.
+		codecName, codecType, nbReadFrames := fields[1], fields[2], fields[3]
+		got, err := strconv.Atoi(nbReadFrames)
+		if err != nil {
+			t.Fatalf("parse nb_read_frames %q: %v", nbReadFrames, err)
+		}
+		switch codecType {
+		case "video":
+			sawVideo = true
+			if codecName != "hevc" {
+				t.Errorf("video codec_name = %q, want hevc", codecName)
+			}
+			if got != fedVideoFrames {
+				t.Errorf("ffprobe read %d video frames, muxer was fed %d", got, fedVideoFrames)
+			}
+		case "audio":
+			sawAudio = true
+			if codecName != "aac" {
+				t.Errorf("audio codec_name = %q, want aac", codecName)
+			}
+			if got == 0 {
+				t.Error("ffprobe read 0 audio frames, want the track's frame count nonzero")
+			}
 		}
 	}
-	fields := strings.Split(line, ",")
-	if len(fields) != 2 {
-		t.Fatalf("unexpected ffprobe output: %q", stdout.String())
+	if !sawVideo {
+		t.Error("ffprobe reported no video stream")
 	}
-	codecName, nbReadFrames := fields[0], fields[1]
-	if codecName != "hevc" {
-		t.Errorf("codec_name = %q, want hevc", codecName)
+	if !sawAudio {
+		t.Error("ffprobe reported no audio stream: a joining client cannot decode the audio track")
 	}
-	got, err := strconv.Atoi(nbReadFrames)
-	if err != nil {
-		t.Fatalf("parse nb_read_frames %q: %v", nbReadFrames, err)
-	}
-	if got != fedFrames {
-		t.Errorf("ffprobe read %d frames, muxer was fed %d", got, fedFrames)
-	}
-	t.Logf("ffprobe: codec_name=%s nb_read_frames=%s (fed %d frames)", codecName, nbReadFrames, fedFrames)
 }

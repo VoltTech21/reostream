@@ -48,6 +48,7 @@ const ptsPCRMask = 1<<33 - 1
 // socket and does no I/O: callers own delivery, this just produces bytes.
 type Muxer struct {
 	streamType    byte
+	audioType     byte // 0 means this muxer carries no audio
 	clock         *Clock
 	cc            continuity
 	sawKeyframe   bool
@@ -55,6 +56,7 @@ type Muxer struct {
 	lastTablesPTS uint64
 	sentPCR       bool
 	lastPCRPTS    uint64
+	droppedAudio  int
 }
 
 // continuity tracks the 4 bit continuity counter per PID. Each PID counts
@@ -101,6 +103,37 @@ func NewMuxer(codec string) (*Muxer, error) {
 	}, nil
 }
 
+// NewMuxerWithAudio builds a muxer that also carries an audio track on its
+// own PID. audioCodec is matched case insensitively for the same reason
+// videoCodec is in NewMuxer.
+//
+// Only "aac" is accepted. These cameras also emit ADPCM, which has no
+// registered MPEG-TS stream type; the previous tool silently dropped audio
+// entirely regardless of the recorder's configured role, and nothing ever
+// alerted on it. Relabelling ADPCM as AAC would decode as noise, and
+// transcoding it would put ffmpeg back in the serving path, which this
+// project exists to avoid. So an ADPCM frame is counted (DroppedAudio) and
+// dropped, never silently accepted.
+func NewMuxerWithAudio(videoCodec, audioCodec string) (*Muxer, error) {
+	m, err := NewMuxer(videoCodec)
+	if err != nil {
+		return nil, err
+	}
+	switch strings.ToLower(audioCodec) {
+	case "aac":
+		m.audioType = StreamTypeAAC
+	default:
+		return nil, fmt.Errorf("ts: unsupported audio codec %q", audioCodec)
+	}
+	return m, nil
+}
+
+// DroppedAudio reports how many audio frames were dropped for lack of a
+// supported codec, such as ADPCM. It should stay zero on a healthy stream
+// configured with an audio role; a climbing count means the camera is
+// sending a codec this muxer cannot carry.
+func (m *Muxer) DroppedAudio() int { return m.droppedAudio }
+
 // Header returns a freshly built PAT and PMT pair, for a client that joins
 // after the stream has already started. internal/hub calls this once, when
 // the codec first becomes known, and caches the result for every future
@@ -109,14 +142,21 @@ func NewMuxer(codec string) (*Muxer, error) {
 func (m *Muxer) Header() []byte {
 	out := make([]byte, 0, 2*PacketSize)
 	out = append(out, writePAT(nil, m.cc.next(PIDPAT))...)
-	out = append(out, writePMT(nil, m.cc.next(PIDPMT), m.streamType)...)
+	out = append(out, writePMT(nil, m.cc.next(PIDPMT), m.streamType, m.audioType)...)
 	return out
 }
 
 // Frame encodes one decoded camera frame, returning the transport packets to
-// send. It returns nil for audio and info frames, which this muxer does not
-// carry, and for any frame arriving before the first keyframe.
+// send. Video frames go on PIDVideo; an audio frame goes on PIDAudio if this
+// muxer was built with NewMuxerWithAudio and the codec matches what it was
+// built for, otherwise it is dropped (silently for a muxer that never
+// declared audio at all, counted via DroppedAudio when audio was declared
+// but the frame's codec, such as ADPCM, is not carried). Info frames and any
+// frame arriving before the first video keyframe are dropped too.
 func (m *Muxer) Frame(f baichuan.Frame) []byte {
+	if f.Kind == baichuan.FrameAAC || f.Kind == baichuan.FrameADPCM {
+		return m.audioFrame(f)
+	}
 	if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
 		return nil
 	}
@@ -142,7 +182,7 @@ func (m *Muxer) Frame(f baichuan.Frame) []byte {
 	// first NAL start code; Video() strips it. Feeding Data directly produces
 	// sporadic decoder errors like "cu_qp_delta out of range".
 	payload := f.Video()
-	pes := buildPES(pts, payload)
+	pes := buildPES(videoStreamID, pts, payload)
 
 	if !m.sentPCR || pts-m.lastPCRPTS >= pcrIntervalTicks {
 		// The PCR goes out on its own adaptation-field-only packet ahead of
@@ -161,8 +201,31 @@ func (m *Muxer) Frame(f baichuan.Frame) []byte {
 		m.sentPCR = true
 		m.lastPCRPTS = pts
 	}
-	out = append(out, m.packetisePES(pes)...)
+	out = append(out, m.packetisePES(PIDVideo, pes)...)
 	return out
+}
+
+// audioFrame encodes one audio frame onto PIDAudio, or drops it. A frame
+// arriving before this muxer's own header has gone out is still emitted:
+// unlike video, there is no GOP structure to wait on, and a joining client
+// gets the header itself from the cached copy in internal/hub, not from
+// this call.
+func (m *Muxer) audioFrame(f baichuan.Frame) []byte {
+	if m.audioType == 0 {
+		// This muxer was never given an audio codec: audio is dropped
+		// without counting it, the same as NewMuxer's video-only callers
+		// have always seen for any non video frame.
+		return nil
+	}
+	if f.Kind != baichuan.FrameAAC {
+		// ADPCM, or anything else that is not the codec this muxer was
+		// built for. Counted, never relabelled: see NewMuxerWithAudio.
+		m.droppedAudio++
+		return nil
+	}
+	pts := m.clock.PTS(f.Micros)
+	pes := buildPES(audioStreamID, pts, f.Data)
+	return m.packetisePES(PIDAudio, pes)
 }
 
 // pcrPacket builds a transport packet carrying nothing but a PCR, so a
@@ -182,20 +245,31 @@ func (m *Muxer) pcrPacket(pcr uint64) []byte {
 	return pkt
 }
 
+// videoStreamID and audioStreamID are the PES stream_id values for this
+// muxer's two elementary streams. 0xE0 is the standard "first video stream"
+// id; 0xC0 is the matching "first audio stream" id. A demuxer uses this,
+// not the PID, to sort PES packets by track once it has parsed the PMT.
+const (
+	videoStreamID = 0xE0
+	audioStreamID = 0xC0
+)
+
 // buildPES wraps an elementary stream payload in a PES header.
 //
 // The packet length field is left 0, which the format explicitly allows for
 // video, and is the only sane choice here since a frame can exceed the 16 bit
-// field's 65535 byte limit.
+// field's 65535 byte limit. Audio frames are always small enough to fit the
+// 16 bit field, but leaving it 0 for both keeps this one code path rather
+// than branching a length calculation in for audio alone.
 //
 // Only a PTS is written, no DTS, and that is not an omission: these cameras
 // never emit B frames, so decode order and presentation order are the same
 // and DTS would always equal PTS. A PES header can carry PTS alone (flag
 // '10' rather than '11'), which is what byte 7 below sets.
-func buildPES(pts uint64, payload []byte) []byte {
+func buildPES(streamID byte, pts uint64, payload []byte) []byte {
 	pes := make([]byte, 0, 19+len(payload))
-	pes = append(pes, 0x00, 0x00, 0x01, 0xE0) // start code, stream id
-	pes = append(pes, 0x00, 0x00)             // PES packet length: unbounded
+	pes = append(pes, 0x00, 0x00, 0x01, streamID) // start code, stream id
+	pes = append(pes, 0x00, 0x00)                 // PES packet length: unbounded
 	// 0x84: marker bits '10', then data_alignment_indicator set, since every
 	// PES here starts exactly on an access unit boundary; original_or_copy is
 	// left 0, which per the spec means "copy" rather than "original" (this is
@@ -222,8 +296,11 @@ func writePTS(dst []byte, pts uint64) {
 	dst[4] = 0x01 | byte(pts<<1)&0xFE
 }
 
-// packetisePES splits a PES packet across 188 byte transport packets on
-// PIDVideo, each with the PES (or its continuation) as the entire payload.
+// packetisePES splits a PES packet across 188 byte transport packets on pid,
+// each with the PES (or its continuation) as the entire payload. pid is
+// either PIDVideo or PIDAudio; each carries its own continuity counter (see
+// the continuity type), so interleaving the two tracks never disturbs
+// either one's count.
 //
 // The last packet is usually short. It used to be padded with plain zero
 // bytes rather than a stuffed adaptation field, on the reasoning that NAL
@@ -234,8 +311,10 @@ func writePTS(dst []byte, pts uint64) {
 // HVCC converter folds trailing zero bytes into the preceding NAL's length
 // field instead of discarding them, so every recording ended up with junk
 // appended to its last NAL. A proper adaptation field costs a handful of
-// bytes and avoids that.
-func (m *Muxer) packetisePES(pes []byte) []byte {
+// bytes and avoids that. Audio frames are ADTS, not Annex B, so this
+// padding scheme buys them nothing, but sharing the one code path is worth
+// more than a padding style optimised for a format audio does not use.
+func (m *Muxer) packetisePES(pid PID, pes []byte) []byte {
 	var out []byte
 	first := true
 	for len(pes) > 0 {
@@ -251,7 +330,7 @@ func (m *Muxer) packetisePES(pes []byte) []byte {
 		}
 
 		pkt := make([]byte, PacketSize)
-		writeHeader(pkt, PIDVideo, m.cc.next(PIDVideo), first)
+		writeHeader(pkt, pid, m.cc.next(pid), first)
 		if afTotal > 0 {
 			pkt[3] = pkt[3]&0x0F | 0x30 // adaptation field and payload both present
 			writeAdaptation(pkt[4:], afTotal, false, 0)
