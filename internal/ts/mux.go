@@ -2,6 +2,7 @@ package ts
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
@@ -76,10 +77,16 @@ func (c continuity) last(pid PID) byte {
 	return (c[pid] - 1) & 0x0F
 }
 
-// NewMuxer builds a muxer for the given codec, "h264" or "h265".
+// NewMuxer builds a muxer for the given codec, "h264" or "h265", matched case
+// insensitively. baichuan.Frame.Codec comes off the wire as "H264"/"H265",
+// while docs, tests and a future TOML config all write it lowercase; folding
+// the case here, at the one place every caller must pass through, means a
+// caller does not need to remember to normalize it and a config value like
+// "H265" fails as an unsupported-codec message would read like a camera
+// fault instead of a config typo.
 func NewMuxer(codec string) (*Muxer, error) {
 	var st byte
-	switch codec {
+	switch strings.ToLower(codec) {
 	case "h264":
 		st = StreamTypeH264
 	case "h265":

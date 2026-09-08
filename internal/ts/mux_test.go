@@ -50,6 +50,17 @@ func TestMuxerRejectsUnknownCodec(t *testing.T) {
 	}
 }
 
+func TestNewMuxerAcceptsCodecRegardlessOfCase(t *testing.T) {
+	// baichuan.Frame.Codec comes off the wire as "H264"/"H265"; docs, tests
+	// and a config file all write it lowercase. NewMuxer is the one place
+	// every caller passes through, so it must accept both.
+	for _, codec := range []string{"H265", "h265", "H264"} {
+		if _, err := NewMuxer(codec); err != nil {
+			t.Errorf("NewMuxer(%q): %v", codec, err)
+		}
+	}
+}
+
 func TestMuxerEmitsWholePackets(t *testing.T) {
 	m, err := NewMuxer("h265")
 	if err != nil {
