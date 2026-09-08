@@ -34,7 +34,11 @@ type Conn struct {
 	mu      sync.Mutex
 
 	msgs      chan Message
+	done      chan struct{}
 	closeOnce sync.Once
+
+	readMu  sync.Mutex
+	readErr error
 }
 
 // Dial connects to a camera and logs in. addr may omit the port, in which
@@ -63,6 +67,7 @@ func newConn(ctx context.Context, nc net.Conn, opts Options) (*Conn, error) {
 		w:    NewWriter(nc),
 		opts: opts,
 		msgs: make(chan Message, 256),
+		done: make(chan struct{}),
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		_ = nc.SetDeadline(dl)
@@ -130,19 +135,48 @@ func (c *Conn) login() error {
 // Nonce reports the login nonce.
 func (c *Conn) Nonce() string { return c.nonce }
 
+// readLoop reads messages off the socket and hands them to Messages until
+// the socket errors or Close closes done.
+//
+// The send to c.msgs is a select alongside done, not a plain send. Once
+// Run's consumer above stops reading (Run returns and nothing services
+// conn.Messages() again), the 256-slot buffer fills and a plain send parks
+// here forever: Close closing the socket makes c.r.Next() fail on the *next*
+// read, but this goroutine is not at that read, it is blocked trying to
+// deliver the one before it, so it never notices. Selecting on done as well
+// gives Close a way to wake a goroutine parked on the send, not just one
+// parked on the read.
 func (c *Conn) readLoop() {
 	defer close(c.msgs)
 	for {
 		m, err := c.r.Next()
 		if err != nil {
+			c.readMu.Lock()
+			c.readErr = err
+			c.readMu.Unlock()
 			return
 		}
-		c.msgs <- m
+		select {
+		case c.msgs <- m:
+		case <-c.done:
+			return
+		}
 	}
 }
 
 // Messages yields every message the camera sends after login.
 func (c *Conn) Messages() <-chan Message { return c.msgs }
+
+// Err reports the read error that ended the read loop and closed the
+// channel from Messages, or nil if the loop is still running. After Close,
+// this is the "use of closed network connection" error the read side sees,
+// not a camera-side failure; callers that care about that distinction should
+// check it before calling Close.
+func (c *Conn) Err() error {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	return c.readErr
+}
 
 // StartVideo requests a stream: StreamMain, StreamSub or StreamExtern.
 func (c *Conn) StartVideo(stream string) error {
@@ -176,6 +210,7 @@ func (c *Conn) Ping() error {
 func (c *Conn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
+		close(c.done)
 		if c.stream != "" {
 			if body, mErr := previewXML(c.opts.Channel, c.handle, ""); mErr == nil {
 				h := Header{
