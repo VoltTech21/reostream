@@ -3,7 +3,6 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,27 +81,94 @@ func TestNeverRunsTwoConnectionsForOneStream(t *testing.T) {
 	// The rule this whole project turns on. A restart must not overlap with
 	// the connection it replaces: a second connection to one stream gets a
 	// session that delivers nothing and blocks its own replacement.
-	var live, maxLive int32
-	var mu sync.Mutex
+	//
+	// The production 1s backoff would only fit one or two restart cycles
+	// into a test-sized window, which observes no violation without coming
+	// close to proving one is impossible. setBackoff drives this down to
+	// 1ms (start and cap both, so the interval stays flat) to force dozens
+	// of restart cycles and give the invariant a real chance to fail.
+	var live, maxLive, restarts int32
 	run := func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		atomic.AddInt32(&restarts, 1)
 		n := atomic.AddInt32(&live, 1)
-		mu.Lock()
-		if n > maxLive {
-			maxLive = n
+		for {
+			old := atomic.LoadInt32(&maxLive)
+			if n <= old {
+				break
+			}
+			if atomic.CompareAndSwapInt32(&maxLive, old, n) {
+				break
+			}
 		}
-		mu.Unlock()
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)
 		atomic.AddInt32(&live, -1)
 		return errors.New("drop")
 	}
 	s := New([]config.Camera{{Name: "a", Address: "192.0.2.1", Streams: []string{"main"}}}, run)
+	s.setBackoff(1*time.Millisecond, 1*time.Millisecond, time.Minute)
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	s.Run(ctx)
-	mu.Lock()
-	defer mu.Unlock()
-	if maxLive > 1 {
-		t.Fatalf("%d concurrent connections to one stream, want at most 1", maxLive)
+
+	if n := atomic.LoadInt32(&restarts); n < 20 {
+		t.Fatalf("only %d restart cycles in 500ms, too few to trust this test caught a violation", n)
+	}
+	if got := atomic.LoadInt32(&maxLive); got > 1 {
+		t.Fatalf("%d concurrent connections to one stream, want at most 1", got)
+	}
+}
+
+func TestRunReturnsErrorOnSecondCall(t *testing.T) {
+	// Two concurrent Run calls would spawn two goroutines per entry, which
+	// is a second connection to every stream the Supervisor owns: the same
+	// fault TestNeverRunsTwoConnectionsForOneStream guards against, caused
+	// by the caller instead of a flaky camera.
+	run := func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	s := New([]config.Camera{{Name: "a", Address: "192.0.2.1", Streams: []string{"main"}}}, run)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(firstDone)
+	}()
+
+	// Give the first Run a chance to actually mark itself started before
+	// the second call races it; CompareAndSwap makes the outcome correct
+	// either way, but this keeps the test from depending on that timing.
+	time.Sleep(20 * time.Millisecond)
+
+	if err := s.Run(ctx); err != ErrAlreadyRunning {
+		t.Fatalf("second Run() = %v, want ErrAlreadyRunning", err)
+	}
+
+	cancel()
+	<-firstDone
+}
+
+func TestRestartsCountReflectsActualRestartsNotFirstRun(t *testing.T) {
+	// A stream that runs once and is still running when the context ends
+	// has never restarted, and Stats().Restarts should say 0, not 1: that
+	// number gets read by an operator deciding whether a camera is flapping.
+	run := func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	s := New([]config.Camera{{Name: "a", Address: "192.0.2.1", Streams: []string{"main"}}}, run)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	s.Run(ctx)
+
+	stats := s.Stats()
+	if len(stats) != 1 {
+		t.Fatalf("got %d stream stats, want 1", len(stats))
+	}
+	if stats[0].Restarts != 0 {
+		t.Fatalf("Restarts = %d for a stream that never failed, want 0", stats[0].Restarts)
 	}
 }
 

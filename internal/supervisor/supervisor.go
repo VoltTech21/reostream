@@ -9,13 +9,22 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/hub"
 	"github.com/VoltTech21/reostream/internal/stream"
 )
+
+// ErrAlreadyRunning is returned by a second call to Run on the same
+// Supervisor. Two concurrent Run calls would spawn two goroutines per
+// entry, which is exactly the two-connections-to-one-stream overlap this
+// package exists to prevent, so a second call is refused rather than
+// silently duplicating the fleet.
+var ErrAlreadyRunning = errors.New("supervisor: already running")
 
 // Runner runs one camera stream until ctx is cancelled or it fails. It is a
 // parameter rather than a hard call to stream.Run so the supervisor can be
@@ -72,6 +81,13 @@ type Supervisor struct {
 	backoffMax   time.Duration
 	backoffReset time.Duration
 
+	// started guards Run against a second concurrent call and, as a side
+	// effect, tells setBackoff when it is too late to change anything: once
+	// runStream goroutines exist they read the backoff fields with no lock
+	// of their own, so a change after start would be a real race rather
+	// than the harmless one the race detector happens not to catch today.
+	started atomic.Bool
+
 	hubs map[string]*hub.Hub
 
 	mu      sync.Mutex
@@ -113,8 +129,17 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 
 // setBackoff overrides the backoff parameters. Unexported: production code
 // always runs on the defaults, and only this package's own tests, which
-// share the package, can reach into a Supervisor to shorten them.
+// share the package, can reach into a Supervisor to shorten them, and only
+// before Run starts. It panics if called after start rather than taking a
+// lock and letting a live Supervisor be retuned mid-run: the values are
+// read without synchronisation for the whole life of each stream goroutine,
+// snapshotting or locking around every read would cost every stream a lock
+// operation per cycle forever to protect a knob that is only ever set once,
+// in a test, before anything is running.
 func (s *Supervisor) setBackoff(start, max, reset time.Duration) {
+	if s.started.Load() {
+		panic("supervisor: setBackoff called after Run has started")
+	}
 	s.backoffStart = start
 	s.backoffMax = max
 	s.backoffReset = reset
@@ -140,7 +165,16 @@ func (s *Supervisor) Hubs() map[string]*hub.Hub {
 // that races that close leaves the camera refusing connections on that
 // stream for minutes. That is why this is a plain WaitGroup rather than
 // returning as soon as ctx is done.
+//
+// Run may only be called once. A second concurrent call would spawn a
+// second goroutine per entry, which is a second connection to every stream
+// this Supervisor owns, the exact fault this package exists to prevent, so
+// it returns ErrAlreadyRunning instead.
 func (s *Supervisor) Run(ctx context.Context) error {
+	if !s.started.CompareAndSwap(false, true) {
+		return ErrAlreadyRunning
+	}
+
 	var wg sync.WaitGroup
 	for _, e := range s.entries {
 		wg.Add(1)
@@ -164,6 +198,11 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 	backoff := s.backoffStart
 	for {
 		if ctx.Err() != nil {
+			// Covers a context that was already cancelled before this
+			// goroutine got scheduled, not just the check further down: an
+			// already-cancelled ctx handed to Run must not leak this hub's
+			// subscribers either.
+			e.h.Close()
 			return
 		}
 
@@ -191,6 +230,11 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 			return
 		case <-time.After(backoff):
 		}
+
+		// Only reached by actually looping back to run again, so this
+		// counts restarts, not the initial run: a stream that has never
+		// failed reports 0, not 1.
+		s.incrementRestarts(e)
 
 		backoff *= 2
 		if backoff > s.backoffMax {
@@ -222,6 +266,13 @@ func (s *Supervisor) setResult(e *entry, err error) {
 	if err != nil {
 		e.stat.LastError = err.Error()
 	}
+	s.mu.Unlock()
+}
+
+// incrementRestarts counts a stream actually restarting, called only from
+// the path that is about to run it again, not from its first run.
+func (s *Supervisor) incrementRestarts(e *entry) {
+	s.mu.Lock()
 	e.stat.Restarts++
 	s.mu.Unlock()
 }
