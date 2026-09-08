@@ -69,7 +69,7 @@ listen = "0.0.0.0:8560"
 
 [[camera]]
 name = "driveway"
-address = "192.168.1.50"
+address = "192.0.2.50"
 username = "admin"
 password = "$REOSTREAM_DRIVEWAY_PASSWORD"
 streams = ["main", "sub"]
