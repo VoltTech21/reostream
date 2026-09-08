@@ -63,7 +63,7 @@ them by taking on jobs it did not need to do.
 
 **Go.** Reasons, in order:
 
-1. The project should be Riley's, under a licence he chooses. Depending on
+1. This should be my own project, under a licence I choose. Depending on
    `neolink_core` means AGPL and a dependency on dead upstream code.
 2. Go is the right tool for "hold N long-lived connections and fan bytes to HTTP
    clients". go2rtc is Go, which is proof the terrain suits the job.
@@ -103,7 +103,7 @@ Four packages, each with one job and a testable boundary.
 |---|---|---|
 | `internal/baichuan` | Wire protocol: connect, login, message framing, XML codec, media depacketise, ping/heartbeat. Yields decoded frames. | net, crypto |
 | `internal/ts` | MPEG-TS muxer. Frames in, TS packets out. Pure, no I/O. | nothing |
-| `internal/camera` | One camera's lifecycle: connect, login, start stream, heartbeat, mux, broadcast, reconnect. | baichuan, ts |
+| `internal/camera` | One stream's lifecycle: connect, login, start stream, heartbeat, mux, broadcast, reconnect. | baichuan, ts |
 | `internal/server` | HTTP: endpoints, fan-out to clients, status and metrics. | camera |
 
 `cmd/reostream` wires them together from config. Nothing above `baichuan` knows about
@@ -112,7 +112,7 @@ the wire; nothing below `camera` knows about HTTP.
 ### Layout
 
     cmd/reostream/main.go
-    internal/baichuan/     conn.go login.go crypto.go message.go xml.go media.go
+    internal/baichuan/     conn.go login.go crypto.go message.go media.go
     internal/ts/           mux.go pes.go pat.go
     internal/camera/       camera.go supervisor.go
     internal/server/       server.go stream.go status.go snapshot.go
@@ -155,13 +155,14 @@ thing holding that connection, so retrying inside the daemon is correct.
 The firmware carries the literal list `mainStream,subStream,externStream`. `externStream`
 is the third, "balanced" stream (the protocol's `stream_id 04`), and it is not exposed
 in the Reolink UI. The firmware also has `EXTERNSTREAM_720P_SET` / `_RESET` and
-`MSG_ENC_EXTERNSTREAM_720P_SET`, so it is a settable 720p stream rather than a fixed one.
+`MSG_ENC_EXTERNSTREAM_720P_SET`, so its resolution is settable; observed at 896x512.
 
 reostream treats all three as first-class from Phase A: `streams = ["main", "sub", "extern"]`
 per camera, served as `/<cam>.ts`, `/<cam>_sub.ts` and `/<cam>_extern.ts`. This costs
-almost nothing (a stream is just another supervised connection), and a 720p balanced
-stream is a genuinely useful middle option between a 4K main stream and a small substream,
-particularly for the cam wall and for remote viewing over the measured ~20 Mbps uplink.
+almost nothing (a stream is just another supervised connection), and a balanced stream
+observed at 896x512 is a genuinely useful middle option between a 4K main stream and a
+small substream, particularly for the cam wall and for remote viewing over the measured
+~20 Mbps uplink.
 
 Configuring `externStream` (via `MSG_ENC_EXTERNSTREAM_720P_SET`) is Phase C work alongside
 `GopCfg`; consuming it is Phase A.
@@ -202,6 +203,7 @@ it turns join time into something we tune rather than inherit.
 |---|---|
 | `GET /<cam>.ts` | MPEG-TS, main stream. The primary product. |
 | `GET /<cam>_sub.ts` | MPEG-TS, substream. |
+| `GET /<cam>_extern.ts` | MPEG-TS, extern (balanced) stream. |
 | `GET /<cam>.jpg` | Most recent keyframe as a still. Cheap, and a health check that does not open a stream. |
 | `GET /api/status` | JSON with per-camera fields: connected, fps, bitrate, last-keyframe age, client count, reconnect count, ping failures, camera-reported `PerformanceInfo`. |
 | `GET /metrics` | The same, Prometheus format. |
@@ -361,7 +363,7 @@ be removed from the `neolink-cat` path first, not run in parallel with it.
 
 ## Licence
 
-Riley's own copyright, licence to be chosen at first publish. Since no Neolink code is
+My own copyright, licence to be chosen at first publish. Since no Neolink code is
 used, AGPL is not inherited and the choice is free. Credit thirtythreeforty and
 QuantumEntangledAndy in the README for the prior art that made the protocol legible.
 

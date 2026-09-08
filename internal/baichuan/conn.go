@@ -17,8 +17,8 @@ type Options struct {
 
 // Conn is one Baichuan session carrying one stream.
 //
-// A camera permits one connection per stream — main, sub and extern are
-// independent — so a Conn must be closed cleanly. Close sends the stream-stop
+// A camera permits one connection per stream (main, sub and extern are
+// independent), so a Conn must be closed cleanly. Close sends the stream-stop
 // message that releases the camera's session; a process killed without doing
 // so leaves that stream refusing connections for minutes.
 type Conn struct {

@@ -61,8 +61,8 @@ audio 8, info variable. The camera's `microseconds` field is real and monotonic:
 ## Streams
 
 `mainStream`, `subStream` and `externStream`. The third is the "balanced" stream, absent
-from the Reolink UI, and it works: 896×512 H.264 on a camera whose main stream is
-3840×2160 HEVC. The firmware also carries `EXTERNSTREAM_720P_SET`, so its resolution is
+from the Reolink UI, and it works: 896x512 H.264 on a camera whose main stream is
+3840x2160 HEVC. The firmware also carries `EXTERNSTREAM_720P_SET`, so its resolution is
 settable.
 
 **One connection per stream, not per camera.** Main, sub and extern can be streamed

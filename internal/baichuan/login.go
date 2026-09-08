@@ -11,7 +11,7 @@ const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>`
 
 // hashCred renders the credential hash the camera expects: the uppercase hex
 // MD5 of the credential concatenated with the login nonce, truncated to 31
-// characters. The truncation is not a typo — a working client sends 31, and
+// characters. The truncation is not a typo: a working client sends 31, and
 // the camera compares 31.
 func hashCred(value, nonce string) string {
 	sum := md5.Sum([]byte(value + nonce))
