@@ -4,9 +4,30 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 )
+
+// MaxMessageSize bounds a single message body.
+//
+// h.MsgLen comes straight off the wire, before the body is allocated, so a
+// malfunctioning or hostile peer declaring a huge length must be rejected
+// before make() runs rather than after. The bound is the size of one
+// uncompressed 4K frame: docs/measurements.md records the main stream at
+// 3840x2160, and no message on this protocol carries more than one frame's
+// worth of compressed data, which can never exceed the raw pixel data it
+// encodes. 3840 * 2160 * 3 / 2 (YUV 4:2:0, the format the sensor captures
+// before encoding) = 12,441,600 bytes.
+const MaxMessageSize = 3840 * 2160 * 3 / 2
+
+// ErrMessageTooLarge means a header declared a body bigger than
+// MaxMessageSize.
+var ErrMessageTooLarge = errors.New("baichuan: message body exceeds MaxMessageSize")
+
+// ErrPayloadOffsetOutOfRange means a header's PayloadOff pointed past the end
+// of the body it belongs to.
+var ErrPayloadOffsetOutOfRange = errors.New("baichuan: PayloadOff exceeds body length")
 
 // Message is a decoded Baichuan message. XML is decrypted; Payload is the
 // binary remainder, which is media data and is never encrypted.
@@ -60,6 +81,9 @@ func (r *Reader) Next() (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
+	if h.MsgLen > MaxMessageSize {
+		return Message{}, fmt.Errorf("baichuan: msg %d: length %d: %w", h.MsgID, h.MsgLen, ErrMessageTooLarge)
+	}
 	body := make([]byte, h.MsgLen)
 	if _, err := io.ReadFull(r.br, body); err != nil {
 		return Message{}, fmt.Errorf("baichuan: body of msg %d: %w", h.MsgID, err)
@@ -82,7 +106,15 @@ func (r *Reader) Next() (Message, error) {
 		return m, nil
 	}
 	xmlEnd := len(body)
-	if HeaderLen(h.Class) == 24 && h.PayloadOff > 0 && int(h.PayloadOff) < len(body) {
+	if HeaderLen(h.Class) == 24 && h.PayloadOff > 0 {
+		// PayloadOff is wire-controlled: compare as uint32 against the body
+		// length before ever converting to int, so a value that would go
+		// negative on a 32-bit int (or simply run past the body) is caught
+		// here instead of panicking on the slice below or on a 32-bit build.
+		if h.PayloadOff > uint32(len(body)) {
+			return Message{}, fmt.Errorf("baichuan: msg %d: PayloadOff %d exceeds body length %d: %w",
+				h.MsgID, h.PayloadOff, len(body), ErrPayloadOffsetOutOfRange)
+		}
 		xmlEnd = int(h.PayloadOff)
 	}
 	m.XML = r.decrypt(h, body[:xmlEnd])

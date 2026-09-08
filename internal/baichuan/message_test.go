@@ -75,6 +75,47 @@ func TestReaderSwitchesToAES(t *testing.T) {
 	}
 }
 
+// A header declaring a body bigger than MaxMessageSize must be rejected
+// before the body is allocated, not after a failed read.
+func TestReaderRejectsOversizedMsgLen(t *testing.T) {
+	h := Header{MsgID: MsgIDVideo, Class: ClassModern24, MsgLen: MaxMessageSize + 1}
+	r := NewReader(bytes.NewReader(h.Encode()))
+
+	_, err := r.Next()
+	if err == nil {
+		t.Fatal("want an error for a header declaring an oversized MsgLen")
+	}
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Errorf("error = %v, want ErrMessageTooLarge", err)
+	}
+}
+
+// A PayloadOff pointing past the end of the body must be rejected with an
+// error, not sliced (which would panic, and would go negative first on a
+// 32-bit build if PayloadOff were converted to int before the check).
+func TestReaderRejectsPayloadOffPastBody(t *testing.T) {
+	body := []byte(`<?xml version="1.0"?><body/>`)
+	h := Header{
+		MsgID:      MsgIDAbilityInfo,
+		Class:      ClassModern24,
+		MsgLen:     uint32(len(body)),
+		PayloadOff: uint32(len(body)) + 1,
+	}
+
+	var buf bytes.Buffer
+	buf.Write(h.Encode())
+	buf.Write(body)
+	r := NewReader(&buf)
+
+	_, err := r.Next()
+	if err == nil {
+		t.Fatal("want an error for a PayloadOff past the body")
+	}
+	if !errors.Is(err, ErrPayloadOffsetOutOfRange) {
+		t.Errorf("error = %v, want ErrPayloadOffsetOutOfRange", err)
+	}
+}
+
 func TestWriterRoundTrips(t *testing.T) {
 	h := Header{MsgID: MsgIDVideo, Class: ClassModern24, EncOffset: EncOffsetFor(0, 1, 2, 0)}
 	body := []byte(`<?xml version="1.0"?><body/>`)
