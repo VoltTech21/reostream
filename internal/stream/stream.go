@@ -5,7 +5,6 @@ package stream
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -101,8 +100,9 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) error {
 					if mux == nil {
 						// The codec is not known until the first frame
 						// arrives, so the muxer is built here rather than
-						// guessed at connect time.
-						nm, err := ts.NewMuxer(strings.ToLower(f.Codec))
+						// guessed at connect time. NewMuxer itself handles
+						// the wire's uppercase spelling.
+						nm, err := ts.NewMuxer(f.Codec)
 						if err != nil {
 							return fmt.Errorf("stream: %s: %w", cfg.Name, err)
 						}
