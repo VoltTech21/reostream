@@ -5,6 +5,8 @@ package stream
 import (
 	"context"
 	"fmt"
+	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -49,7 +51,7 @@ func streamKind(name string) (string, bool) {
 //
 // Run returns promptly on an already cancelled context without dialling, so
 // a supervisor can cancel a Config before Run has had a chance to start it.
-func Run(ctx context.Context, cfg Config, h *hub.Hub) error {
+func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -71,6 +73,21 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) error {
 	// leaves the camera refusing new connections on this stream for minutes.
 	defer conn.Close()
 
+	// net/http recovers a handler panic on its own, but nothing does that
+	// for this goroutine. Registered after defer conn.Close() above, so it
+	// runs first on the way out: it stops the panic and sets err, then
+	// conn.Close() runs as normal right after, same as any other error
+	// return. Without this, a panic anywhere in the loop below still
+	// unwinds through conn.Close() (Go runs defers during a panic), but then
+	// keeps going and crashes the whole process, taking down every other
+	// camera the supervisor is running, not just this one.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("stream: %s: panic: %v\n%s", cfg.Name, r, debug.Stack())
+			err = fmt.Errorf("stream: %s: panic: %v", cfg.Name, r)
+		}
+	}()
+
 	if err := conn.StartVideo(kind); err != nil {
 		return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
 	}
@@ -85,6 +102,9 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) error {
 			return ctx.Err()
 		case msg, open := <-conn.Messages():
 			if !open {
+				if cErr := conn.Err(); cErr != nil {
+					return fmt.Errorf("stream: %s: camera closed the connection: %w", cfg.Name, cErr)
+				}
 				return fmt.Errorf("stream: %s: camera closed the connection", cfg.Name)
 			}
 			if len(msg.Payload) > 0 {

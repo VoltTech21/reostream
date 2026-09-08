@@ -27,11 +27,9 @@ func TestRunStopsWhenTheContextIsCancelled(t *testing.T) {
 func TestPingIsNotSelectedAgainstTheFrameChannel(t *testing.T) {
 	// Frames arrive about every 40ms, so a timer case in the same select as
 	// the frame case is effectively never chosen and the camera times the
-	// session out. This asserts the elapsed time check is used instead.
-	//
-	// Implement by extracting the decision into:
-	//   func shouldPing(last time.Time, now time.Time, every time.Duration) bool
-	// and testing it directly.
+	// session out. Run instead checks elapsed time after each message; this
+	// exercises that check, shouldPing, directly rather than through a real
+	// connection and a real clock.
 	now := time.Now()
 	if shouldPing(now, now.Add(time.Second), 10*time.Second) {
 		t.Error("pinged after 1s with a 10s interval")
