@@ -32,7 +32,7 @@ func main() {
 	name := flag.String("name", "", "stream name, served at /<name>.ts")
 	address := flag.String("address", "", "camera address, host or host:port")
 	username := flag.String("username", "admin", "camera username")
-	password := flag.String("password", "", "camera password")
+	password := flag.String("password", "", "camera password (visible in `ps` and shell history to any local user; set REOSTREAM_PASSWORD instead where that matters)")
 	streamName := flag.String("stream", "main", "camera stream: main, sub or extern")
 	buffer := flag.Int("buffer", 64, "subscriber buffer size, in TS chunks")
 	flag.Parse()
@@ -40,6 +40,14 @@ func main() {
 	if *name == "" || *address == "" {
 		fmt.Fprintln(os.Stderr, "reostream: -name and -address are required")
 		os.Exit(2)
+	}
+
+	// The flag is the only way to set a password today, but it lands in `ps`
+	// output and shell history. The config file in the next plan supersedes
+	// this; until then, an unset flag falls back to the environment, which
+	// neither of those exposes.
+	if *password == "" {
+		*password = os.Getenv("REOSTREAM_PASSWORD")
 	}
 
 	h := hub.New(*buffer)
@@ -72,7 +80,15 @@ func main() {
 	}()
 
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	// SIGHUP and SIGQUIT must be handled, not just SIGINT and SIGTERM: this
+	// process is normally started over SSH, where a terminal disconnect or a
+	// tmux detach sends SIGHUP, and Go's default action for an unhandled
+	// SIGHUP or SIGQUIT terminates the process immediately with no defers
+	// run. That skips conn.Close(), so the stream-stop message that releases
+	// the camera's session is never sent and the camera refuses new
+	// connections on that stream for minutes. This is not hypothetical: it
+	// cost nine minutes of live camera footage during testing on 2026-09-08.
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 
 	// Wait for whichever comes first: an operator's shutdown signal, or the
 	// stream ending on its own. The second case is a failed dial, a bad
@@ -104,10 +120,9 @@ func main() {
 	// http.Server.Shutdown waits for in-flight handlers to return on their
 	// own rather than forcing them closed, and the streaming handler in
 	// internal/server only returns when its request context is cancelled or
-	// the hub drops it. With a live client attached this blocks for the full
-	// timeout below. Acceptable for now with one client on one stream; if
-	// that becomes noisy with many clients, the fix belongs in the hub (a
-	// way to close every subscriber), not here.
+	// the hub drops it. h.Close() drops every subscriber immediately, so a
+	// live client no longer makes Shutdown wait out the timeout below.
+	h.Close()
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShutdown()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {

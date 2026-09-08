@@ -369,5 +369,5 @@ QuantumEntangledAndy in the README for the prior art that made the protocol legi
 
 ## Prerequisites
 
-Go is not installed on spaceranger (`golang-go` candidate is 2:1.22). Install a current
+Go is not installed on the development host (`golang-go` candidate is 2:1.22). Install a current
 toolchain before Phase 0.
