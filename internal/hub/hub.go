@@ -46,6 +46,7 @@ type Hub struct {
 	subs    map[*subscriber]struct{}
 	dropped int
 	header  []byte
+	closed  bool
 }
 
 // New creates a Hub whose subscriber channels each hold up to buffer frames
@@ -66,6 +67,13 @@ func (h *Hub) Subscribe() (<-chan []byte, func()) {
 	s := &subscriber{ch: make(chan []byte, h.buffer)}
 
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		// Nothing will ever publish to this hub again; hand back an already
+		// closed channel rather than one that would sit empty forever.
+		close(s.ch)
+		return s.ch, func() {}
+	}
 	h.subs[s] = struct{}{}
 	h.mu.Unlock()
 
@@ -79,6 +87,33 @@ func (h *Hub) Subscribe() (<-chan []byte, func()) {
 	return s.ch, cancel
 }
 
+// Close closes every current subscriber's channel and marks the hub closed,
+// so a later Publish or Subscribe is a no-op rather than a send on, or a
+// registration into, a hub nobody is going to deliver to again.
+//
+// Call this when the stream feeding the hub stops. Without it, an HTTP
+// handler blocked in its read select (internal/server) only notices its
+// stream is gone when its request context is cancelled, which on shutdown
+// is the full 5 second timeout rather than an immediate close.
+func (h *Hub) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	subs := make([]*subscriber, 0, len(h.subs))
+	for s := range h.subs {
+		subs = append(subs, s)
+	}
+	h.subs = make(map[*subscriber]struct{})
+	h.mu.Unlock()
+
+	for _, s := range subs {
+		s.closeOnce()
+	}
+}
+
 // Publish delivers b to every subscriber. It never blocks: a subscriber
 // whose buffer is full is dropped instead of stalling this call, because
 // this is called from the camera's read goroutine and any delay here is a
@@ -90,6 +125,10 @@ func (h *Hub) Subscribe() (<-chan []byte, func()) {
 // would need this to change.
 func (h *Hub) Publish(b []byte) {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
 	subs := make([]*subscriber, 0, len(h.subs))
 	for s := range h.subs {
 		subs = append(subs, s)
@@ -150,6 +189,18 @@ func (h *Hub) Dropped() int {
 // before any live data. It is set once the muxer has seen the first frame
 // and knows the codec; before that Header returns nil, and callers must not
 // turn a nil header into an empty write.
+//
+// This is one snapshot, not a header rebuilt per joiner. Its PAT/PMT
+// continuity counters are frozen at whatever they were the moment the caller
+// built b, while the in-band PAT/PMT the muxer repeats every
+// tableRepeatTicks keep advancing theirs (see ts.Muxer.Header). A joining
+// client sees one continuity jump on PIDPAT and PIDPMT at join time, never
+// again. ffmpeg does not check PSI continuity; a demuxer built strictly to
+// the T-STD model can log it, but a table PID discontinuity carries no
+// decode consequence the way one on PIDVideo would. Rebuilding it per joiner
+// would mean the hub calling back into ts.Muxer for fresh counters, which
+// does not fit the hub's job of only ever moving bytes it is handed; one
+// cosmetic counter jump is cheaper than that coupling.
 func (h *Hub) SetHeader(b []byte) {
 	h.mu.Lock()
 	h.header = b

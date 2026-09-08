@@ -102,7 +102,10 @@ func NewMuxer(codec string) (*Muxer, error) {
 }
 
 // Header returns a freshly built PAT and PMT pair, for a client that joins
-// after the stream has already started.
+// after the stream has already started. internal/hub calls this once, when
+// the codec first becomes known, and caches the result for every future
+// joiner; see hub.SetHeader for why that one frozen snapshot is acceptable
+// rather than a fresh call per joiner.
 func (m *Muxer) Header() []byte {
 	out := make([]byte, 0, 2*PacketSize)
 	out = append(out, writePAT(nil, m.cc.next(PIDPAT))...)
