@@ -74,8 +74,6 @@ Then: bench soak with all cameras → per-camera cutover → protocol phases B�
 - **Can the cam wall pull `externStream` directly?** The wall currently consumes a
   transcoded 1920x544 pano tile from go2rtc (`pano_wall`). If 896x512 extern is good
   enough for a tile, that transcode disappears too. Test once HTTP serving exists.
-- **Licence undecided.** No Neolink code is used, so AGPL is not inherited and the choice
-  is open. Decide before first publish.
 
 ## Pano stitching: what the NVR firmware settled (2026-09-08)
 
