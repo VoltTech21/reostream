@@ -19,6 +19,7 @@ type Clock struct {
 	base    uint32 // camera time of the first frame
 	last    uint32 // previous raw camera time, for wrap detection
 	wraps   uint64 // how many times the camera clock has rolled over
+	lastPTS uint64 // previous return value, for the monotonic clamp below
 }
 
 func NewClock() *Clock { return &Clock{} }
@@ -43,10 +44,29 @@ func (c *Clock) PTS(micros uint32) uint64 {
 	}
 	c.last = micros
 
-	// Total elapsed camera microseconds since the first frame.
-	elapsed := c.wraps<<32 + uint64(micros) - uint64(c.base)
+	// Total elapsed camera microseconds since the first frame. This has to be
+	// signed: wrap detection above only fires on a backward step bigger than
+	// wrapThreshold, so a smaller backward step (reordering, or the camera
+	// clock stuttering) reaches here with micros < base and no wrap counted.
+	// Computed as unsigned, that underflows to about 2^64 and truncates to a
+	// garbage PTS; computed as signed, it comes out negative and is caught by
+	// the clamp below instead.
+	elapsed := int64(c.wraps<<32) + int64(micros) - int64(c.base)
 
-	// Microseconds to 90 kHz ticks: multiply by 9, divide by 100. Done in this
-	// order so the division does not throw away resolution.
-	return elapsed * 9 / 100
+	var pts uint64
+	if elapsed > 0 {
+		// Microseconds to 90 kHz ticks: multiply by 9, divide by 100. Done in
+		// this order so the division does not throw away resolution.
+		pts = uint64(elapsed) * 9 / 100
+	}
+
+	if pts < c.lastPTS {
+		// A repeated timestamp reads to a decoder as a duplicate frame, which
+		// is harmless. A timestamp that jumps backwards or forwards reads as
+		// a stall or a seek, which is what an unnoticed underflow or a stray
+		// out of order frame produces if this is emitted uncapped.
+		return c.lastPTS
+	}
+	c.lastPTS = pts
+	return pts
 }

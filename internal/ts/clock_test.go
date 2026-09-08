@@ -44,6 +44,32 @@ func TestClockIsMonotonicAcrossWraparound(t *testing.T) {
 	}
 }
 
+func TestClockClampsSmallBackwardSteps(t *testing.T) {
+	// A backward step small enough not to look like a wrap (reordering, or
+	// the camera clock stuttering) must not underflow the elapsed-time
+	// subtraction. Computed as unsigned, base > micros with no wrap counted
+	// wraps around to about 2^64 and truncates to a garbage PTS after the
+	// 90kHz conversion; the fix clamps to the previous PTS instead.
+	c := NewClock()
+	c.PTS(5000000)         // rebase here
+	high := c.PTS(5040000) // a normal 40ms step forward
+	// One millisecond earlier than the base, not just the previous frame: far
+	// too small to be mistaken for a wrap, which needs a jump of over 35
+	// minutes, so wrap detection does not fire and the raw subtraction
+	// underflows unless it is guarded.
+	low := c.PTS(4999000)
+	if low != high {
+		t.Fatalf("PTS after a small backward step = %d, want it clamped to %d", low, high)
+	}
+	// A sane bound: this stream is a few seconds old, so anything anywhere
+	// near the 90kHz clock's 26.5 hour wraparound is proof of an underflow,
+	// not a real timestamp.
+	const oneHourOfTicks = 90000 * 3600
+	if low > oneHourOfTicks {
+		t.Fatalf("PTS = %d, implausible for a stream a few seconds old", low)
+	}
+}
+
 func TestClockHandlesRepeatedWraps(t *testing.T) {
 	c := NewClock()
 	c.PTS(0)

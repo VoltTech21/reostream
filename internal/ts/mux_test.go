@@ -69,6 +69,78 @@ func TestMuxerEmitsWholePackets(t *testing.T) {
 	}
 }
 
+func TestPTSAndPCRWrapAt2Pow33Explicitly(t *testing.T) {
+	// PTS and PCR are both 33 bit fields. A value past 2^33 ticks (about
+	// 26.5 hours of streaming) must wrap to the same bytes as the equivalent
+	// small value, which is what a player expects: without the mask this
+	// still happens today, by accident, because the bit twiddling below only
+	// ever reads the bits that survive it, but that is not something a future
+	// change to either function should be able to quietly break.
+	const past2Pow33 = uint64(1)<<33 + 12345
+
+	ptsField := make([]byte, 5)
+	writePTS(ptsField, past2Pow33)
+	wantField := make([]byte, 5)
+	writePTS(wantField, 12345)
+	if !bytes.Equal(ptsField, wantField) {
+		t.Fatalf("PTS past 2^33 encoded as % x, want the same bytes as the wrapped value % x", ptsField, wantField)
+	}
+
+	afPast := make([]byte, PacketSize-4)
+	writeAdaptation(afPast, PacketSize-4, true, past2Pow33)
+	afWrapped := make([]byte, PacketSize-4)
+	writeAdaptation(afWrapped, PacketSize-4, true, 12345)
+	if !bytes.Equal(afPast[:12], afWrapped[:12]) {
+		t.Fatalf("PCR past 2^33 encoded as % x, want the same bytes as the wrapped value % x", afPast[:12], afWrapped[:12])
+	}
+}
+
+func TestMuxerPadsShortPacketsWithAnAdaptationFieldNotZeros(t *testing.T) {
+	// A remux to MP4 (Frigate's annexb-to-HVCC converter, among others) folds
+	// trailing zero bytes into the preceding NAL's length field instead of
+	// discarding them as Annex B padding. A packet short of a full 184 bytes
+	// of real payload must mark the gap with a stuffed adaptation field, not
+	// leave it as the zero bytes Go initialises a new packet to.
+	m, err := NewMuxer("h264")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A 500 byte frame is short enough to leave its last packet well short
+	// of a full 184 bytes of payload.
+	payload := make([]byte, 500)
+	for i := range payload {
+		payload[i] = 0xAB // never zero, so any trailing zero found is padding
+	}
+	out := m.Frame(frame(baichuan.FrameIFrame, 1000, payload...))
+
+	var lastVideoPkt []byte
+	for i := 0; i+PacketSize <= len(out); i += PacketSize {
+		p := out[i : i+PacketSize]
+		pid := PID(p[1]&0x1F)<<8 | PID(p[2])
+		if pid == PIDVideo {
+			lastVideoPkt = p
+		}
+	}
+	if lastVideoPkt == nil {
+		t.Fatal("no video packets emitted")
+	}
+	afc := (lastVideoPkt[3] >> 4) & 0x3
+	if afc != 0x3 {
+		t.Fatalf("last packet has adaptation_field_control %#x, want 0x3 (adaptation field and payload)", afc)
+	}
+	afLen := int(lastVideoPkt[4])
+	if afLen == 0 {
+		t.Fatal("last packet's adaptation field is empty, want it stretched to pad the packet")
+	}
+	// Every byte the adaptation field claims, after its own one-byte flags
+	// field, must be stuffing (0xFF), never a leftover zero.
+	for i := 6; i < 5+afLen; i++ {
+		if lastVideoPkt[i] != 0xFF {
+			t.Errorf("adaptation field byte %d = %#x, want stuffing 0xFF", i, lastVideoPkt[i])
+		}
+	}
+}
+
 func TestMuxerWaitsForAKeyframe(t *testing.T) {
 	// Starting a decoder mid GOP only makes it complain about references it
 	// never saw, so nothing may be emitted before the first I frame.
@@ -110,6 +182,158 @@ func TestMuxerRepeatsTablesSoLateJoinersCanDecode(t *testing.T) {
 	}
 	if pmtPackets < 2 {
 		t.Fatalf("PMT appeared %d times in 200 frames, want it repeated", pmtPackets)
+	}
+}
+
+func TestMuxerRepeatsTablesEveryFewHundredMilliseconds(t *testing.T) {
+	// Every 100 frames, the previous interval, is 4 to 7 seconds at real
+	// camera frame rates: long enough that a client tuning in mid stream
+	// visibly waits before it can decode anything. This asserts the gap
+	// between repeats stays under one second at 25fps (40ms per frame), a
+	// generous margin over the 500ms target.
+	m, _ := NewMuxer("h264")
+	const frameStepMicros = 40000
+	var lastPMTFrame, maxGapFrames int
+	for i := 0; i < 200; i++ {
+		out := m.Frame(frame(baichuan.FrameIFrame, uint32(i)*frameStepMicros, 1, 2, 3))
+		for j := 0; j < len(out); j += PacketSize {
+			pid := PID(out[j+1]&0x1F)<<8 | PID(out[j+2])
+			if pid == PIDPMT {
+				if gap := i - lastPMTFrame; i > 0 && gap > maxGapFrames {
+					maxGapFrames = gap
+				}
+				lastPMTFrame = i
+			}
+		}
+	}
+	const oneSecondOfFrames = 1000 / (frameStepMicros / 1000)
+	if maxGapFrames > oneSecondOfFrames {
+		t.Fatalf("largest gap between PAT/PMT repeats was %d frames (%dms), want under %dms",
+			maxGapFrames, maxGapFrames*frameStepMicros/1000, oneSecondOfFrames*frameStepMicros/1000)
+	}
+}
+
+func TestMuxerPCRCadenceStaysUnderTheTSTDLimit(t *testing.T) {
+	// ISO 13818-1's T-STD model requires a PCR at least every 100ms on the
+	// PID that carries one. Tying it to keyframes alone happened to satisfy
+	// this only because the test capture runs near 25fps; a slower camera
+	// would miss it, so the PCR must be paced off the clock, not frame kind.
+	m, _ := NewMuxer("h264")
+	const frameStepMicros = 40000
+	var lastPCRPTS uint64
+	var sawPCR bool
+	var maxGapTicks uint64
+	for i := 0; i < 50; i++ {
+		out := m.Frame(frame(baichuan.FrameIFrame, uint32(i)*frameStepMicros, 1, 2, 3))
+		for j := 0; j+PacketSize <= len(out); j += PacketSize {
+			p := out[j : j+PacketSize]
+			pid := PID(p[1]&0x1F)<<8 | PID(p[2])
+			if pid != PIDVideo || (p[3]>>4)&0x3 != 0x2 {
+				continue
+			}
+			pcr := pcrFromAdaptationField(p)
+			if sawPCR {
+				if gap := pcr - lastPCRPTS; gap > maxGapTicks {
+					maxGapTicks = gap
+				}
+			}
+			lastPCRPTS = pcr
+			sawPCR = true
+		}
+	}
+	if !sawPCR {
+		t.Fatal("no PCR packets found")
+	}
+	// The muxer only gets a chance to emit a PCR when a frame arrives, so the
+	// realistic bound is the target interval plus one frame period, not the
+	// target interval alone. What must hold is that this stays under the
+	// T-STD hard limit of 9000 ticks (100ms), with room to spare.
+	const frameStepTicks = frameStepMicros * 9 / 100
+	const wantMax = pcrIntervalTicks + frameStepTicks
+	if maxGapTicks > wantMax {
+		t.Fatalf("largest gap between PCRs was %d ticks, want at most %d", maxGapTicks, wantMax)
+	}
+	const tstdLimitTicks = 9000
+	if wantMax >= tstdLimitTicks {
+		t.Fatalf("target cadence plus one frame period is %d ticks, want it under the T-STD limit of %d", wantMax, tstdLimitTicks)
+	}
+}
+
+func TestMuxerPCRLagsPTSByAFixedDelay(t *testing.T) {
+	// A PCR equal to its PTS asserts a decoder buffer with zero fill time. A
+	// T-STD strict client can reject that; ffmpeg does not, which is why this
+	// was not caught by the ffprobe capture test.
+	m, _ := NewMuxer("h264")
+	// The very first frame always rebases to PTS 0, which would make a
+	// delayed PCR clamp to 0 too and hide the thing under test. Use the
+	// second frame instead, 200ms later so it clears pcrIntervalTicks and
+	// gets a PCR of its own.
+	m.Frame(frame(baichuan.FrameIFrame, 1000000, 1, 2, 3))
+	out := m.Frame(frame(baichuan.FrameIFrame, 1200000, 1, 2, 3))
+
+	var pcr uint64
+	var sawPCR bool
+	for j := 0; j+PacketSize <= len(out); j += PacketSize {
+		p := out[j : j+PacketSize]
+		pid := PID(p[1]&0x1F)<<8 | PID(p[2])
+		if pid == PIDVideo && (p[3]>>4)&0x3 == 0x2 {
+			pcr = pcrFromAdaptationField(p)
+			sawPCR = true
+		}
+	}
+	pts, ok := findPTS(out)
+	if !sawPCR || !ok {
+		t.Fatal("could not find both a PCR and a PTS in the muxer's output")
+	}
+	if pts-pcr != pcrDecodeDelayTicks {
+		t.Fatalf("PTS - PCR = %d ticks, want exactly %d", pts-pcr, pcrDecodeDelayTicks)
+	}
+}
+
+// pcrFromAdaptationField decodes the 33 bit PCR base out of an adaptation
+// field carrying one, discarding the 9 bit extension this muxer never sets.
+func pcrFromAdaptationField(p []byte) uint64 {
+	f := p[6:12]
+	return uint64(f[0])<<25 | uint64(f[1])<<17 | uint64(f[2])<<9 | uint64(f[3])<<1 | uint64(f[4]>>7)
+}
+
+func TestMuxerVideoContinuityHasNoGaps(t *testing.T) {
+	// A packet with no payload (adaptation_field_control 2, the PCR-only
+	// packets ahead of each keyframe) must not consume a new continuity
+	// counter value: ISO 13818-1 says the counter only advances on packets
+	// that carry payload. A muxer that advances it anyway opens a gap that a
+	// strict demuxer reports as a corrupt packet on every single keyframe,
+	// which is exactly what happened here before this test existed.
+	m, _ := NewMuxer("h264")
+	var out []byte
+	for i := 0; i < 20; i++ {
+		out = append(out, m.Frame(frame(baichuan.FrameIFrame, uint32(i)*40000, 1, 2, 3))...)
+	}
+
+	seen := map[PID]bool{}
+	var expected map[PID]byte
+	expected = map[PID]byte{}
+	for i := 0; i+PacketSize <= len(out); i += PacketSize {
+		p := out[i : i+PacketSize]
+		pid := PID(p[1]&0x1F)<<8 | PID(p[2])
+		if pid != PIDVideo {
+			continue
+		}
+		afc := (p[3] >> 4) & 0x3
+		cc := p[3] & 0x0F
+		if afc == 0x2 || afc == 0x0 {
+			continue // no payload: the counter is not required to advance here
+		}
+		if seen[pid] {
+			if cc != expected[pid] {
+				t.Fatalf("continuity gap on PID %#x: got %d, want %d", pid, cc, expected[pid])
+			}
+		}
+		seen[pid] = true
+		expected[pid] = (cc + 1) & 0x0F
+	}
+	if !seen[PIDVideo] {
+		t.Fatal("no video payload packets found")
 	}
 }
 
@@ -159,7 +383,14 @@ func findPTS(b []byte) (uint64, bool) {
 		if pid != PIDVideo {
 			continue
 		}
-		pes := p[4:]
+		// A small frame's only packet can carry a stuffed adaptation field
+		// ahead of the PES header, when its payload does not fill the whole
+		// packet: skip it the same way a real demuxer would.
+		off := 4
+		if p[3]&0x20 != 0 {
+			off += 1 + int(p[4])
+		}
+		pes := p[off:]
 		if len(pes) < 14 || pes[0] != 0x00 || pes[1] != 0x00 || pes[2] != 0x01 {
 			continue
 		}
@@ -251,7 +482,7 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 	}
 
 	cmd := exec.Command("ffprobe",
-		"-v", "error",
+		"-v", "warning",
 		"-count_frames",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=nb_read_frames,codec_name",

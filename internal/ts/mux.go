@@ -6,19 +6,54 @@ import (
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
 
-// tableRepeatInterval is how often PAT and PMT are resent among the video
-// packets, in frames. A client that joins mid stream cannot decode anything
-// until it has both tables, so they cannot only be sent once at the start.
-const tableRepeatInterval = 100
+// tableRepeatTicks is how often PAT and PMT are resent, in 90kHz ticks. A
+// client that joins mid stream cannot decode anything until it has both
+// tables, so they cannot only be sent once at the start. This is measured
+// against the camera's own clock rather than a frame count so it holds at
+// roughly the same wall-clock interval regardless of frame rate: 500ms is
+// comfortably under the few seconds a viewer notices as a stall, and well
+// inside what a client typically buffers before giving up on a join.
+const tableRepeatTicks = 45000 // 500ms * 90000 ticks/sec / 1000ms
+
+// pcrIntervalTicks is the target gap between PCRs on one PID: 50ms, well
+// under the 100ms ISO 13818-1's T-STD model allows. A hardware demuxer built
+// to that model, unlike ffmpeg, enforces the 100ms limit and drops the
+// stream if it is missed. This muxer only gets a chance to emit anything
+// when a frame arrives, so the actual gap between PCRs is this target plus
+// however long the next frame takes to arrive; picking a target well under
+// the limit leaves room for that before the hard limit is at risk, which
+// tying the PCR to keyframes alone did not, since a keyframe interval is
+// itself close to a full second at a typical GOP length.
+const pcrIntervalTicks = 4500 // 50ms * 90000 ticks/sec / 1000ms
+
+// pcrDecodeDelayTicks holds the PCR a fixed amount behind the PTS it
+// accompanies. A PCR equal to its PTS asserts a decoder buffer with zero
+// fill time, which a lenient client like ffmpeg does not check but a T-STD
+// strict one can reject outright. 100ms is a conservative, arbitrary but
+// fixed buffering allowance; these cameras never emit B frames, so DTS and
+// PTS are the same value and there is no per-frame reordering delay to
+// account for on top of it.
+const pcrDecodeDelayTicks = 9000
+
+// ptsPCRMask keeps only the low 33 bits of a PTS or PCR base before it is
+// written to the wire. Both fields are 33 bits and wrap at the same modulus,
+// so a PTS or PCR past 2^33 ticks (about 26.5 hours) already came out
+// correct by truncation alone, since writePTS and writeAdaptation only ever
+// read the bit ranges that survive it. Masking here makes that wrap a stated
+// fact rather than a side effect nobody meant to rely on.
+const ptsPCRMask = 1<<33 - 1
 
 // Muxer turns decoded camera frames into an MPEG-TS byte stream. It holds no
 // socket and does no I/O: callers own delivery, this just produces bytes.
 type Muxer struct {
-	streamType        byte
-	clock             *Clock
-	cc                continuity
-	sawKeyframe       bool
-	framesSinceTables int
+	streamType    byte
+	clock         *Clock
+	cc            continuity
+	sawKeyframe   bool
+	sentTables    bool
+	lastTablesPTS uint64
+	sentPCR       bool
+	lastPCRPTS    uint64
 }
 
 // continuity tracks the 4 bit continuity counter per PID. Each PID counts
@@ -30,6 +65,15 @@ func (c continuity) next(pid PID) byte {
 	v := c[pid]
 	c[pid] = (v + 1) & 0x0F
 	return v
+}
+
+// last returns the counter value most recently handed out by next, for a
+// packet that must repeat it rather than advance it. Calling this before
+// next has ever been called for the PID is meaningless, but harmless: there
+// is no earlier packet on that PID for a decoder to check continuity
+// against yet.
+func (c continuity) last(pid PID) byte {
+	return (c[pid] - 1) & 0x0F
 }
 
 // NewMuxer builds a muxer for the given codec, "h264" or "h265".
@@ -75,30 +119,37 @@ func (m *Muxer) Frame(f baichuan.Frame) []byte {
 		m.sawKeyframe = true
 	}
 
+	pts := m.clock.PTS(f.Micros)
+
 	var out []byte
-	if m.framesSinceTables == 0 {
+	if !m.sentTables || pts-m.lastTablesPTS >= tableRepeatTicks {
 		out = append(out, m.Header()...)
-	}
-	m.framesSinceTables++
-	if m.framesSinceTables >= tableRepeatInterval {
-		m.framesSinceTables = 0
+		m.sentTables = true
+		m.lastTablesPTS = pts
 	}
 
-	pts := m.clock.PTS(f.Micros)
 	// HEVC frames from these cameras carry a proprietary prefix before the
 	// first NAL start code; Video() strips it. Feeding Data directly produces
 	// sporadic decoder errors like "cu_qp_delta out of range".
 	payload := f.Video()
 	pes := buildPES(pts, payload)
 
-	if f.Kind == baichuan.FrameIFrame {
+	if !m.sentPCR || pts-m.lastPCRPTS >= pcrIntervalTicks {
 		// The PCR goes out on its own adaptation-field-only packet ahead of
 		// the PES. Putting it in the PES packet's own adaptation field would
 		// work too, but it is not worth the bookkeeping: this way every
 		// PES-start packet is a plain payload-only packet with the PES
 		// header sitting straight at byte 4, which is what every consumer of
 		// this stream, including this package's own tests, expects to find.
-		out = append(out, m.pcrPacket(pts)...)
+		pcr := pts
+		if pcr > pcrDecodeDelayTicks {
+			pcr -= pcrDecodeDelayTicks
+		} else {
+			pcr = 0
+		}
+		out = append(out, m.pcrPacket(pcr)...)
+		m.sentPCR = true
+		m.lastPCRPTS = pts
 	}
 	out = append(out, m.packetisePES(pes)...)
 	return out
@@ -107,11 +158,17 @@ func (m *Muxer) Frame(f baichuan.Frame) []byte {
 // pcrPacket builds a transport packet carrying nothing but a PCR, so a
 // player has a clock reference before the frame's payload even starts.
 // Without a PCR early in the stream many players refuse to start at all.
-func (m *Muxer) pcrPacket(pts uint64) []byte {
+//
+// It repeats the last counter value used on PIDVideo rather than advancing
+// it. ISO 13818-1 requires the counter to hold steady on a packet with no
+// payload (adaptation_field_control '10'): the value must match the packet
+// before it, not pre-empt the payload packet after it, or a strict demuxer
+// sees a false gap and reports a corrupt packet on every single keyframe.
+func (m *Muxer) pcrPacket(pcr uint64) []byte {
 	pkt := make([]byte, PacketSize)
-	writeHeader(pkt, PIDVideo, m.cc.next(PIDVideo), false)
+	writeHeader(pkt, PIDVideo, m.cc.last(PIDVideo), false)
 	pkt[3] = pkt[3]&0x0F | 0x20 // adaptation field only, no payload
-	writeAdaptation(pkt[4:], PacketSize-4, true, pts)
+	writeAdaptation(pkt[4:], PacketSize-4, true, pcr)
 	return pkt
 }
 
@@ -120,12 +177,22 @@ func (m *Muxer) pcrPacket(pts uint64) []byte {
 // The packet length field is left 0, which the format explicitly allows for
 // video, and is the only sane choice here since a frame can exceed the 16 bit
 // field's 65535 byte limit.
+//
+// Only a PTS is written, no DTS, and that is not an omission: these cameras
+// never emit B frames, so decode order and presentation order are the same
+// and DTS would always equal PTS. A PES header can carry PTS alone (flag
+// '10' rather than '11'), which is what byte 7 below sets.
 func buildPES(pts uint64, payload []byte) []byte {
 	pes := make([]byte, 0, 19+len(payload))
 	pes = append(pes, 0x00, 0x00, 0x01, 0xE0) // start code, stream id
 	pes = append(pes, 0x00, 0x00)             // PES packet length: unbounded
-	pes = append(pes, 0x80, 0x80)             // flags: original, PTS present
-	pes = append(pes, 0x05)                   // PES header data length: PTS only
+	// 0x84: marker bits '10', then data_alignment_indicator set, since every
+	// PES here starts exactly on an access unit boundary; original_or_copy is
+	// left 0, which per the spec means "copy" rather than "original" (this is
+	// a live re-encode of the camera's own stream, not virgin source), not
+	// the "original" the field name misleadingly suggests at a glance.
+	pes = append(pes, 0x84, 0x80) // flags, PTS present (no DTS)
+	pes = append(pes, 0x05)       // PES header data length: PTS only
 	ptsField := make([]byte, 5)
 	writePTS(ptsField, pts)
 	pes = append(pes, ptsField...)
@@ -137,6 +204,7 @@ func buildPES(pts uint64, payload []byte) []byte {
 // uses. The value is split across the bytes with marker bits set between the
 // pieces, which is why this is not a plain big endian write.
 func writePTS(dst []byte, pts uint64) {
+	pts &= ptsPCRMask
 	dst[0] = 0x21 | byte(pts>>29)&0x0E
 	dst[1] = byte(pts >> 22)
 	dst[2] = 0x01 | byte(pts>>14)&0xFE
@@ -147,25 +215,38 @@ func writePTS(dst []byte, pts uint64) {
 // packetisePES splits a PES packet across 188 byte transport packets on
 // PIDVideo, each with the PES (or its continuation) as the entire payload.
 //
-// The last packet is usually short. Rather than mark the remainder with a
-// stuffed adaptation field, it is left as the zero bytes Go already
-// initialises the packet to: NAL start codes are prefixed with
-// leading_zero_8bits and RBSP data may be followed by trailing_zero_8bits, so
-// an Annex B parser skips zero padding between NALs as a matter of course. A
-// stuffed adaptation field would be more strictly to the letter of the
-// transport stream spec, but the extra bookkeeping buys nothing a real
-// decoder needs.
+// The last packet is usually short. It used to be padded with plain zero
+// bytes rather than a stuffed adaptation field, on the reasoning that NAL
+// start codes are prefixed with leading_zero_8bits and RBSP data may be
+// followed by trailing_zero_8bits, so an Annex B parser skips zero padding
+// between NALs as a matter of course. That is true for a parser reading the
+// byte stream directly, but Frigate remuxes this to MP4, and its annexb to
+// HVCC converter folds trailing zero bytes into the preceding NAL's length
+// field instead of discarding them, so every recording ended up with junk
+// appended to its last NAL. A proper adaptation field costs a handful of
+// bytes and avoids that.
 func (m *Muxer) packetisePES(pes []byte) []byte {
 	var out []byte
 	first := true
 	for len(pes) > 0 {
-		pkt := make([]byte, PacketSize)
-		writeHeader(pkt, PIDVideo, m.cc.next(PIDVideo), first)
 		n := len(pes)
 		if n > PacketSize-4 {
 			n = PacketSize - 4
 		}
-		copy(pkt[4:], pes[:n])
+		afTotal := 0
+		if len(pes) <= PacketSize-4 {
+			// Last packet of the PES: stretch the adaptation field with
+			// stuffing so the payload ends exactly at the packet boundary.
+			afTotal = PacketSize - 4 - n
+		}
+
+		pkt := make([]byte, PacketSize)
+		writeHeader(pkt, PIDVideo, m.cc.next(PIDVideo), first)
+		if afTotal > 0 {
+			pkt[3] = pkt[3]&0x0F | 0x30 // adaptation field and payload both present
+			writeAdaptation(pkt[4:], afTotal, false, 0)
+		}
+		copy(pkt[4+afTotal:], pes[:n])
 		pes = pes[n:]
 		first = false
 		out = append(out, pkt...)
@@ -176,7 +257,7 @@ func (m *Muxer) packetisePES(pes []byte) []byte {
 // writeAdaptation fills an adaptation field of afTotal bytes (including its
 // own length byte) into dst, optionally carrying a PCR, padding the rest with
 // stuffing bytes.
-func writeAdaptation(dst []byte, afTotal int, withPCR bool, pts uint64) {
+func writeAdaptation(dst []byte, afTotal int, withPCR bool, pcr uint64) {
 	dst[0] = byte(afTotal - 1) // adaptation_field_length excludes itself
 	if afTotal == 1 {
 		// Length 0 is a valid one byte adaptation field: pure stuffing, no
@@ -185,12 +266,12 @@ func writeAdaptation(dst []byte, afTotal int, withPCR bool, pts uint64) {
 	}
 	i := 2 // dst[1] is the flags byte, filled in below
 	if withPCR {
+		pcr &= ptsPCRMask
 		dst[1] = 0x10 // PCR_flag set, everything else clear
 		// PCR is a 33 bit 90kHz base plus a 9 bit extension, packed into 6
-		// bytes. The extension is left 0: the PTS clock this is derived from
-		// has no finer resolution to offer, so a nonzero extension would only
-		// be misleading precision.
-		pcr := pts
+		// bytes. The extension is left 0: this PCR is derived from the same
+		// 90kHz PTS clock, which has no finer resolution to offer, so a
+		// nonzero extension would only be misleading precision.
 		dst[i+0] = byte(pcr >> 25)
 		dst[i+1] = byte(pcr >> 17)
 		dst[i+2] = byte(pcr >> 9)
