@@ -409,6 +409,32 @@ func (c *Conn) GetConfig(msgID uint32) error {
 	return c.w.Write(h, body)
 }
 
+// SetConfig sends a configuration write.
+//
+// The body is the caller's XML. For every get/set pair the right body is the
+// document the matching get returned with one field changed: the camera
+// supplies its own schema, so nothing here needs to know a model's fields,
+// and echoing the document back preserves the exact byte formatting that
+// some messages insist on.
+//
+// The reply status says the camera accepted the message, not that it acted
+// on it. Verify the effect, not the call.
+func (c *Conn) SetConfig(msgID uint32, body []byte) error {
+	// A write goes out in the shape TalkConfig uses: the channel in an
+	// extension section, the document in a second section. Sent as one
+	// section instead, a camera answers 421 and changes nothing.
+	ext, err := channelXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:     msgID,
+		Class:     ClassModern24,
+		EncOffset: EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+	}
+	return c.w.WriteParts(h, ext, body)
+}
+
 // heartBeatTwoPart selects the message shape, for the experiment that
 // settles it against a camera.
 var heartBeatTwoPart = false

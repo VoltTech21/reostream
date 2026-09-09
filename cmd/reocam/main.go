@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -83,6 +84,8 @@ func main() {
 		err = abilities(conn)
 	case "get":
 		err = get(conn, dial, flag.Args()[1:])
+	case "set":
+		err = set(conn, flag.Args()[1:])
 	case "snap":
 		err = snap(conn, flag.Args()[1:])
 	case "talkinfo":
@@ -634,6 +637,59 @@ func await(conn *baichuan.Conn, id uint32) ([]byte, int16, error) {
 			return m.XML, m.Header.Status(), nil
 		case <-deadline:
 			return nil, 0, fmt.Errorf("no reply to message %d", id)
+		}
+	}
+}
+
+// set writes a configuration message. The body comes in on stdin, and the
+// only body that is ever right is what the matching get returned with one
+// field changed.
+//
+// The reply status is not proof. A camera answers 200 to a write it then
+// ignores, so anything using this has to go and look at the effect.
+func set(conn *baichuan.Conn, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: set ID < body.xml")
+	}
+	id, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		return fmt.Errorf("message id: %w", err)
+	}
+	body, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("reading body: %w", err)
+	}
+	if len(body) == 0 {
+		return fmt.Errorf("empty body on stdin")
+	}
+	if err := conn.SetConfig(uint32(id), body); err != nil {
+		return err
+	}
+	// Drain everything the camera says for a few seconds rather than
+	// waiting on this id alone. A write may well be confirmed on another
+	// message entirely, and filtering to the id would throw that away
+	// without ever showing it. 580 is "cfg modify report".
+	deadline := time.After(6 * time.Second)
+	seen := 0
+	for {
+		select {
+		case m, ok := <-conn.Messages():
+			if !ok {
+				fmt.Fprintln(os.Stderr, "connection closed")
+				return nil
+			}
+			seen++
+			fmt.Fprintf(os.Stderr, "  <- msg %d (%s) status %d, %d xml bytes\n",
+				m.Header.MsgID, baichuan.MsgName(m.Header.MsgID),
+				m.Header.Status(), len(m.XML))
+			if len(m.XML) > 0 {
+				fmt.Printf("%s\n", m.XML)
+			}
+		case <-deadline:
+			if seen == 0 {
+				fmt.Fprintln(os.Stderr, "  <- nothing at all")
+			}
+			return nil
 		}
 	}
 }
