@@ -144,3 +144,31 @@ Worth recording because a negative result here is as useful as a positive one: i
 reason to prefer HTTP-TS that turned out not to exist. The reasons that remain, no session
 pool, no per-consumer queues, no orphaned connections holding a camera's session, are all
 about the daemon's own failure modes rather than about the wire format.
+
+## The balanced stream, measured 2026-09-08
+
+Reolink cameras carry a third stream the app does not expose. The firmware calls it
+`externStream` and has `EXTERNSTREAM_720P_SET`, implying its resolution is settable.
+Neolink never implemented it, so on this fleet it had never been reachable.
+
+Measured on four cameras, all identical:
+
+| stream | resolution | codec | rate | bitrate |
+|---|---|---|---|---|
+| main | 3840x2160 | HEVC | 25 fps | 6.4 Mbps |
+| extern | 896x512 | H.264 | 20 fps | 1.0 to 1.7 Mbps |
+| sub | 640x360 | H.264 | 10 fps | 0.29 Mbps |
+
+Zero decode errors over 10 second captures, and it carries AAC audio like the others.
+
+It needed no enabling message: connecting with the extern stream id was enough. An earlier
+probe reported zero frames, which was a tool buffering its output and losing it when killed,
+not the camera refusing.
+
+What it is good for is the gap it fills. Main to sub is a factor of 22 in bitrate with
+nothing between, so a viewer either takes a 4K stream or a thumbnail. This sits in the
+middle and, being H.264 rather than HEVC, avoids both the browser codec problem and the
+tiled HEVC hardware decode failures seen on one machine here.
+
+It does not replace a full resolution H.264 transcode for browser live view, because it is
+896x512. It is a cheaper tier alongside that, not a substitute for it.
