@@ -11,11 +11,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/adpcm"
 	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/cgi"
 )
 
 func usage() {
@@ -30,7 +32,11 @@ Commands:
   get all                try every known block and report which the camera has
   snap [main|sub] FILE   save a still image
   talk FILE              play raw 16 bit mono PCM through the camera speaker
-  talkinfo               report the two-way audio formats the camera accepts`)
+  talkinfo               report the two-way audio formats the camera accepts
+  fisheye                show the fisheye view mode
+  fisheye set N          change it (0 raw, 1 panorama, 2 quad, 3 dual) REBOOTS THE CAMERA
+  stitch                 show the dual lens alignment, with its range
+  stitch set K=V ...     adjust it (distance, x, y); does not reboot`)
 }
 
 func main() {
@@ -75,6 +81,10 @@ func main() {
 		err = snap(conn, flag.Args()[1:])
 	case "talkinfo":
 		_, err = talkFormat(conn, true)
+	case "fisheye":
+		err = fisheye(*addr, *user, *pass, flag.Args()[1:])
+	case "stitch":
+		err = stitch(*addr, *user, *pass, flag.Args()[1:])
 	case "talk":
 		err = talk(conn, flag.Args()[1:], *withVideo, *noConfig)
 	default:
@@ -418,5 +428,113 @@ func support(conn *baichuan.Conn) error {
 	fmt.Printf("rf alarm          %s\n", yes(v.RFVersion != 0))
 	fmt.Printf("disks             %d\n", v.DiskNum)
 	fmt.Printf("alarm in/out      %d/%d\n", v.IOInputPortNum, v.IOOutputPortNum)
+	return nil
+}
+
+// fisheye and stitch go over the camera's HTTP API rather than Baichuan.
+// Both settings exist over Baichuan too, since the official NVR writes them,
+// but their message ids have not been recovered.
+func fisheye(addr, user, pass string, args []string) error {
+	c, err := cgi.Dial(addr, user, pass)
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		f, err := c.GetFishEye(0)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("imageType     %d  %s\n", int(f.ImageType), f.ImageType)
+		fmt.Printf("installType   %d\n", f.InstallType)
+		fmt.Printf("rotationAngle %d\n", f.RotationAngle)
+		return nil
+	}
+	if len(args) != 2 || args[0] != "set" {
+		return fmt.Errorf("usage: fisheye [set N]")
+	}
+	mode, err := strconv.Atoi(args[1])
+	if err != nil || mode < 0 || mode > 3 {
+		return fmt.Errorf("mode must be 0, 1, 2 or 3")
+	}
+
+	f, err := c.GetFishEye(0)
+	if err != nil {
+		return err
+	}
+	f.ImageType = cgi.FishEyeMode(mode)
+	if err := c.SetFishEye(0, f); err != nil {
+		return err
+	}
+	fmt.Printf("set to %s; the camera is rebooting, which takes 15 to 20 seconds\n", f.ImageType)
+	fmt.Println("any motion mask or detection zone drawn on the old geometry now points somewhere else")
+	return nil
+}
+
+func stitch(addr, user, pass string, args []string) error {
+	c, err := cgi.Dial(addr, user, pass)
+	if err != nil {
+		return err
+	}
+	cur, factory, lim, err := c.GetStitch(0)
+	if err != nil {
+		return err
+	}
+
+	if len(args) == 0 {
+		fmt.Printf("%-9s %-8s %-8s %s\n", "field", "current", "factory", "range")
+		fmt.Printf("%-9s %-8.1f %-8.1f %.1f to %.1f\n", "distance", cur.Distance, factory.Distance,
+			lim.Distance.Min, lim.Distance.Max)
+		fmt.Printf("%-9s %-8d %-8d %d to %d\n", "x", cur.XMove, factory.XMove, lim.XMove.Min, lim.XMove.Max)
+		fmt.Printf("%-9s %-8d %-8d %d to %d\n", "y", cur.YMove, factory.YMove, lim.YMove.Min, lim.YMove.Max)
+		fmt.Println("\ndistance is the depth the seam is made to line up at, not a third offset:")
+		fmt.Println("x and y correct lens mounting, distance corrects parallax and only at one depth")
+		return nil
+	}
+	if args[0] != "set" || len(args) < 2 {
+		return fmt.Errorf("usage: stitch [set distance=N x=N y=N]")
+	}
+
+	want := cur
+	for _, kv := range args[1:] {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return fmt.Errorf("expected key=value, got %q", kv)
+		}
+		switch k {
+		case "distance":
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return fmt.Errorf("distance: %w", err)
+			}
+			if f < lim.Distance.Min || f > lim.Distance.Max {
+				return fmt.Errorf("distance %.1f is outside %.1f to %.1f", f, lim.Distance.Min, lim.Distance.Max)
+			}
+			want.Distance = f
+		case "x", "y":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("%s: %w", k, err)
+			}
+			min, max := lim.XMove.Min, lim.XMove.Max
+			if k == "y" {
+				min, max = lim.YMove.Min, lim.YMove.Max
+			}
+			if n < min || n > max {
+				return fmt.Errorf("%s %d is outside %d to %d", k, n, min, max)
+			}
+			if k == "x" {
+				want.XMove = n
+			} else {
+				want.YMove = n
+			}
+		default:
+			return fmt.Errorf("unknown field %q, want distance, x or y", k)
+		}
+	}
+
+	if err := c.SetStitch(0, want); err != nil {
+		return err
+	}
+	fmt.Printf("distance %.1f, x %d, y %d\n", want.Distance, want.XMove, want.YMove)
 	return nil
 }
