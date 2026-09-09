@@ -239,7 +239,7 @@ func TestMuxerPCRCadenceStaysUnderTheTSTDLimit(t *testing.T) {
 		for j := 0; j+PacketSize <= len(out); j += PacketSize {
 			p := out[j : j+PacketSize]
 			pid := PID(p[1]&0x1F)<<8 | PID(p[2])
-			if pid != PIDVideo || (p[3]>>4)&0x3 != 0x2 {
+			if pid != PIDVideo || !hasPCR(p) {
 				continue
 			}
 			pcr := pcrFromAdaptationField(p)
@@ -287,7 +287,7 @@ func TestMuxerPCRLagsPTSByAFixedDelay(t *testing.T) {
 	for j := 0; j+PacketSize <= len(out); j += PacketSize {
 		p := out[j : j+PacketSize]
 		pid := PID(p[1]&0x1F)<<8 | PID(p[2])
-		if pid == PIDVideo && (p[3]>>4)&0x3 == 0x2 {
+		if pid == PIDVideo && hasPCR(p) {
 			pcr = pcrFromAdaptationField(p)
 			sawPCR = true
 		}
@@ -301,20 +301,38 @@ func TestMuxerPCRLagsPTSByAFixedDelay(t *testing.T) {
 	}
 }
 
+// hasPCR reports whether transport packet p carries a PCR in its adaptation
+// field: adaptation_field_control '11' (field and payload both present,
+// never '10' adaptation only, which go2rtc cannot parse; see mux.go), an
+// adaptation field long enough to hold one, and the PCR_flag bit set.
+func hasPCR(p []byte) bool {
+	if (p[3]>>4)&0x3 != 0x3 {
+		return false
+	}
+	if int(p[4]) < 7 {
+		return false
+	}
+	return p[5]&0x10 != 0
+}
+
 // pcrFromAdaptationField decodes the 33 bit PCR base out of an adaptation
 // field carrying one, discarding the 9 bit extension this muxer never sets.
+// The PCR always sits right after the length and flags bytes, whatever the
+// adaptation field's total length, since writeAdaptation places it there
+// before any stuffing.
 func pcrFromAdaptationField(p []byte) uint64 {
 	f := p[6:12]
 	return uint64(f[0])<<25 | uint64(f[1])<<17 | uint64(f[2])<<9 | uint64(f[3])<<1 | uint64(f[4]>>7)
 }
 
 func TestMuxerVideoContinuityHasNoGaps(t *testing.T) {
-	// A packet with no payload (adaptation_field_control 2, the PCR-only
-	// packets ahead of each keyframe) must not consume a new continuity
-	// counter value: ISO 13818-1 says the counter only advances on packets
-	// that carry payload. A muxer that advances it anyway opens a gap that a
-	// strict demuxer reports as a corrupt packet on every single keyframe,
-	// which is exactly what happened here before this test existed.
+	// A packet with no payload (adaptation_field_control 2) must not consume
+	// a new continuity counter value: ISO 13818-1 says the counter only
+	// advances on packets that carry payload. This muxer never emits such a
+	// packet on PIDVideo any more (the PCR now rides inside a payload-
+	// carrying packet's adaptation field, adaptation_field_control 3; see
+	// mux.go for why), but the rule still matters if that ever changes, so
+	// this keeps checking it rather than assuming afc 0/2 cannot occur.
 	m, _ := NewMuxer("h264")
 	var out []byte
 	for i := 0; i < 20; i++ {
@@ -469,13 +487,16 @@ func TestADPCMIsDroppedRatherThanMuxedAsAAC(t *testing.T) {
 	}
 }
 
-func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
-	// internal/baichuan/testdata/h265_s2c.bin is a real camera capture. If
-	// the muxer can turn it into a stream ffprobe accepts, the format is
-	// right in a way no synthetic test can show.
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not installed")
-	}
+// muxRealCapture decodes internal/baichuan/testdata/h265_s2c.bin, a real
+// camera capture, and feeds every video and AAC frame it contains through a
+// fresh muxer built with NewMuxerWithAudio, returning the resulting
+// transport stream bytes and the frame counts fed in. Building the tested
+// stream from a real capture rather than synthetic frames is what lets a
+// structural check here stand in for a real cutover: the packet sizes,
+// timing and interleaving are what a camera actually produces, not what a
+// test author assumed one would.
+func muxRealCapture(t *testing.T) (out []byte, fedVideoFrames, fedAudioFrames int) {
+	t.Helper()
 
 	b, err := os.ReadFile("../baichuan/testdata/h265_s2c.bin")
 	if err != nil {
@@ -497,18 +518,15 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 	// TestDepacketiserOnH265Capture's audio= count). Muxing with audio here,
 	// rather than NewMuxer's video-only form, is the whole point: production
 	// lost audio silently for days because a video-only path never surfaces
-	// that a second elementary stream even exists. If a future capture has
-	// none, this falls back to a video-only assertion and says why in the
-	// skip log rather than asserting nothing.
+	// that a second elementary stream even exists.
 	m, err := NewMuxerWithAudio("h265", "aac")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	out.Write(m.Header())
+	var buf bytes.Buffer
+	buf.Write(m.Header())
 
-	var fedVideoFrames, fedAudioFrames int
 	for i := 0; ; i++ {
 		msg, err := r.Next()
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -534,29 +552,41 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 			}
 			switch f.Kind {
 			case baichuan.FrameIFrame, baichuan.FramePFrame:
-				out.Write(m.Frame(f))
+				buf.Write(m.Frame(f))
 				fedVideoFrames++
 			case baichuan.FrameAAC:
-				out.Write(m.Frame(f))
+				buf.Write(m.Frame(f))
 				fedAudioFrames++
 			}
 		}
 	}
+	if m.DroppedAudio() != 0 {
+		t.Errorf("DroppedAudio = %d, want 0: every frame fed here is video or AAC", m.DroppedAudio())
+	}
+	return buf.Bytes(), fedVideoFrames, fedAudioFrames
+}
+
+func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
+	// internal/baichuan/testdata/h265_s2c.bin is a real camera capture. If
+	// the muxer can turn it into a stream ffprobe accepts, the format is
+	// right in a way no synthetic test can show.
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not installed")
+	}
+
+	out, fedVideoFrames, fedAudioFrames := muxRealCapture(t)
 	if fedVideoFrames == 0 {
 		t.Fatal("no video frames decoded from the capture")
 	}
 	if fedAudioFrames == 0 {
 		t.Skip("capture has no AAC frames; cannot assert a second elementary stream from it")
 	}
-	if m.DroppedAudio() != 0 {
-		t.Errorf("DroppedAudio = %d, want 0: every frame fed here is video or AAC", m.DroppedAudio())
-	}
 
 	tmp, err := os.CreateTemp(t.TempDir(), "reostream-*.ts")
 	if err != nil {
 		t.Fatalf("create temp file: %v", err)
 	}
-	if _, err := tmp.Write(out.Bytes()); err != nil {
+	if _, err := tmp.Write(out); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -626,6 +656,84 @@ func TestMuxRealCaptureProducesADecodableStream(t *testing.T) {
 	}
 	if !sawAudio {
 		t.Error("ffprobe reported no audio stream: a joining client cannot decode the audio track")
+	}
+}
+
+// TestMuxedStreamIsStructurallyValidForGo2rtc muxes the real capture and
+// checks every transport packet against the rules go2rtc's demuxer
+// (pkg/mpegts/demuxer.go) actually enforces, not just what ffmpeg tolerates.
+//
+// A prior version of this muxer put the PCR on its own adaptation-field-only
+// packet (adaptation_field_control '10'), which ISO 13818-1 requires to
+// declare adaptation_field_length 183 to fill the packet. That is valid
+// MPEG-TS, ffmpeg accepted it without complaint, and the rest of this
+// package's test suite passed throughout, but go2rtc's demuxer rejects any
+// adaptation_field_length above 182 outright and could not parse those
+// packets at all. On a real 20 second HEVC capture, 239 of 84,680 packets
+// were adaptation-only length-183 packets, every one of them rejected, and
+// Frigate's watchdog reported no new recording segments until the cutover
+// to this daemon was rolled back. A test that only proves ffmpeg is happy
+// proves nothing about this: hence a direct structural check instead.
+//
+// Do not reintroduce a payload-less adaptation_field_control '10' packet to
+// carry the PCR. Carry it in the adaptation field of a packet that also has
+// payload (adaptation_field_control '11') instead; see mux.go.
+func TestMuxedStreamIsStructurallyValidForGo2rtc(t *testing.T) {
+	out, fedVideoFrames, _ := muxRealCapture(t)
+	if fedVideoFrames == 0 {
+		t.Fatal("no video frames decoded from the capture")
+	}
+	if len(out) == 0 {
+		t.Fatal("muxer produced no output for the capture")
+	}
+	if len(out)%PacketSize != 0 {
+		t.Fatalf("output is %d bytes, not a multiple of %d", len(out), PacketSize)
+	}
+
+	var pcrPTSTicks []uint64
+	for off := 0; off < len(out); off += PacketSize {
+		p := out[off : off+PacketSize]
+		if p[0] != 0x47 {
+			t.Fatalf("packet at offset %d does not start with sync byte 0x47: got %#x", off, p[0])
+		}
+		afc := (p[3] >> 4) & 0x3
+		switch afc {
+		case 0x0:
+			t.Fatalf("packet at offset %d has adaptation_field_control 00, which is reserved", off)
+		case 0x2:
+			t.Fatalf("packet at offset %d has adaptation_field_control 10 (adaptation field only, "+
+				"no payload): go2rtc's demuxer rejects any packet whose adaptation_field_length "+
+				"exceeds 182, and a payload-less packet must declare 183 to fill the packet, so "+
+				"go2rtc cannot parse this at all", off)
+		case 0x3:
+			afLen := int(p[4])
+			if afLen > 182 {
+				t.Fatalf("packet at offset %d has adaptation_field_length %d, want at most 182 "+
+					"(go2rtc's demuxer rejects anything above that)", off, afLen)
+			}
+			if hasPCR(p) {
+				pcrPTSTicks = append(pcrPTSTicks, pcrFromAdaptationField(p))
+			}
+		}
+	}
+
+	if len(pcrPTSTicks) == 0 {
+		t.Fatal("no PCR found anywhere in the muxed stream: removing the adaptation-only packet " +
+			"path must not remove the PCR itself, or no player can start on this stream at all")
+	}
+
+	// Cadence: PCRs are paced roughly every pcrIntervalTicks (50ms) and must
+	// never exceed the T-STD hard limit of 9000 ticks (100ms). The capture's
+	// own frame rate sets the actual achievable floor between chances to
+	// emit one, so the assertion here is the hard limit only, independent
+	// of exactly how fast this particular capture runs.
+	const tstdLimitTicks = 9000
+	for i := 1; i < len(pcrPTSTicks); i++ {
+		gap := pcrPTSTicks[i] - pcrPTSTicks[i-1]
+		if gap > tstdLimitTicks {
+			t.Fatalf("PCR gap of %d ticks between PCR %d and %d exceeds the T-STD limit of %d ticks",
+				gap, i-1, i, tstdLimitTicks)
+		}
 	}
 }
 

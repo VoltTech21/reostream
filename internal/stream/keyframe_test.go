@@ -50,7 +50,12 @@ func videoAccessUnitNALTypes(t *testing.T, chunk []byte) []byte {
 		payloadStart := pkt[1]&0x40 != 0
 		afc := (pkt[3] >> 4) & 0x3
 		if afc == 2 {
-			continue // adaptation field only: the PCR packet, no payload
+			// Adaptation field only, no payload. The muxer never emits this
+			// on PIDVideo (a PCR now rides inside a payload-carrying
+			// packet's own adaptation field instead, since go2rtc cannot
+			// parse a payload-less packet; see internal/ts/mux.go), but
+			// skip it defensively rather than assume it cannot occur.
+			continue
 		}
 		i := 4
 		if afc == 3 {

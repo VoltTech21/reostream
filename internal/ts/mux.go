@@ -71,15 +71,6 @@ func (c continuity) next(pid PID) byte {
 	return v
 }
 
-// last returns the counter value most recently handed out by next, for a
-// packet that must repeat it rather than advance it. Calling this before
-// next has ever been called for the PID is meaningless, but harmless: there
-// is no earlier packet on that PID for a decoder to check continuity
-// against yet.
-func (c continuity) last(pid PID) byte {
-	return (c[pid] - 1) & 0x0F
-}
-
 // NewMuxer builds a muxer for the given codec, "h264" or "h265", matched case
 // insensitively. baichuan.Frame.Codec comes off the wire as "H264"/"H265",
 // while docs, tests and a future TOML config all write it lowercase; folding
@@ -204,24 +195,36 @@ func (m *Muxer) FrameWithKey(f baichuan.Frame) (chunk []byte, startsKeyframe boo
 	payload := f.Video()
 	pes := buildPES(videoStreamID, pts, payload)
 
+	var pcr *uint64
 	if !m.sentPCR || pts-m.lastPCRPTS >= pcrIntervalTicks {
-		// The PCR goes out on its own adaptation-field-only packet ahead of
-		// the PES. Putting it in the PES packet's own adaptation field would
-		// work too, but it is not worth the bookkeeping: this way every
-		// PES-start packet is a plain payload-only packet with the PES
-		// header sitting straight at byte 4, which is what every consumer of
-		// this stream, including this package's own tests, expects to find.
-		pcr := pts
-		if pcr > pcrDecodeDelayTicks {
-			pcr -= pcrDecodeDelayTicks
+		// The PCR rides in the adaptation field of the PES-start packet
+		// itself (adaptation_field_control '11', field and payload both
+		// present), never on a packet of its own.
+		//
+		// An earlier version sent it on a dedicated adaptation-field-only
+		// packet ('10', no payload), which is legal MPEG-TS and is what
+		// ffmpeg accepted without complaint. go2rtc's demuxer
+		// (pkg/mpegts/demuxer.go) rejects any adaptation_field_length above
+		// 182 outright, and a payload-less packet must declare length 183 to
+		// fill the packet, so go2rtc could not parse a single one of those
+		// packets. Measured on a real capture: 239 of 84,680 packets were
+		// adaptation-only length-183 packets, and every one was rejected;
+		// Frigate's watchdog then reported no new recording segments and the
+		// cutover to this daemon had to be rolled back. Do not reintroduce
+		// an adaptation-only PCR packet: carry it here instead, where
+		// adaptation_field_length stays well under the limit because real
+		// payload always follows it in the same packet.
+		v := pts
+		if v > pcrDecodeDelayTicks {
+			v -= pcrDecodeDelayTicks
 		} else {
-			pcr = 0
+			v = 0
 		}
-		out = append(out, m.pcrPacket(pcr)...)
+		pcr = &v
 		m.sentPCR = true
 		m.lastPCRPTS = pts
 	}
-	out = append(out, m.packetisePES(PIDVideo, pes)...)
+	out = append(out, m.packetisePES(PIDVideo, pes, pcr)...)
 	return out, isKey
 }
 
@@ -263,24 +266,7 @@ func (m *Muxer) audioFrame(f baichuan.Frame) []byte {
 	// how the timestamp is reconstructed instead.
 	pts := m.audioClock.PTS(m.clock.LastPTS(), f.Data)
 	pes := buildPES(audioStreamID, pts, f.Data)
-	return m.packetisePES(PIDAudio, pes)
-}
-
-// pcrPacket builds a transport packet carrying nothing but a PCR, so a
-// player has a clock reference before the frame's payload even starts.
-// Without a PCR early in the stream many players refuse to start at all.
-//
-// It repeats the last counter value used on PIDVideo rather than advancing
-// it. ISO 13818-1 requires the counter to hold steady on a packet with no
-// payload (adaptation_field_control '10'): the value must match the packet
-// before it, not pre-empt the payload packet after it, or a strict demuxer
-// sees a false gap and reports a corrupt packet on every single keyframe.
-func (m *Muxer) pcrPacket(pcr uint64) []byte {
-	pkt := make([]byte, PacketSize)
-	writeHeader(pkt, PIDVideo, m.cc.last(PIDVideo), false)
-	pkt[3] = pkt[3]&0x0F | 0x20 // adaptation field only, no payload
-	writeAdaptation(pkt[4:], PacketSize-4, true, pcr)
-	return pkt
+	return m.packetisePES(PIDAudio, pes, nil)
 }
 
 // videoStreamID and audioStreamID are the PES stream_id values for this
@@ -340,6 +326,18 @@ func writePTS(dst []byte, pts uint64) {
 // the continuity type), so interleaving the two tracks never disturbs
 // either one's count.
 //
+// pcr, when non nil, is written into the first packet's adaptation field,
+// alongside that packet's payload (adaptation_field_control '11'). It must
+// never go out on a packet of its own with no payload
+// (adaptation_field_control '10'): that is legal MPEG-TS and ffmpeg accepts
+// it, but go2rtc's demuxer (pkg/mpegts/demuxer.go) rejects any
+// adaptation_field_length above 182, and a payload-less packet has to
+// declare 183 to fill the packet. A real capture measured 239 such packets
+// in 84,680 (all the PCRs sent) and go2rtc rejected every single one,
+// which is what broke a production cutover. Reserving room for the PCR in
+// the first packet's adaptation field instead keeps its length far under
+// that limit, because real payload always follows it in the same packet.
+//
 // The last packet is usually short. It used to be padded with plain zero
 // bytes rather than a stuffed adaptation field, on the reasoning that NAL
 // start codes are prefixed with leading_zero_8bits and RBSP data may be
@@ -352,18 +350,27 @@ func writePTS(dst []byte, pts uint64) {
 // bytes and avoids that. Audio frames are ADTS, not Annex B, so this
 // padding scheme buys them nothing, but sharing the one code path is worth
 // more than a padding style optimised for a format audio does not use.
-func (m *Muxer) packetisePES(pid PID, pes []byte) []byte {
+func (m *Muxer) packetisePES(pid PID, pes []byte, pcr *uint64) []byte {
 	var out []byte
 	first := true
 	for len(pes) > 0 {
-		n := len(pes)
-		if n > PacketSize-4 {
-			n = PacketSize - 4
+		withPCR := first && pcr != nil
+		afHeaderLen := 0
+		if withPCR {
+			afHeaderLen = 8 // length byte, flags byte, 6 byte PCR
 		}
-		afTotal := 0
-		if len(pes) <= PacketSize-4 {
+		avail := PacketSize - 4 - afHeaderLen
+		n := len(pes)
+		if n > avail {
+			n = avail
+		}
+		afTotal := afHeaderLen
+		if len(pes) <= avail {
 			// Last packet of the PES: stretch the adaptation field with
 			// stuffing so the payload ends exactly at the packet boundary.
+			// The worst case, a single byte of payload alongside a PCR,
+			// still lands at adaptation_field_length 182: at the go2rtc
+			// limit, never past it.
 			afTotal = PacketSize - 4 - n
 		}
 
@@ -371,7 +378,11 @@ func (m *Muxer) packetisePES(pid PID, pes []byte) []byte {
 		writeHeader(pkt, pid, m.cc.next(pid), first)
 		if afTotal > 0 {
 			pkt[3] = pkt[3]&0x0F | 0x30 // adaptation field and payload both present
-			writeAdaptation(pkt[4:], afTotal, false, 0)
+			var v uint64
+			if withPCR {
+				v = *pcr
+			}
+			writeAdaptation(pkt[4:], afTotal, withPCR, v)
 		}
 		copy(pkt[4+afTotal:], pes[:n])
 		pes = pes[n:]
