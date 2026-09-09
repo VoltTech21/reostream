@@ -9,8 +9,8 @@ import (
 	"github.com/VoltTech21/reostream/internal/supervisor"
 )
 
-// Server routes GET /<name>.ts to the matching hub, plus /api/status and
-// /metrics for the whole fleet.
+// Server routes GET /<cam>.ts, /<cam>_sub.ts and /<cam>_extern.ts to the
+// matching hub, plus /api/status and /metrics for the whole fleet.
 type Server struct {
 	streams map[string]*hub.Hub
 
@@ -41,6 +41,39 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// lookup resolves a request path stem, meaning the path with its leading
+// slash and its ".ts" or ".keyframe" suffix removed, onto a hub.
+//
+// Hubs are keyed "<camera>/<stream>" (see supervisor.hubName), but the URL
+// form is the flat one documented in the README: a bare camera name is its
+// main stream, and "_sub" or "_extern" selects the other two. That form is
+// what any recorder config written against this project already contains,
+// and a URL is a published interface where an internal map key is not, so
+// the routing bends to the URL rather than the other way round. The hub key
+// itself is still accepted, since it is what an operator reading /api/status
+// sees.
+//
+// Resolution order is exact key, then bare name as main, then the suffix
+// rules. That only matters for a camera literally named something like
+// "gate_sub", where it means the real camera wins over a suffix reading of
+// its name.
+func (s *Server) lookup(stem string) (*hub.Hub, bool) {
+	if h, ok := s.streams[stem]; ok {
+		return h, true
+	}
+	if h, ok := s.streams[stem+"/main"]; ok {
+		return h, true
+	}
+	for suffix, stream := range map[string]string{"_sub": "sub", "_extern": "extern"} {
+		if cam, cut := strings.CutSuffix(stem, suffix); cut {
+			if h, ok := s.streams[cam+"/"+stream]; ok {
+				return h, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // serveStreamOrKeyframe dispatches on the path suffix, since the stdlib
 // mux's wildcard segments can't express "/<name>.keyframe" alongside
 // "/<name>.ts" as separate registered patterns (see Handler).
@@ -59,9 +92,12 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".ts")
-	h, ok := s.streams[name]
-	if !ok || !strings.HasSuffix(r.URL.Path, ".ts") {
+	if !strings.HasSuffix(r.URL.Path, ".ts") {
+		http.NotFound(w, r)
+		return
+	}
+	h, ok := s.lookup(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".ts"))
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}

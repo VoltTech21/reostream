@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-// serveKeyframe answers GET /<cam>.keyframe with the most recent raw video
+// serveKeyframe answers GET /<cam>.keyframe (and the _sub and _extern
+// forms, see lookup) with the most recent raw video
 // keyframe for that camera: the elementary stream bytes straight off the
 // wire (baichuan.Frame.Video), not muxed, not decoded, not a JPEG.
 //
@@ -34,9 +35,12 @@ func (s *Server) serveKeyframe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".keyframe")
-	h, ok := s.streams[name]
-	if !ok || !strings.HasSuffix(r.URL.Path, ".keyframe") {
+	if !strings.HasSuffix(r.URL.Path, ".keyframe") {
+		http.NotFound(w, r)
+		return
+	}
+	h, ok := s.lookup(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".keyframe"))
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}

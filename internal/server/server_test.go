@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,5 +87,52 @@ func TestClientDisconnectUnsubscribes(t *testing.T) {
 	}
 	if h.Clients() != 0 {
 		t.Fatalf("Clients = %d after disconnect, want 0: the subscription leaked", h.Clients())
+	}
+}
+
+// TestFlatURLFormsResolveToHubKeys covers the deviation found during the
+// 2026-09-08 live test: the supervisor keys hubs "<camera>/<stream>", and
+// the server used to route on that key directly, so the only working URL was
+// "/lounge/main.ts" while the README, and therefore every recorder config
+// written against this project, said "/lounge.ts".
+func TestFlatURLFormsResolveToHubKeys(t *testing.T) {
+	main, sub, extern := hub.New(1), hub.New(1), hub.New(1)
+	s := New(map[string]*hub.Hub{
+		"lounge/main":   main,
+		"lounge/sub":    sub,
+		"lounge/extern": extern,
+	})
+	for _, tc := range []struct {
+		path string
+		want *hub.Hub
+	}{
+		{"/lounge.ts", main},
+		{"/lounge_sub.ts", sub},
+		{"/lounge_extern.ts", extern},
+		{"/lounge/main.ts", main},
+		{"/lounge/sub.ts", sub},
+	} {
+		got, ok := s.lookup(strings.TrimSuffix(strings.TrimPrefix(tc.path, "/"), ".ts"))
+		if !ok {
+			t.Errorf("%s did not resolve to any stream", tc.path)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s resolved to the wrong hub", tc.path)
+		}
+	}
+	if _, ok := s.lookup("lounge_nope"); ok {
+		t.Error("an unknown suffix resolved to a stream")
+	}
+}
+
+// A camera whose name ends in one of the stream suffixes resolves to itself,
+// not to a suffix reading of its name.
+func TestARealCameraNameBeatsASuffixReading(t *testing.T) {
+	real, other := hub.New(1), hub.New(1)
+	s := New(map[string]*hub.Hub{"gate_sub/main": real, "gate/sub": other})
+	got, ok := s.lookup("gate_sub")
+	if !ok || got != real {
+		t.Error("gate_sub resolved to gate's substream rather than the camera named gate_sub")
 	}
 }

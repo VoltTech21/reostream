@@ -58,7 +58,7 @@ and the substream is too small to be worth looking at.
 | `GET /<cam>.ts` | main |
 | `GET /<cam>_sub.ts` | sub |
 | `GET /<cam>_extern.ts` | extern |
-| `GET /<cam>.jpg` | most recent keyframe as a still |
+| `GET /<cam>.keyframe` | most recent keyframe, raw elementary stream, no decode in the serving path |
 | `GET /api/status` | per-camera JSON: connected, fps, bitrate, keyframe age, clients, reconnects |
 | `GET /metrics` | the same in Prometheus format |
 
