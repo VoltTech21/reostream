@@ -1,0 +1,43 @@
+[Unit]
+Description=reostream Reolink Baichuan to MPEG-TS bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reostream
+Group=reostream
+
+# EnvironmentFile holds camera passwords, not the unit itself. Create it
+# with mode 0600 owned by root (or by the reostream user), e.g.:
+#   /etc/reostream/reostream.env containing REOSTREAM_DRIVEWAY_PASSWORD=...
+EnvironmentFile=/etc/reostream/reostream.env
+
+ExecStart=/usr/local/bin/reostream -config /etc/reostream/config.toml
+
+# KillSignal and TimeoutStopSec are deliberate, not defaults left in place.
+# On a stop, the daemon sends a stream-stop message to every connected
+# camera before exiting, which is what releases that camera's session; a
+# camera whose session is not released refuses new connections for several
+# minutes. That only happens on a clean SIGTERM, and the daemon can take up
+# to 5 seconds (runStopGrace) plus its own HTTP shutdown window to finish
+# it. SIGKILL skips all of that, so KillSignal must stay SIGTERM and
+# TimeoutStopSec must stay comfortably above 5 seconds. Do not shorten
+# either to make a restart feel snappier.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening. Each of these was chosen for a service that only opens an
+# outbound TCP connection to cameras and an inbound HTTP listener, and reads
+# its config and env file from /etc; nothing here needs write access to the
+# filesystem, a home directory, or elevated privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
