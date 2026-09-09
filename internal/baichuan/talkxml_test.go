@@ -67,3 +67,25 @@ func TestWritePartsSealsEachSectionIndependently(t *testing.T) {
 		t.Errorf("binary = %q, want %q; the section must start its own cipher stream", gotBin, binPart)
 	}
 }
+
+// A media section is plaintext. Sealing it, which is right for a TalkConfig's
+// second XML document, produced a talk stream a camera accepted without
+// error and did not play: the failure is completely silent on the wire and
+// only shows up as no sound in the room.
+func TestWriteMediaLeavesTheMediaSectionPlain(t *testing.T) {
+	key := AESKey("nonce", "")
+	xmlPart := []byte("<Extension/>")
+	media := []byte("adpcm packet")
+
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	w.SetAESKey(key)
+	if err := w.WriteMedia(Header{MsgID: MsgIDTalk, Class: ClassModern24}, xmlPart, media); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.Bytes()[HeaderLen(ClassModern24):]
+	if got := string(out[len(xmlPart):]); got != string(media) {
+		t.Errorf("media section = %q, want it unencrypted as %q", got, media)
+	}
+}

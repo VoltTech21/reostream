@@ -124,11 +124,39 @@ add up in exactly that form. A compact document is *accepted* for a TalkAbility 
 refused for a TalkConfig, so leniency varies by message and matching the camera exactly is
 the only safe rule.
 
-Second, a message with both an XML header and a binary section seals each as its own
-cipher stream, both starting from the fixed IV. Sealing the body as one continuous stream
-is refused, and so is leaving the binary section in plaintext. This mirrors the receive
-side, where a payload is decrypted as its own stream rather than as a continuation of the
-one covering the XML.
+Second, a message with both an XML header and a second section seals them separately, each
+as its own cipher stream from the fixed IV. Sealing the body as one continuous stream is
+refused, and so is leaving the second section in plaintext.
+
+That last rule applies to a TalkConfig, whose second section is another XML document. It
+does **not** apply to a Talk, whose second section is media: media is plaintext unless the
+extension declares `<encryptLen>`, exactly as it is in the audio and video the camera
+sends. Getting this backwards is silent. The camera accepts every packet, reports no error,
+and plays nothing, so the only way to tell is to listen.
+
+## Verifying that a camera actually spoke
+
+Nothing on the wire tells you. The way to check without standing next to the camera is to
+listen on the camera's own audio stream with a bandpass filter at the tone being sent,
+against a baseline recorded with nothing playing, and to do the same on other cameras in
+the building at the same time.
+
+Measured here, sending three tones to the fisheye, mean level in a 25 Hz band at 784 Hz:
+
+| camera | baseline | while talking | change |
+|---|---|---|---|
+| fisheye, the one talking | -59.5 dB | -29.6 dB | +29.9 |
+| lounge | -59.0 dB | -25.7 dB | +33.3 |
+| shop_front | -74.5 dB | -51.8 dB | +22.7 |
+| back_door | -51.4 dB | -47.9 dB | +3.5 |
+
+Three cameras heard it, which is the point of the test: a camera mixing the audio into its
+own stream digitally, rather than playing it, would move only its own number. It is a real
+sound in the room.
+
+The talking camera hearing it *less* than a neighbour is not a mistake. Echo cancellation
+suppresses a camera's own speaker in its own microphone, which is what that hardware is
+for.
 
 Status is a 16 bit little endian field at bytes 16 and 17, not two independent bytes.
 Reading it a byte at a time turns 400 into 144 and hides what the camera is telling you.

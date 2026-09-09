@@ -321,7 +321,7 @@ func (c *Conn) Talk(packet []byte) error {
 		Class:     ClassModern24,
 		EncOffset: EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
 	}
-	return c.w.WriteParts(h, ext, packet)
+	return c.w.WriteMedia(h, ext, packet)
 }
 
 // Ping keeps the session alive. The camera times out a session it stops

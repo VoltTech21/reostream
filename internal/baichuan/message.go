@@ -227,12 +227,30 @@ func (w *Writer) SetAESKey(k []byte) { w.aesKey = k }
 // own stream rather than as a continuation of the one covering the XML. The
 // camera's parser is symmetric; ours has to be too.
 func (w *Writer) WriteParts(h Header, xmlPart, binPart []byte) error {
+	return w.writeParts(h, xmlPart, binPart, true)
+}
+
+// WriteMedia writes a message whose second section is media rather than a
+// second XML document, so the section is left in plaintext.
+//
+// The rule is the extension header's own: a payload is encrypted only as far
+// as <encryptLen> says, and a message that declares no encryptLen carries
+// plaintext. That is how the camera's own audio and video arrive, and an
+// outbound media message follows the same rule. A TalkConfig is the other
+// case, since its second section is XML, and it is refused unless sealed.
+func (w *Writer) WriteMedia(h Header, xmlPart, mediaPart []byte) error {
+	return w.writeParts(h, xmlPart, mediaPart, false)
+}
+
+func (w *Writer) writeParts(h Header, xmlPart, binPart []byte, sealBin bool) error {
 	out, err := w.seal(h, xmlPart)
 	if err != nil {
 		return err
 	}
-	if binPart, err = w.seal(h, binPart); err != nil {
-		return err
+	if sealBin {
+		if binPart, err = w.seal(h, binPart); err != nil {
+			return err
+		}
 	}
 	h.PayloadOff = uint32(len(out))
 	h.MsgLen = uint32(len(out) + len(binPart))
