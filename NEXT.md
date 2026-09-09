@@ -60,6 +60,28 @@ Two documented assumptions also turned out to be wrong:
    `docs/phase-d-e-groundwork.md`. That document has the field names already; what it lacks
    is the numeric message ids, which one capture of an NVR talking to a camera would give.
 
+## Two-way audio
+
+Implemented and confirmed audible on 2026-09-09: `TalkAbility` to ask what a camera
+accepts, `TalkConfig` to open a session, `Talk` to carry IMA ADPCM. Seven of eight cameras
+negotiate; the eighth answers 422 after a session has been opened on it.
+
+It is worth knowing how much of this looked finished while being broken, because the same
+shape will recur across the rest of the camera surface:
+
+- The first version reported success when the camera had refused the config outright.
+  Nothing checked the reply. Checking it turned a working feature into a status 400.
+- Status is a 16 bit little endian field. Read a byte at a time it says 144, which is not a
+  code at all, and sends you looking at camera state instead of at a malformed message.
+- The last bug was accepted by the camera without any error and simply produced no sound.
+  Nothing on the wire distinguished it from success.
+
+That last one is the general problem with this whole area: an actuator has no reply that
+proves it acted. The way out is to measure the effect rather than the call, which for audio
+meant a bandpass filter on the camera's own stream and on its neighbours' (see
+`docs/protocol.md`). Anything else implemented here needs an equivalent, and the ones that
+have no measurable effect should be treated as unverified no matter how clean the code is.
+
 ## Wanted, not started
 
 - **A read only status page.** `/api/status` and `/metrics` already carry everything; this is
