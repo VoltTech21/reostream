@@ -50,6 +50,7 @@ type Muxer struct {
 	streamType    byte
 	audioType     byte // 0 means this muxer carries no audio
 	clock         *Clock
+	audioClock    *AudioClock
 	cc            continuity
 	sawKeyframe   bool
 	sentTables    bool
@@ -99,6 +100,7 @@ func NewMuxer(codec string) (*Muxer, error) {
 	return &Muxer{
 		streamType: st,
 		clock:      NewClock(),
+		audioClock: NewAudioClock(),
 		cc:         continuity{},
 	}, nil
 }
@@ -251,7 +253,15 @@ func (m *Muxer) audioFrame(f baichuan.Frame) []byte {
 		m.droppedAudio++
 		return nil
 	}
-	pts := m.clock.PTS(f.Micros)
+	// f.Micros is deliberately ignored: these cameras put no timestamp in
+	// an audio packet header at all, so it is always zero. Feeding it to
+	// m.clock, which is what this line used to do, made the video clock's
+	// wrap detector fire on every audio frame once the camera's uptime
+	// passed 35m47s (2^31 microseconds), because zero looks like a step
+	// backwards of more than half the uint32 range. Each false wrap added
+	// 2^32 microseconds to every subsequent video PTS. See AudioClock for
+	// how the timestamp is reconstructed instead.
+	pts := m.audioClock.PTS(m.clock.LastPTS(), f.Data)
 	pes := buildPES(audioStreamID, pts, f.Data)
 	return m.packetisePES(PIDAudio, pes)
 }
