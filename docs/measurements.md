@@ -172,3 +172,57 @@ tiled HEVC hardware decode failures seen on one machine here.
 
 It does not replace a full resolution H.264 transcode for browser live view, because it is
 896x512. It is a cheaper tier alongside that, not a substitute for it.
+
+## First production cutover, 2026-09-09
+
+One motion-only camera moved from the previous tool to reostream, with the recorder
+consuming `http://host:8560/<name>.ts` directly.
+
+It failed on the first attempt and that failure was the whole value of doing it.
+
+### What broke
+
+The recorder's restreamer rejected every stream with `mpegts: wrong adaptation size`, its
+watchdog reported no valid recording segments for 120 seconds, and the cutover was rolled
+back. Client churn was the visible symptom: 107 dropped consumers in two minutes while the
+camera side sat at a healthy 25 fps.
+
+The cause was PCR delivery. The muxer emitted PCR on its own adaptation-only packet, which
+the MPEG-TS spec requires to carry an adaptation_field_length of exactly 183. That is valid,
+and ffmpeg accepts it. The restreamer's demuxer rejects any adaptation field longer than 182
+and therefore cannot parse an adaptation-only packet at all. Measured on a 20 second capture
+of a 4K HEVC main stream: 84,680 packets, of which 239 were adaptation-only and every one
+was rejected.
+
+### Why nothing caught it earlier
+
+Every check that passed was made against ffmpeg:
+
+- the real capture test, which runs ffprobe
+- a structural validator written the same day, whose rules did not include this one
+- a deliberate design review, which approved the packet as legitimate MPEG-TS, correctly
+- 8.5 hours of soak, whose consumer was ffmpeg
+
+Valid per specification and readable by the consumer you actually have are different tests,
+and only the cutover ran the second one.
+
+The origin was a defective test helper. The plan specified the PCR in the adaptation field of
+a packet that also carried payload; the plan's own helper for finding a PES header assumed
+payload began at a fixed offset, which contradicted that. The contradiction was resolved by
+moving the PCR to its own packet, and the interop failure followed from there.
+
+### After the fix
+
+PCR now rides in the adaptation field of a packet that also carries payload.
+
+| | before | after |
+|---|---|---|
+| packets the restreamer rejects | 239 per 20s | 0 |
+| dropped consumers | 107 in 2 minutes | 0 |
+| consumers attached | 2 to 8, churning | 1, stable |
+| recording segments | none for 120s | continuous |
+
+Recorded segments verified against segments the previous tool wrote for the same camera in
+the same hour: identical, 250 frames in 10.068 seconds, valid mdat, audio present, and two
+decoder messages per segment on both, so that count is inherent to the camera rather than
+anything the bridge introduced.
