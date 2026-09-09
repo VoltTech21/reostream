@@ -120,8 +120,25 @@ func (r *Reader) Next() (Message, error) {
 	m.XML = r.decrypt(h, body[:xmlEnd])
 	if xmlEnd < len(body) {
 		m.Payload = body[xmlEnd:]
-		m.StartsPacket = true
-		r.decryptPayload(&m)
+		ext, ok := parseExtension(m.XML)
+		// An extension header is not by itself a packet boundary. Most
+		// cameras send one only on the message that begins a packet and
+		// nothing at all on the continuations, but the 2560x2560 fisheye and
+		// the dual lens pano put an extension carrying only <checkPos> and
+		// <checkValue> on every continuation message as well. Treating those
+		// as packet starts discarded the partial frame on every message, so
+		// a keyframe spanning several hundred messages never completed and
+		// the stream delivered zero frames while looking healthy at the byte
+		// level. <binaryData> is what actually marks a packet start: it is
+		// present on the first message of every packet on every camera here,
+		// and absent from every continuation.
+		//
+		// A header that fails to parse falls back to treating the message as
+		// a packet start, which is what this did before the fisheye was
+		// tested and is the safer guess: resynchronising costs one packet,
+		// while wrongly appending to the previous one corrupts it.
+		m.StartsPacket = !ok || ext.BinaryData != 0
+		r.decryptPayload(&m, ext, ok)
 	}
 	return m, nil
 }
@@ -133,6 +150,19 @@ type extensionHeader struct {
 	EncryptLen int      `xml:"encryptLen"`
 }
 
+// parseExtension reads a media message's extension header, reporting false if
+// there is none or it does not parse.
+func parseExtension(x []byte) (extensionHeader, bool) {
+	var ext extensionHeader
+	if len(x) == 0 {
+		return ext, false
+	}
+	if err := xml.Unmarshal(x, &ext); err != nil {
+		return extensionHeader{}, false
+	}
+	return ext, true
+}
+
 // decryptPayload decrypts the leading, encrypted part of a media payload.
 //
 // A media message's extension XML may carry <encryptLen>N</encryptLen>, which
@@ -140,12 +170,8 @@ type extensionHeader struct {
 // rest is plaintext. Messages with no extension at all are plaintext
 // continuations of a packet an earlier message began. Handling it here keeps
 // Payload always-plaintext for everything above.
-func (r *Reader) decryptPayload(m *Message) {
-	if r.aesKey == nil || len(m.XML) == 0 {
-		return
-	}
-	var ext extensionHeader
-	if err := xml.Unmarshal(m.XML, &ext); err != nil {
+func (r *Reader) decryptPayload(m *Message, ext extensionHeader, ok bool) {
+	if r.aesKey == nil || !ok {
 		return
 	}
 	n := ext.EncryptLen

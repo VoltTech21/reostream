@@ -157,3 +157,54 @@ func TestWriterRoundTripsUnderAES(t *testing.T) {
 		t.Errorf("XML = %q, want %q", m.XML, body)
 	}
 }
+
+// The fisheye and the pano put an extension header on every message of a
+// media packet, not just the first: continuations carry <checkPos> and
+// <checkValue> with no <binaryData>. Reading an extension as a packet
+// boundary made every message look like a fresh packet, so a keyframe
+// spanning several hundred messages was discarded on each one and those two
+// cameras delivered zero frames while the connection stayed busy.
+func TestStartsPacketFollowsBinaryData(t *testing.T) {
+	const hdr = `<?xml version="1.0" encoding="UTF-8" ?>`
+	tests := []struct {
+		name string
+		xml  string
+		want bool
+	}{
+		{"packet start", hdr + `<Extension version="1.1"><binaryData>1</binaryData></Extension>`, true},
+		{"packet start with encryptLen", hdr + `<Extension version="1.1"><encryptLen>1024</encryptLen><binaryData>1</binaryData></Extension>`, true},
+		{"fisheye continuation", hdr + `<Extension version="1.1"><checkPos>0</checkPos><checkValue>-234853339</checkValue></Extension>`, false},
+		{"unparsable header falls back to a start", "not xml at all", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte("media bytes")
+			// The reader decrypts the XML part before parsing it, so the
+			// fixture has to be encrypted the way a camera would send it.
+			body := append(BCCrypt(0, []byte(tt.xml)), payload...)
+			h := Header{
+				MsgID:      MsgIDVideo,
+				Class:      ClassModern24,
+				MsgLen:     uint32(len(body)),
+				PayloadOff: uint32(len(tt.xml)),
+			}
+
+			var buf bytes.Buffer
+			buf.Write(h.Encode())
+			buf.Write(body)
+			r := NewReader(&buf)
+
+			m, err := r.Next()
+			if err != nil {
+				t.Fatalf("Next: %v", err)
+			}
+			if m.StartsPacket != tt.want {
+				t.Errorf("StartsPacket = %v, want %v", m.StartsPacket, tt.want)
+			}
+			if string(m.Payload) != string(payload) {
+				t.Errorf("Payload = %q, want %q", m.Payload, payload)
+			}
+		})
+	}
+}
