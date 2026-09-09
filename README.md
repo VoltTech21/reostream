@@ -115,14 +115,19 @@ clock as video. A slow client is disconnected rather than buffered; verified aga
 live camera on a 280 kbps stream, dropped at about 65 seconds with memory flat
 throughout.
 
-Measured against a live 8 camera fleet: 16 streams, 40.2 Mbps, about 14% of one CPU
-core, 16 MB resident. A live 4K HEVC main stream gave 1498 frames in 60.04 seconds,
-24.95 fps against a 25 fps camera, zero decode errors. See docs/measurements.md for the
-full numbers.
+Measured against a live 8 camera fleet carrying every stream those cameras have: 23
+streams, 69 Mbps, about 60% of one CPU core, 29-59 MB resident. A live 4K HEVC main
+stream gave 1498 frames in 60.04 seconds, 24.95 fps against a 25 fps camera, zero decode
+errors. See docs/measurements.md for the full numbers.
+
+A 7 hour soak over all 23 streams held 23/23 connected with zero restarts, zero dropped
+clients and zero dropped audio frames, and resident memory oscillated inside a 29-59 MB
+band rather than climbing. That band matters more than its width: an unbounded buffer is
+the failure this project exists to avoid.
 
 Not yet done, and worth being direct about:
 
-- It has run for hours at a time, not weeks. No long soak has completed.
+- Seven hours is not seven weeks. No multi-day soak has completed.
 - Tested against one fleet: four camera models, one firmware generation. Nobody else's
   cameras have been tried.
 - **Battery cameras have never been tested.** This is the biggest gap on this list.
@@ -135,6 +140,61 @@ Not yet done, and worth being direct about:
 
 See `docs/design/` for the design and `docs/protocol.md` for what the wire actually
 does, which differs from the published documentation in several places.
+
+## Camera control
+
+`reocam` is a second binary in this repository that reads and changes camera settings.
+Streaming does not need it and does not use it.
+
+Start here, on any camera:
+
+```
+reocam -address 192.0.2.50 -password secret probe
+```
+
+`probe` sends every read this tool knows and reports what the camera answered, because
+no table can say what a given model implements. A message a camera does not have comes
+back 405 rather than failing the connection, so asking is safe and is the only honest
+way to find out. On one 8 MP wired camera here: 103 asked, 39 supported, 10 wanting
+parameters, 54 absent.
+
+```
+reocam -address ... get all          # sweep every readable block
+reocam -address ... get md           # one block, as XML
+reocam -address ... set 45 < md.xml  # write a block back
+reocam -address ... floodlight motion
+```
+
+The message ids come from a dispatch table inside Reolink's own firmware, recovered
+statically rather than from a packet capture: 246 ids with the names the firmware gives
+them, in `docs/msgids.json`. Eight of them are confirmed against live cameras, which is
+what makes the rest credible. The table is explicitly not exhaustive, and a camera
+dispatches with a switch rather than a table, so ids it accepts that no NVR sends will
+not appear.
+
+**Never write a document this tool invented.** The only correct body for a write is what
+the matching read returned with one field changed. The camera supplies its own schema
+that way, including fields no camera here has, and echoing its document back preserves
+the exact byte formatting some messages insist on. There are 54 read/write pairs.
+
+Three things will mislead you:
+
+- **421 means the message was built wrong, not that the model lacks it.** A
+  configuration write is a two section message, the channel in an extension and the
+  document in a second section. Sent as one section a camera answers 421 and changes
+  nothing.
+- **A reply status is not proof.** Message 288 accepts a floodlight command, answers
+  200, and does nothing observable. Two way audio "worked" twice before it made a sound.
+  Verify the effect, not the call.
+- **Some settings are HTTP only on this firmware.** The floodlight, the fisheye view
+  modes and the dual lens stitch parameters all go over the camera's CGI API, not
+  Baichuan.
+
+Writes are confirmed on two messages, OSD and LED, each changed and read back on a fresh
+connection. The other 52 pairs use the identical message shape and are untested.
+
+`docs/control.md` has the rest: how the id table was recovered, how to recover more, and
+the worked examples.
 
 ## Deployment
 

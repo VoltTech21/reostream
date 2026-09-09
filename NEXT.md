@@ -51,21 +51,29 @@ Two documented assumptions also turned out to be wrong:
 
 ## Next
 
-1. **Long soak on the full fleet.** The single camera soak ran 8h34m clean. Everything
-   measured since the cutover is minutes to hours across ten streams.
+1. **Long soak on the full fleet.** A 7 hour soak over all 23 streams held 23/23
+   connected with zero restarts and zero drops, and resident memory stayed inside a
+   29-59 MB band rather than climbing. Still not a multi-day run.
 2. **Battery cameras.** Never tested, and the biggest gap for anyone else: battery models are
    why most people used the previous tool, since they have no RTSP at all, and they sleep,
    wake on motion and send battery state messages this client has never seen.
-3. **Protocol phases.** Phase B is implemented and declined by every camera here: the
-   heartbeat is message 5, recovered from firmware, and all three models answer 421. The
-   proven ping stays, which is what the design said to do. Phase C should be dropped
-   rather than built: no camera here reports `supportGop`, so there is nothing to test it
-   against. Phases D and E are done over the HTTP API, because their message ids are still
-   unknown.
+3. **Protocol phases.** Settled, and not the way the earlier text here assumed.
 
-   Old text follows. `HeartBeat`, then `GopCfg`, then the fisheye and stitching work in
-   `docs/phase-d-e-groundwork.md`. That document has the field names already; what it lacks
-   is the numeric message ids, which one capture of an NVR talking to a camera would give.
+   The message ids were never missing. They sit in a dispatch table inside Reolink's own
+   firmware, and 246 of them were recovered statically, with the names the firmware uses.
+   No capture was needed. See `docs/control.md`.
+
+   That table also corrected the record. "The heartbeat is message 5" was wrong: 5 is
+   `replay start`, and 5 came from the NVR's *internal IPC* enum, a different namespace,
+   where index 5 is `MSG_APP_HB`. Every camera answered 421 because it was being asked to
+   start playback. The Baichuan heartbeat is id 0. The proven ping stays either way.
+
+   Phase C stays dropped: no camera here reports `supportGop`.
+
+   Phases D and E remain on the HTTP API, but now for a better reason than ignorance. The
+   ids exist and the camera accepts them: message 288 takes a floodlight command with the
+   element name out of the firmware, answers 200, and does nothing observable. That
+   firmware serves those settings over CGI.
 
 ## Two-way audio
 
@@ -95,11 +103,11 @@ have no measurable effect should be treated as unverified no matter how clean th
   rendering them. The question an operator actually asks is whether a camera is streaming
   right now, and today that means reading JSON by hand. Cheap, no dependencies, fits the
   project.
-- **A camera control surface**, separate from this daemon. `docs/camera-capabilities.md`
-  records what the cameras expose and it is a lot: full ISP control, IR and LED, on camera AI
-  with per type sensitivity, webhooks, a floodlight on one camera, fisheye view modes and
-  pano stitching. None of it is used today. It does not belong inside reostream, whose value
-  is a small surface and a short list of non goals, but it is worth having.
+- **A camera control surface**, separate from this daemon. Started: `cmd/reocam` reads
+  103 configuration blocks, probes what a model implements, and writes. Writes are
+  confirmed on two messages, OSD and LED, each read back on a fresh connection; the other
+  52 read/write pairs use the same message shape and are untested. It stays out of
+  reostream, whose value is a small surface and a short list of non goals.
 
 ## Open items
 
