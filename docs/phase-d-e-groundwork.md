@@ -82,28 +82,101 @@ rather than a client cropping regions out of the raw fisheye image afterwards. I
 what it means, then any setup currently producing dewarped tiles with a crop filter and a GPU
 transcode is doing work the camera will do itself.
 
-The field names inside `fishEyeCfg` are still unknown. They are built by
-`net_fish_eye_cfg_s2x` from string literals in that function's literal pool, and reading them
-out needs an ARM disassembler, which is not installed here. The strings do not appear
-standalone in the binary.
+The field names inside `fishEyeCfg` were unknown when this was first written. They are built
+by `net_fish_eye_cfg_s2x` from literals in that function's literal pool. They have since been
+recovered; see below.
+
+## The field names, recovered 2026-09-08
+
+These came out of the serialiser functions themselves rather than a capture. The strings are
+not visible in a plain dump because position independent ARM code stores an offset in the
+literal pool and adds PC to it at runtime, so resolving them means pairing each load with the
+add that consumes it. `tools/armstrings.py` does that.
+
+**Still to be confirmed on the wire before anything is implemented.** These are field names
+read out of the code that writes them, which makes them a very good guide to what a capture
+will contain, not a substitute for the capture.
+
+### fishEyeCfg, version 1.1
+
+    installType
+    imageType
+    expandAbility
+    rotationAngle
+
+`installType` is presumably the mounting orientation, ceiling against wall against ground,
+which is the setting that decides how a fisheye image should be dewarped at all.
+
+### fishEyeSubChnCtrl
+
+    screenNumber
+    command      one of: left, right, up, down, reset
+
+This settles what sub-channel control means. It is not a stored configuration, it is
+navigation: a screen number and a direction. The camera produces dewarped views and this pans
+and tilts them, with a reset to return to centre. That is a virtual PTZ over a fixed fisheye,
+which is exactly the capability a client would otherwise fake by cropping regions out of the
+raw image and transcoding them.
+
+### BinoStitch, version 1.1
+
+    distance
+    xpixel
+    ypixel
+
+### bino adjust request
+
+    heightDiff
+    widthDiff
+
+### bino adjust result
+
+    isAdjustHeight
+    isAdjustWidth
+    heightDiff
+    heightDiffLast
+    widthDiff
+    widthDiffLast
+
+Both a current and a previous value for each axis, and a flag per axis saying whether it was
+adjusted. So the camera reports what an adjustment changed rather than only where it ended
+up, which is what makes an automated alignment loop possible rather than just a nudge.
+
+### bino linewidth
+
+    linewidth
+    heightDiff
 
 ## Suggested order
 
 1. Query the ability list on a fisheye camera and a panoramic camera. Confirm `fishEye` and
    `binoCfg` are advertised, and see what else is. Cheap, needs no capture, and it validates
-   the whole approach before any effort goes into it.
-2. Capture `GET_FISH_EYE_CFG` against the fisheye camera. Read the XML. That single capture
-   settles the field names that firmware strings do not give up.
-3. Capture `MSG_CFG_FISH_EYE_SUBCHN_CTRL` while changing a view in the Reolink app, which is
-   what reveals whether sub-channels are what they appear to be.
-4. Stitching after that. It is the more interesting capability but the less useful one: a
-   pano that is already aligned does not need realigning, whereas dewarped sub-channels would
-   remove real work from the pipeline every day.
+   the approach before effort goes into it.
+2. Confirm the field names above against one real exchange each. They came from the code that
+   writes the XML, so they should match, but the encoding around them, the message ids, the
+   ordering and which fields are optional are all still unknown. A single capture of
+   `GET_FISH_EYE_CFG` settles most of it.
+3. Implement `fishEyeSubChnCtrl` first among the write paths. It is a small payload, a screen
+   number and a direction, and it is the one with a visible result: a view that moves. That
+   makes it far easier to tell working from nearly working than a stitching parameter whose
+   effect is subtle.
+4. Stitching after that. More interesting, less useful day to day: a pano that is already
+   aligned does not need realigning, whereas dewarped sub-channels would remove real work
+   from the pipeline continuously.
 
 ## Tooling note
 
-An ARM disassembler would make step 2 unnecessary for the field names, since the s2x
-functions build the XML directly. `libnetpublic.so` is ARM 32-bit and unstripped, with all
-these symbols present and addresses known. The objdump available here has no ARM support.
-Even with one, the rule stands: use it to know what to look for, then confirm on the wire and
-implement from the capture.
+`tools/armstrings.py` resolves the string literals an ARM function references in a position
+independent shared object. That is what recovered the field names above.
+
+The naive approach does not work and it fails quietly, which is worth knowing before someone
+repeats it. Position independent code keeps an offset in the literal pool rather than an
+address, and adds PC at runtime. Reading the literal directly gives a number that often lands
+inside some other section and decodes as a plausible looking string, so the first attempt
+here produced confident nonsense out of `.dynstr` rather than an obvious failure.
+
+`libnetpublic.so` is ARM 32 bit and unstripped, with every symbol mentioned in this document
+present and its address known, so any other parameter can be read the same way.
+
+The rule still stands regardless: this says what to look for. Confirm on the wire, implement
+from the capture.
