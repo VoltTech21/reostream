@@ -190,8 +190,13 @@ Three things will mislead you:
   modes and the dual lens stitch parameters all go over the camera's CGI API, not
   Baichuan.
 
-Writes are confirmed on two messages, OSD and LED, each changed and read back on a fresh
-connection. The other 52 pairs use the identical message shape and are untested.
+`reocam verify -write` writes each document straight back unchanged, which exercises the
+write path without altering the camera. All 20 applicable pairs on one wired camera
+returned 200 with the document unchanged.
+
+Acceptance is not effect, though, and they come apart per message: OSD, LED and email
+config all take a changed field and read it back. `md set` and `floodlight set` answer
+200 and change nothing. See `docs/control.md`.
 
 `docs/control.md` has the rest: how the id table was recovered, how to recover more, and
 the worked examples.

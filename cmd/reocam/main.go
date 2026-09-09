@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -99,6 +100,8 @@ func main() {
 		err = floodlight(*addr, *user, *pass, flag.Args()[1:])
 	case "probe":
 		err = probe(conn, dial)
+	case "verify":
+		err = verify(conn, dial, flag.Args()[1:])
 	case "talk":
 		err = talk(conn, flag.Args()[1:], *withVideo, *noConfig)
 	default:
@@ -834,5 +837,95 @@ func probe(conn *baichuan.Conn, dial func() (*baichuan.Conn, error)) error {
 	if len(hungUp) > 0 {
 		report("hung up the connection", hungUp)
 	}
+	return nil
+}
+
+// verify checks that this camera accepts a configuration write, for every
+// read/write pair it implements, without changing anything.
+//
+// For each pair it reads the document, writes that exact document back, and
+// reads again. A camera that accepts the write and returns an identical
+// document has demonstrated the write path for that message with no change
+// to the camera. It does not demonstrate that a *different* document would
+// take effect, which needs a real edit and an observed result.
+//
+// Writes are skipped unless -write is given, and some are skipped regardless:
+// re-applying an encoder or image configuration reconfigures the pipeline and
+// interrupts the stream. Those are listed rather than silently dropped.
+func verify(conn *baichuan.Conn, dial func() (*baichuan.Conn, error), args []string) error {
+	doWrite := len(args) == 1 && args[0] == "-write"
+	if len(args) > 0 && !doWrite {
+		return fmt.Errorf("usage: verify [-write]")
+	}
+	if !doWrite {
+		fmt.Println("read-only; pass -write to send each document back unchanged")
+	}
+
+	var accepted, refused, unreadable, held []string
+	for _, p := range baichuan.ConfigPairs() {
+		before, status, err := fetch(conn, p.Get)
+		if err != nil {
+			conn.Close()
+			if conn, err = dial(); err != nil {
+				return fmt.Errorf("reconnect after %d: %w", p.Get, err)
+			}
+			continue
+		}
+		if len(before) == 0 {
+			// 405 is "this model does not have it", which is not a failure.
+			_ = status
+			continue
+		}
+		label := fmt.Sprintf("%s (%d->%d)", p.Name, p.Get, p.Set)
+		if baichuan.UnsafeToRewrite(p.Set) {
+			held = append(held, label)
+			continue
+		}
+		if !doWrite {
+			unreadable = append(unreadable, label)
+			continue
+		}
+
+		if err := conn.SetConfig(p.Set, before); err != nil {
+			return fmt.Errorf("write %d: %w", p.Set, err)
+		}
+		_, wstatus, err := await(conn, p.Set)
+		if err != nil {
+			conn.Close()
+			if conn, err = dial(); err != nil {
+				return fmt.Errorf("reconnect after writing %d: %w", p.Set, err)
+			}
+			refused = append(refused, label+" hung up")
+			continue
+		}
+		after, _, err := fetch(conn, p.Get)
+		if err != nil {
+			return fmt.Errorf("re-read %d: %w", p.Get, err)
+		}
+		switch {
+		case wstatus != 200 && wstatus != 0:
+			refused = append(refused, fmt.Sprintf("%s status %d", label, wstatus))
+		case !bytes.Equal(before, after):
+			// Accepted, and the document moved. Worth knowing loudly:
+			// the camera rewrote something we did not ask it to.
+			refused = append(refused, label+" ACCEPTED BUT DOCUMENT CHANGED")
+		default:
+			accepted = append(accepted, label)
+		}
+	}
+
+	report := func(title string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Printf("\n%s: %d\n", title, len(items))
+		for _, it := range items {
+			fmt.Printf("  %s\n", it)
+		}
+	}
+	report("readable, not written (no -write)", unreadable)
+	report("accepted, document unchanged", accepted)
+	report("refused or changed", refused)
+	report("held back as disruptive to rewrite", held)
 	return nil
 }

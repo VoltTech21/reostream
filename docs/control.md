@@ -86,7 +86,29 @@ the camera supplies its own schema, including fields this code has never heard o
 echoing its own document back preserves the exact byte formatting that some messages
 insist on. A compact document is accepted for `TalkAbility` and refused for `TalkConfig`.
 
-There are 54 read/write pairs in the table. Writes are confirmed on two of them.
+There are 55 read/write pairs in the table, paired on the firmware's exact wording.
+
+`reocam verify -write` measures how far that goes on a given camera. It reads each
+document and writes that same document straight back, which exercises the write path
+without changing anything. On one 8 MP wired camera all 20 applicable pairs returned 200
+with the document unchanged, and five more were held back because re-applying an encoder
+or image configuration interrupts the stream.
+
+Acceptance is not effect, and the two come apart per message. Changing a field and
+reading it back on a fresh connection:
+
+| message | result |
+|---|---|
+| `45 osd set` | takes effect |
+| `209 led set` | takes effect |
+| `43 email cfg set` | takes effect |
+| `47 md set` | **200, and nothing changes** |
+| `288 floodlight set` | **200, and nothing changes** |
+
+`md set` was tried with one sensitivity window changed, all four changed, and `enable`
+turned off. The camera answered 200 every time and re-read identical every time. So a
+message being accepted, on a model that implements the matching read, still says nothing
+about whether it does anything.
 
 ## The three things that will mislead you
 
@@ -108,6 +130,11 @@ Message 288 accepts a floodlight command, with the element name `FloodlightManua
 from the firmware rather than guessed, and answers **200**. Snapshots taken either side of
 it show no change. A wrong element name on the same message answers 400, so the document
 is being parsed and then ignored.
+
+`47 md set` behaves the same way and is the more instructive case, because unlike the
+floodlight there is no plausible hardware reason for it: the camera implements `md get`,
+returns a full document, accepts that document back with any field changed, answers 200,
+and re-reads unchanged.
 
 Two way audio "worked" twice before it made any sound: once the camera had refused the
 config and nothing checked the reply, once it accepted every packet and played silence.

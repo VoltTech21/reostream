@@ -83,3 +83,43 @@ func containsWord(desc, verb string) bool {
 	}
 	return false
 }
+
+// Pairing must be on the firmware's exact wording. Normalising "osd get" and
+// "get osd" onto one key pairs 44 with 30, and a write sent to the wrong
+// message id is the one mistake here with real consequences.
+func TestConfigPairsMatchOnExactDescription(t *testing.T) {
+	got := make(map[uint32]uint32)
+	for _, p := range ConfigPairs() {
+		got[p.Get] = p.Set
+	}
+	for get, set := range map[uint32]uint32{
+		44:  45,  // osd get -> osd set
+		29:  30,  // get osd -> set osd
+		46:  47,  // md get  -> md set
+		208: 209, // led get -> led set
+		26:  25,  // isp get -> isp set, where the write is the lower id
+		217: 216, // email task get -> email task set, likewise
+	} {
+		if got[get] != set {
+			t.Errorf("pair for %d (%q) = %d, want %d", get, MsgName(get), got[get], set)
+		}
+	}
+	// "osd def get" has no "osd def set", so it must not be paired at all.
+	if s, ok := got[110]; ok {
+		t.Errorf("110 (%q) paired with %d; it has no write", MsgName(110), s)
+	}
+}
+
+// The guard that keeps a rewrite sweep from interrupting a live camera.
+func TestUnsafeToRewriteCoversTheDisruptiveWrites(t *testing.T) {
+	for _, id := range []uint32{57, 25, 105, 196} {
+		if !UnsafeToRewrite(id) {
+			t.Errorf("%d (%q) should be held back from a rewrite sweep", id, MsgName(id))
+		}
+	}
+	for _, id := range []uint32{45, 47, 209} {
+		if UnsafeToRewrite(id) {
+			t.Errorf("%d (%q) is safe to rewrite and should not be held back", id, MsgName(id))
+		}
+	}
+}
