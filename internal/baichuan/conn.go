@@ -190,7 +190,8 @@ func (c *Conn) login() error {
 		return fmt.Errorf("baichuan: read login reply: %w", err)
 	}
 	if len(reply.XML) == 0 {
-		return fmt.Errorf("baichuan: empty login reply")
+		return fmt.Errorf("baichuan: empty login reply (status %d, msgid %d, class 0x%04x, %d body bytes)",
+			reply.Header.Status(), reply.Header.MsgID, reply.Header.Class, len(reply.Payload))
 	}
 
 	key := AESKey(nonce, c.opts.Password)

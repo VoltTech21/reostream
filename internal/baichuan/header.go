@@ -7,9 +7,16 @@ import (
 
 // Message IDs.
 const (
-	MsgIDLogin       = 1
-	MsgIDVideo       = 3
-	MsgIDPing        = 93
+	MsgIDLogin = 1
+	MsgIDVideo = 3
+	MsgIDPing  = 93
+	// MsgIDHeartBeat is wrong and is kept only so the reocam heartbeat
+	// command still names something. Two firmware dispatch tables agree
+	// that 5 is "replay start"; 5 came from rpc_msg_name(5) in the NVR's
+	// internal IPC enum, where index 5 is MSG_APP_HB, a different
+	// namespace entirely. That is why every model answers 421: the camera
+	// is refusing a playback request, not declining a heartbeat. The
+	// Baichuan dispatch table calls id 0 "heartbeat".
 	MsgIDHeartBeat   = 5
 	MsgIDSnap        = 109
 	MsgIDTalkAbility = 10
