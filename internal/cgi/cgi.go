@@ -20,11 +20,22 @@ import (
 )
 
 // Client is a logged in session against one camera.
+//
+// The credentials are kept because a camera will intermittently forget a
+// session it has just issued, and the only way through that is to log in
+// again.
 type Client struct {
-	base  string
-	token string
-	http  *http.Client
+	base     string
+	user     string
+	password string
+	token    string
+	http     *http.Client
 }
+
+// rspNotLoggedIn is what a camera returns when it does not recognise the
+// token. It arrives on connections that logged in seconds earlier, so it
+// means "log in again", not "your password is wrong".
+const rspNotLoggedIn = -6
 
 type command struct {
 	Cmd    string `json:"cmd"`
@@ -51,15 +62,26 @@ type reply struct {
 // and is not.
 func Dial(host, user, password string) (*Client, error) {
 	c := &Client{
-		base: "http://" + host + "/cgi-bin/api.cgi",
-		http: &http.Client{Timeout: 20 * time.Second},
+		base:     "http://" + host + "/cgi-bin/api.cgi",
+		user:     user,
+		password: password,
+		http:     &http.Client{Timeout: 20 * time.Second},
 	}
+	if err := c.login(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// login exchanges the credentials for a fresh token.
+func (c *Client) login() error {
+	c.token = ""
 	var out []reply
 	err := c.do("Login", 0, map[string]any{
-		"User": map[string]string{"userName": user, "password": password},
+		"User": map[string]string{"userName": c.user, "password": c.password},
 	}, &out)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var v struct {
 		Token struct {
@@ -67,13 +89,32 @@ func Dial(host, user, password string) (*Client, error) {
 		} `json:"Token"`
 	}
 	if err := json.Unmarshal(out[0].Value, &v); err != nil {
-		return nil, fmt.Errorf("cgi: parse login: %w", err)
+		return fmt.Errorf("cgi: parse login: %w", err)
 	}
 	if v.Token.Name == "" {
-		return nil, fmt.Errorf("cgi: login returned no token")
+		return fmt.Errorf("cgi: login returned no token")
 	}
 	c.token = v.Token.Name
-	return c, nil
+	return nil
+}
+
+// call runs a command, and logs in again once if the camera says the session
+// is not valid. Retrying only that one code keeps a genuine refusal, such as
+// a command the model does not implement, reported as itself.
+func (c *Client) call(cmd string, action int, param any, out *[]reply) error {
+	err := c.do(cmd, action, param, out)
+	if err == nil || !isNotLoggedIn(*out) || cmd == "Login" {
+		return err
+	}
+	if err := c.login(); err != nil {
+		return err
+	}
+	return c.do(cmd, action, param, out)
+}
+
+// isNotLoggedIn reports whether a reply is the session complaint.
+func isNotLoggedIn(out []reply) bool {
+	return len(out) > 0 && out[0].Error != nil && out[0].Error.RspCode == rspNotLoggedIn
 }
 
 // do sends one command and decodes the reply array.
@@ -96,6 +137,11 @@ func (c *Client) do(cmd string, action int, param any, out *[]reply) error {
 	if err != nil {
 		return fmt.Errorf("cgi: %s: %w", cmd, err)
 	}
+	// Decoding an array into a slice that already holds replies reuses the
+	// elements, and a field absent from the new document keeps its old
+	// value. Left alone, the error from a previous reply survives into a
+	// successful one and the call reports a failure that did not happen.
+	*out = nil
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("cgi: %s: parse reply: %w", cmd, err)
 	}
@@ -115,7 +161,7 @@ func (c *Client) do(cmd string, action int, param any, out *[]reply) error {
 // setting adjustable without guessing at bounds.
 func (c *Client) Get(cmd string, channel int) (value, initial, rng json.RawMessage, err error) {
 	var out []reply
-	if err := c.do(cmd, 1, map[string]any{"channel": channel}, &out); err != nil {
+	if err := c.call(cmd, 1, map[string]any{"channel": channel}, &out); err != nil {
 		return nil, nil, nil, err
 	}
 	return out[0].Value, out[0].Initial, out[0].Range, nil
@@ -124,5 +170,5 @@ func (c *Client) Get(cmd string, channel int) (value, initial, rng json.RawMessa
 // Set runs a write command.
 func (c *Client) Set(cmd string, param any) error {
 	var out []reply
-	return c.do(cmd, 0, param, &out)
+	return c.call(cmd, 0, param, &out)
 }

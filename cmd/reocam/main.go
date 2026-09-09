@@ -97,6 +97,8 @@ func main() {
 		err = stitch(*addr, *user, *pass, flag.Args()[1:])
 	case "floodlight":
 		err = floodlight(*addr, *user, *pass, flag.Args()[1:])
+	case "probe":
+		err = probe(conn, dial)
 	case "talk":
 		err = talk(conn, flag.Args()[1:], *withVideo, *noConfig)
 	default:
@@ -778,5 +780,59 @@ func floodlight(addr, user, pass string, args []string) error {
 		return err
 	}
 	fmt.Printf("now %s\n", after)
+	return nil
+}
+
+// probe reports what this camera implements.
+//
+// It exists because no table here can say what a given model does. The
+// recovered message ids come from an NVR and a hub, and the set any one
+// camera answers is its own. So rather than assume, ask: every read in
+// ConfigMessages is safe to send, an unimplemented one comes back 405
+// instead of failing the connection, and what is left is the truth for
+// this hardware.
+//
+// This is the first thing to run against a camera nobody here has seen.
+func probe(conn *baichuan.Conn, dial func() (*baichuan.Conn, error)) error {
+	names := baichuan.ConfigNames()
+	var ok, absent, needsArgs, hungUp []string
+
+	for _, name := range names {
+		id := baichuan.ConfigMessages[name]
+		xml, status, err := fetch(conn, id)
+		switch {
+		case err != nil:
+			// Some messages make a camera hang up rather than answer.
+			// That is a fact about the model worth reporting, so record
+			// it, reconnect, and keep going.
+			hungUp = append(hungUp, fmt.Sprintf("%s (%d)", name, id))
+			conn.Close()
+			if conn, err = dial(); err != nil {
+				return fmt.Errorf("could not reconnect after %s: %w", name, err)
+			}
+		case len(xml) > 0:
+			ok = append(ok, fmt.Sprintf("%s (%d, %d bytes)", name, id, len(xml)))
+		case status == 400:
+			// Understood, but it wants parameters this generic read does
+			// not send. Supported, not readable this way.
+			needsArgs = append(needsArgs, fmt.Sprintf("%s (%d)", name, id))
+		default:
+			absent = append(absent, fmt.Sprintf("%s (%d)", name, id))
+		}
+	}
+
+	report := func(title string, items []string) {
+		fmt.Printf("\n%s: %d\n", title, len(items))
+		for _, it := range items {
+			fmt.Printf("  %s\n", it)
+		}
+	}
+	fmt.Printf("probed %d reads\n", len(names))
+	report("supported", ok)
+	report("needs parameters (400)", needsArgs)
+	report("not implemented (405)", absent)
+	if len(hungUp) > 0 {
+		report("hung up the connection", hungUp)
+	}
 	return nil
 }

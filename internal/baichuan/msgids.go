@@ -93,6 +93,7 @@ const (
 	MsgIDGetAutoUpdate               = 195 // get auto update
 	MsgIDSetAutoUpdate               = 196 // set auto update
 	MsgIDWifiSignalScan              = 198 // wifi signal scan
+	MsgIDGetSupport                  = 199 // get support
 	MsgIDWifiTest                    = 200 // wifi test
 	MsgIDLedGet                      = 208 // led get
 	MsgIDLedSet                      = 209 // led set
