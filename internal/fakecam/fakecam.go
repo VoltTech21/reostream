@@ -152,6 +152,59 @@ func (c *Camera) serve(conn net.Conn, fixture []byte) {
 	c.mu.Unlock()
 }
 
+// NewWriter starts a fake camera whose connections are driven entirely by
+// write, called once per accepted connection with the socket and a channel
+// that closes once the client side of that connection has gone away (its
+// reads have hit EOF or an error). fakecam only accepts, drains, and counts;
+// write decides what bytes go out and when.
+//
+// It exists for a scenario none of this file's other constructors can
+// express: a session that must keep answering on the wire indefinitely,
+// past whatever a single static byte slice contains, without ever sending
+// media again. New, NewDropAfter and NewPartial are all built around
+// writing a fixed byte slice once; a held camera session that keeps a
+// client's connection alive with periodic protocol traffic for as long as
+// the test needs it to has no fixed length to give them. Only a live
+// callback can keep going for exactly as long as the caller decides.
+//
+// This still does not put protocol logic in fakecam. write is supplied by
+// the caller (see internal/stream's own tests, which build wire bytes with
+// internal/baichuan's exported Header type, the same way
+// internal/baichuan's own fakecam_test.go builds synthetic messages that no
+// committed capture contains); this constructor only ever calls it.
+func NewWriter(t testing.TB, write func(conn net.Conn, clientGone <-chan struct{})) *Camera {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("fakecam: listen: %v", err)
+	}
+	c := &Camera{ln: ln}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.recordAccept()
+			go func(conn net.Conn) {
+				defer conn.Close()
+				drained := make(chan struct{})
+				go func() {
+					c.drain(conn)
+					close(drained)
+				}()
+				write(conn, drained)
+				<-drained
+				c.mu.Lock()
+				c.closes++
+				c.mu.Unlock()
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+	return c
+}
+
 // NewDropAfter starts a fake camera that writes only fixture[:n] to each
 // connection it accepts and then stops sending, without waiting for the
 // peer to finish reading.

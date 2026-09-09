@@ -34,17 +34,31 @@ type FrameStats struct {
 	FPS          float64
 	BitrateBps   float64
 	LastFrameAt  time.Time
+	ConnectedAt  time.Time
 	AudioFrames  int
 	DroppedAudio int
 }
 
-// Age reports how long ago the last frame was recorded, or zero if none
-// ever was.
+// Age reports how long ago the last frame was recorded, falling back to how
+// long the current connection attempt has been open if no frame has arrived
+// yet, or zero if there is no active connection at all.
+//
+// The fallback exists because of a real incident, not a hypothetical one: a
+// stream that connects and then never delivers a single frame (a camera
+// holding a stale session, answering login but never sending media) has a
+// zero LastFrameAt forever, and a zero-valued time.Time reports Age 0 just
+// like a stream that published a frame an instant ago. Both looked
+// identically healthy on /api/status during the 2026-09-08 incident. Falling
+// back to ConnectedAt means a stream stuck since the moment it connected
+// shows a growing, honest age instead of a permanent, misleading 0.
 func (s FrameStats) Age() time.Duration {
-	if s.LastFrameAt.IsZero() {
-		return 0
+	if !s.LastFrameAt.IsZero() {
+		return time.Since(s.LastFrameAt)
 	}
-	return time.Since(s.LastFrameAt)
+	if !s.ConnectedAt.IsZero() {
+		return time.Since(s.ConnectedAt)
+	}
+	return 0
 }
 
 // subscriber pairs a channel with the small lock that makes closing it safe.
@@ -384,18 +398,35 @@ func (h *Hub) AddAudioFrames(n int) {
 	h.statsMu.Unlock()
 }
 
-// MarkDisconnected zeroes the fps and bitrate gauges. Call it whenever the
-// stream feeding this hub stops, whether for good or just for the next
-// backoff cycle: without this, a camera that drops off mid-stream keeps
-// reporting its last known rate on /api/status and /metrics forever,
-// looking healthy to anyone glancing at fps or bitrate alone rather than
-// cross-checking last_frame_age_seconds too. AudioFrames and DroppedAudio
-// are untouched: those are cumulative health counters meant to survive a
-// reconnect, not an instantaneous rate.
+// MarkConnected records that a new connection attempt has begun, for Age's
+// fallback (see FrameStats.Age). Call it once a stream has actually asked
+// the camera for video, not at dial time: StartVideo succeeding is the
+// moment a held session first has the chance to go silent forever, and is
+// the same moment the supervisor's Connected/Running status starts
+// reporting true, so the two stay consistent.
+func (h *Hub) MarkConnected() {
+	h.statsMu.Lock()
+	h.stats.ConnectedAt = time.Now()
+	h.statsMu.Unlock()
+}
+
+// MarkDisconnected zeroes the fps and bitrate gauges, and clears the
+// connected-at fallback Age uses. Call it whenever the stream feeding this
+// hub stops, whether for good or just for the next backoff cycle: without
+// this, a camera that drops off mid-stream keeps reporting its last known
+// rate on /api/status and /metrics forever, looking healthy to anyone
+// glancing at fps or bitrate alone rather than cross-checking
+// last_frame_age_seconds too. Clearing ConnectedAt matches that: a stream
+// that is not currently attempting a connection at all should report Age 0,
+// not a duration that keeps growing across an entire backoff cycle as if it
+// were still the stuck-since-connect case Age's fallback exists for.
+// AudioFrames and DroppedAudio are untouched: those are cumulative health
+// counters meant to survive a reconnect, not an instantaneous rate.
 func (h *Hub) MarkDisconnected() {
 	h.statsMu.Lock()
 	h.stats.FPS = 0
 	h.stats.BitrateBps = 0
+	h.stats.ConnectedAt = time.Time{}
 	h.windowStart = time.Time{}
 	h.windowVideo = 0
 	h.windowBytes = 0

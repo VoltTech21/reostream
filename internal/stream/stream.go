@@ -19,6 +19,42 @@ import (
 // hearing from well before this, so this is not tuned close to a limit.
 const pingInterval = 10 * time.Second
 
+// DefaultMediaTimeout bounds how long Run tolerates zero decoded video
+// frames before giving up on the connection and returning an error, so the
+// supervisor tears it down and reconnects.
+//
+// This exists because internal/baichuan's idle-read timeout does not catch
+// the failure that actually happened in production on 2026-09-08: a camera
+// holding a stale session from a client that died without sending
+// stream-stop still answers a new login, hands out a valid nonce, and keeps
+// the connection responsive at the byte level (it acks other protocol
+// traffic), while never sending a single media frame. Bytes kept arriving,
+// so the idle timeout's read deadline kept getting pushed out, and two
+// streams sat reporting connected:true, 0 fps, restarts:0 for over 25
+// seconds with no reconnection attempt before this was caught by hand. Byte
+// liveness and media liveness are different facts about a connection, and
+// only media liveness is what this package's job depends on.
+//
+// 30 seconds is chosen from the fleet measurements taken the same day,
+// against the whole running fleet, not a lab bench: every healthy stream
+// observed ran between 9.9 and 25.1 fps with last_frame_age_seconds
+// consistently under 0.1, including a
+// 4K main stream whose keyframes span several messages and a substream
+// under load. None of that comes anywhere close to even a single second of
+// genuine gap between decoded frames. 30s is a full order of magnitude
+// above the worst observed gap, not a value tuned close to it, so it will
+// not fire on a camera stuttering under load, a keyframe taking longer to
+// reassemble, or ordinary network jitter. It is also double
+// DefaultIdleTimeout: a fully silent camera (no bytes at all, not even
+// keepalive traffic) is always caught by the idle-read timeout first, since
+// that fires at 15s: this timeout exists specifically to catch the case the
+// idle timeout structurally cannot, a connection with traffic but no media,
+// so it does not need to race it and can afford to be patient. The
+// production incident this responds to ran for minutes before anyone
+// noticed; catching it in 30s instead is a large improvement without
+// risking a reconnect storm on a healthy fleet.
+const DefaultMediaTimeout = 30 * time.Second
+
 // Config names one camera stream to run.
 type Config struct {
 	Name     string
@@ -26,6 +62,20 @@ type Config struct {
 	Username string
 	Password string
 	Stream   string // "main", "sub" or "extern"
+
+	// MediaTimeout overrides DefaultMediaTimeout. Zero means the default.
+	//
+	// This is a Config field, not a TOML setting: unlike a per-camera value
+	// such as a stream name or credentials, the right timeout here is a
+	// property of the protocol's own frame cadence (see
+	// DefaultMediaTimeout's derivation from fleet-wide fps measurements),
+	// the same reasoning that kept baichuan.Options.IdleTimeout out of the
+	// TOML config. Exposing it to operators would invite "fixing" a camera
+	// that is actually failing by loosening the timeout that exists to
+	// catch exactly that, which defeats the point of the watchdog. It stays
+	// a Go field so tests can shorten it without a live camera or a config
+	// file.
+	MediaTimeout time.Duration
 }
 
 // streamKind maps the config's short stream name to the wire value
@@ -99,6 +149,23 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 		return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
 	}
 
+	mediaTimeout := cfg.MediaTimeout
+	if mediaTimeout <= 0 {
+		mediaTimeout = DefaultMediaTimeout
+	}
+
+	// A connection is only worth anything to the hub's clients once the
+	// camera has actually been asked for video, so the connected mark and
+	// the watchdog's own clock both start here, not at Dial. This is also
+	// what catches the 2026-09-08 incident's exact shape: a stream that has
+	// never produced a single frame from the moment it connected, not just
+	// one that stops after a while. Starting lastMedia at StartVideo,
+	// before the first frame has any chance to arrive, means a camera that
+	// never sends one is timed out on the same footing as one that stops
+	// partway through, rather than needing a separate "never started" check.
+	h.MarkConnected()
+	lastMedia := time.Now()
+
 	d := baichuan.NewDepacketiser()
 	var mux *ts.Muxer
 	var reportedDroppedAudio int
@@ -124,6 +191,18 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 					}
 					switch f.Kind {
 					case baichuan.FrameIFrame, baichuan.FramePFrame:
+						// Only a decoded video frame resets the watchdog.
+						// Audio deliberately does not: a camera can keep an
+						// AAC track flowing on a stream whose video has
+						// stalled or never started, since the two are
+						// muxed independently once mux exists, and a
+						// client asking for a video stream that is only
+						// carrying audio is exactly as broken for this
+						// project's purpose as one carrying nothing at
+						// all. Resetting on audio would let that case hide
+						// behind a watchdog that looks satisfied while
+						// still delivering an unusable stream.
+						lastMedia = time.Now()
 						if mux == nil {
 							// The video codec is not known until the first
 							// frame arrives, so the muxer is built here
@@ -203,6 +282,23 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 				if err := conn.Ping(); err != nil {
 					return fmt.Errorf("stream: %s: ping: %w", cfg.Name, err)
 				}
+			}
+
+			// Same elapsed-time-after-message pattern as the ping check
+			// above, for the same reason: a timer case alongside
+			// conn.Messages() in the select would almost never win against
+			// a loop that is actually servicing frames every 40ms, so this
+			// only needs to be checked when something on the connection
+			// happens anyway. Checking only here, with no separate ticker,
+			// is safe because a connection that stops producing messages
+			// entirely is already bounded by baichuan's own idle-read
+			// timeout (DefaultIdleTimeout, 15s), well under mediaTimeout:
+			// this loop either sees another message within mediaTimeout, or
+			// sees conn.Messages() close first because the idle timeout got
+			// there sooner. See DefaultMediaTimeout for why the two do not
+			// need to race each other.
+			if now.Sub(lastMedia) >= mediaTimeout {
+				return fmt.Errorf("stream: %s: no video frame in %s: camera is answering but not sending media (held session)", cfg.Name, mediaTimeout)
 			}
 		}
 	}
