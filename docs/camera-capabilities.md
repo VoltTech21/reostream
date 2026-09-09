@@ -21,8 +21,8 @@ rather than failing obscurely.
 | capability | what it is |
 |---|---|
 | `isp*` | brightness, contrast, saturation, sharpen, white balance, day and night, flip, mirror, anti flicker |
-| `ledControl`, `IrLights`, `PowerLed` | IR is Auto or Off; the status LED can be switched off entirely |
-| `ptzDirection` | direction control even on cameras with no motors, so digital rather than mechanical |
+| `ledControl`, `IrLights` | IR is Auto or Off |
+| `ptzDirection` | direction control even though `ptzCtrl` is absent everywhere, so digital rather than mechanical |
 | `mask`, `snap` | privacy masking, and stills without opening a stream |
 | `supportAiPeople`, `supportAiVehicle`, `supportAiDogCat` | **on camera AI detection** |
 | `supportAiSensitivity`, `supportAiTargetSize`, `supportAiStayTime` | tuning for the above |
@@ -107,3 +107,53 @@ distance 10.0 against a default of 8.0, and x and y moved to 3 and 4, so it has 
 adjusted from factory at some point.
 
 Unlike the fisheye mode change, this is a numeric nudge and does not reboot the camera.
+
+## What this fleet cannot exercise
+
+Surveyed by asking all eight cameras for `GetAbility` and keeping the capabilities whose
+permit is 0 everywhere. 190 capabilities are reported in total; 121 are on every camera,
+17 on some, and these 52 on none. Each group is one purchase away from being testable, so
+they are grouped by what would unlock them rather than listed flat.
+
+**A PTZ camera** unlocks the largest group by far, 16 capabilities: `ptzCtrl`, `ptzPreset`,
+`ptzPatrol`, `ptzTattern`, `ptzType`, `supportPt`, `supportZoom`, `supportFocus`,
+`disableAutoFocus`, `supportDigitalZoom`, `supportPtzSpeed`, `supportPtzCalibration`,
+`supportPtzCheck`, `supportPtzPresetImage`, `supportZoomAndFocusSliderCfg`,
+`supportGuardPointImage`. Note that `ptzDirection` IS present on all eight and `ptzCtrl` is
+absent on all eight, so whatever the former does here it is not motor control.
+
+**A PTZ camera also unlocks auto-tracking**, which is a second group of five that depends
+on the first: `aiTrack`, `aiTrackDogCat`, `supportAITrackLimit`, `supportAiTrackClassify`,
+`supportAutoTrackStream`.
+
+**A battery camera**: `battery`, `batAnalysis`, `mdWithPir`. This is the important one for
+anyone else, since battery models have no RTSP at all and are the reason most people ran
+the previous tool.
+
+**A wireless camera**: `wifi`, `supportWiFiFreqPolicy`, `3g`.
+
+**A camera with local storage**: `disk`. No camera here has an SD card slot that reports,
+so on-camera recording and playback are entirely untested.
+
+**A camera with alarm terminals**: `alarmIoIn`, `alarmIoOut`, `alarmRf`.
+
+**A camera with a buzzer**: `supportBuzzer`, `supportBuzzerEnable`, `supportBuzzerTask`,
+`supportBuzzerTaskEnable`.
+
+**Nothing here has these at all**, and no obvious single model would bring them:
+`supportGop`, `mainEncType`, `supportEncoderSelect`, `supportAiFace`, `floodLight`,
+`supportFLKeepOn`, `indicatorLight`, `powerLed`, `isp3Dnr`, `ispBackLight`,
+`ispExposureMode`, `ispHue`, `mdTriggerAudio`, `mdTriggerRecord`, `ftpPic`,
+`supportAoAdjust`, `supportImportExportImage`.
+
+`supportGop` matters to this project specifically: no camera here reports it, so the GOP
+configuration work has nothing to test against on this fleet.
+
+`floodLight` reading 0 while the pano reports `supportFLswitch`, `supportFLBrightness`,
+`supportFLIntelligent` and `supportFLSchedule` is a contradiction worth resolving before
+trusting either flag.
+
+## Two-way audio
+
+`talk` is present on **all eight cameras** and has never been exercised. It is the largest
+thing this fleet can test and has not.
