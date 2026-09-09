@@ -213,6 +213,50 @@ func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
 func (w *Writer) SetAESKey(k []byte) { w.aesKey = k }
 
 // Write frames and sends one message. MsgLen is set from the encrypted body.
+// WriteParts writes a message that has an XML header and a binary section,
+// sealing each as its own cipher stream.
+//
+// The two parts are sealed separately, both starting from the fixed IV, and
+// that detail is the whole reason this exists. Write seals a body as one
+// continuous stream, which is right for a message that is XML to the end and
+// wrong for one that is not: a TalkConfig sent that way is refused with
+// status 400, and so is one whose binary section is left in plaintext. Only
+// separate streams are accepted.
+//
+// It mirrors the receive side, where a message's payload is decrypted as its
+// own stream rather than as a continuation of the one covering the XML. The
+// camera's parser is symmetric; ours has to be too.
+func (w *Writer) WriteParts(h Header, xmlPart, binPart []byte) error {
+	out, err := w.seal(h, xmlPart)
+	if err != nil {
+		return err
+	}
+	if binPart, err = w.seal(h, binPart); err != nil {
+		return err
+	}
+	h.PayloadOff = uint32(len(out))
+	h.MsgLen = uint32(len(out) + len(binPart))
+	if _, err := w.w.Write(h.Encode()); err != nil {
+		return err
+	}
+	if _, err := w.w.Write(out); err != nil {
+		return err
+	}
+	_, err = w.w.Write(binPart)
+	return err
+}
+
+// seal applies whichever cipher the connection is currently using.
+func (w *Writer) seal(h Header, b []byte) ([]byte, error) {
+	if len(b) == 0 || h.Class == ClassLegacy {
+		return b, nil
+	}
+	if w.aesKey != nil {
+		return AESEncrypt(w.aesKey, b)
+	}
+	return BCCrypt(h.EncOffset, b), nil
+}
+
 func (w *Writer) Write(h Header, body []byte) error {
 	out := body
 	if len(body) > 0 && h.Class != ClassLegacy {

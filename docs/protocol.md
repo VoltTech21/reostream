@@ -95,3 +95,42 @@ Verified: three back-to-back connect/stream/close cycles with no delay all succe
 The camera times out a session it stops hearing from (its firmware logs
 `session:%u login timeout`), and the official NVR heartbeats continuously. A ping every
 10s is sufficient today; a proper `HeartBeat` is the next protocol job.
+
+## Two-way audio
+
+Three messages: 10 `TalkAbility` asks what the camera accepts, 201 `TalkConfig` opens a
+session, 202 `Talk` carries the audio. All eight cameras here report `talk`, and all eight
+answered TalkAbility with the same single option: `adpcm`, 16000 Hz, 16 bit precision,
+mono, `lengthPerEncoder` 1024, duplex FDX. Ask anyway. The reply is a list precisely
+because a different model can offer something else, and the fisheye already differs in one
+respect, offering `mixAudioStream` alongside `followVideoStream`.
+
+`lengthPerEncoder` counts samples, so a block is 1024 samples: a four byte preamble
+carrying the decoder's starting predictor and step index, then 512 bytes of packed
+nibbles. The preamble describes the state at the *start* of its own block, not the state
+left after it, so a decoder can begin at any block.
+
+Audio rides in the same media packet framing the camera sends its own audio in: the magic,
+the payload length twice, then a four byte inner header of `00 01` and the DVI4 block
+size. A capture of a camera's own AAC confirms the doubled length field, both copies
+carrying 519 for a 527 byte packet.
+
+**Two things get a TalkConfig refused with status 400, and neither is guessable.**
+
+First, the XML has to match the camera's own byte for byte. The declaration carries a space
+before `?>`, and every element sits on its own line with a trailing newline at the end. The
+dissector records a 104 byte extension and a 394 byte TalkConfig; those two numbers only
+add up in exactly that form. A compact document is *accepted* for a TalkAbility query and
+refused for a TalkConfig, so leniency varies by message and matching the camera exactly is
+the only safe rule.
+
+Second, a message with both an XML header and a binary section seals each as its own
+cipher stream, both starting from the fixed IV. Sealing the body as one continuous stream
+is refused, and so is leaving the binary section in plaintext. This mirrors the receive
+side, where a payload is decrypted as its own stream rather than as a continuation of the
+one covering the XML.
+
+Status is a 16 bit little endian field at bytes 16 and 17, not two independent bytes.
+Reading it a byte at a time turns 400 into 144 and hides what the camera is telling you.
+200 is success, 400 is a request it could not parse, 422 has been seen from a camera that
+already has a talk session open.

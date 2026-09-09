@@ -271,6 +271,59 @@ func (c *Conn) StartVideo(stream string) error {
 	return c.w.Write(h, body)
 }
 
+// TalkAbility asks the camera to describe its two-way audio support: the
+// duplex modes, the stream modes and the audio encodings it will accept.
+// The reply arrives on Messages as MsgIDTalkAbility.
+func (c *Conn) TalkAbility() error {
+	body, err := channelXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:      MsgIDTalkAbility,
+		Class:      ClassModern24,
+		EncOffset:  EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+		PayloadOff: uint32(len(body)),
+	}
+	return c.w.Write(h, body)
+}
+
+// TalkConfig opens a two-way audio session in the format cfg describes.
+// It must be sent before any Talk data, and cfg should come from the
+// camera's own TalkAbility reply rather than from constants.
+func (c *Conn) TalkConfig(cfg TalkFormat) error {
+	ext, err := channelXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	body, err := talkConfigXML(c.opts.Channel, cfg)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:     MsgIDTalkConfig,
+		Class:     ClassModern24,
+		EncOffset: EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+	}
+	return c.w.WriteParts(h, ext, body)
+}
+
+// Talk sends one framed audio packet, as built by TalkPacket. The camera
+// plays it through its speaker, so this is the one call in this package with
+// an effect outside the machine it runs on.
+func (c *Conn) Talk(packet []byte) error {
+	ext, err := talkDataXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:     MsgIDTalk,
+		Class:     ClassModern24,
+		EncOffset: EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+	}
+	return c.w.WriteParts(h, ext, packet)
+}
+
 // Ping keeps the session alive. The camera times out a session it stops
 // hearing from, logging "session:%u login timeout", and the official NVR
 // heartbeats continuously.

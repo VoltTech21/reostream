@@ -10,6 +10,9 @@ const (
 	MsgIDLogin       = 1
 	MsgIDVideo       = 3
 	MsgIDPing        = 93
+	MsgIDTalkAbility = 10
+	MsgIDTalkConfig  = 201
+	MsgIDTalk        = 202
 	MsgIDAbilityInfo = 151
 )
 
@@ -48,6 +51,14 @@ type Header struct {
 	DirByte    byte
 	Class      uint16
 	PayloadOff uint32
+}
+
+// Status reads bytes 16 and 17 as the little endian status code a reply
+// carries: 200 for success, 400 for a request the camera could not parse.
+// On a request these bytes mean something else, so this is only meaningful
+// on a message that came from a camera.
+func (h Header) Status() int16 {
+	return int16(uint16(h.EncByte) | uint16(h.DirByte)<<8)
 }
 
 // HeaderLen reports the header size for a class.

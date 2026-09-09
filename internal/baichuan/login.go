@@ -114,3 +114,99 @@ func StreamID(stream string) byte {
 		return 0
 	}
 }
+
+// channelBody is the extension header that carries nothing but a channel,
+// which is the whole request for several query messages.
+type channelBody struct {
+	XMLName   xml.Name `xml:"Extension"`
+	Version   string   `xml:"version,attr"`
+	ChannelID int      `xml:"channelId"`
+}
+
+func channelXML(channel int) ([]byte, error) {
+	b := channelBody{Version: "1.1", ChannelID: channel}
+	return marshalDoc(&b, "channel")
+}
+
+// cameraXMLHeader is the XML declaration the cameras themselves emit. The
+// space before "?>" is theirs, and it is load bearing: the declaration in
+// xmlHeader, which login has always used and which works, is one byte
+// shorter, and a TalkConfig built with it is rejected with status 400.
+const cameraXMLHeader = `<?xml version="1.0" encoding="UTF-8" ?>`
+
+// marshalDoc renders a message body the way the cameras write their own: the
+// declaration, then one element per line, then a trailing newline.
+//
+// This is not cosmetic, and it is not guesswork either. The dissector records
+// a 104 byte extension and a 394 byte TalkConfig, and those two numbers only
+// add up in exactly this form. A compact document is accepted for a
+// TalkAbility query and rejected for a TalkConfig, so leniency varies by
+// message and the safe thing is to match the camera byte for byte.
+func marshalDoc(v any, what string) ([]byte, error) {
+	out, err := xml.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("baichuan: marshal %s: %w", what, err)
+	}
+
+	doc := make([]byte, 0, len(cameraXMLHeader)+len(out)+32)
+	doc = append(doc, cameraXMLHeader...)
+	doc = append(doc, '\n')
+	// One element per line: break wherever one tag ends and the next begins,
+	// which leaves text content sitting with its own tags.
+	for i, c := range out {
+		doc = append(doc, byte(c))
+		if c == '>' && i+1 < len(out) && out[i+1] == '<' {
+			doc = append(doc, '\n')
+		}
+	}
+	return append(doc, '\n'), nil
+}
+
+// talkConfigBody negotiates a two-way audio session. The values are not
+// invented: every camera surveyed here answered TalkAbility with exactly one
+// audioConfig, adpcm at 16 kHz, 16 bit, mono, lengthPerEncoder 1024, and FDX
+// as the only duplex mode. Ask the camera rather than assuming, since a model
+// that offers something else will list it there.
+type talkConfigBody struct {
+	XMLName    xml.Name `xml:"body"`
+	TalkConfig struct {
+		Version         string `xml:"version,attr"`
+		ChannelID       int    `xml:"channelId"`
+		Duplex          string `xml:"duplex"`
+		AudioStreamMode string `xml:"audioStreamMode"`
+		AudioConfig     struct {
+			AudioType        string `xml:"audioType"`
+			SampleRate       int    `xml:"sampleRate"`
+			SamplePrecision  int    `xml:"samplePrecision"`
+			LengthPerEncoder int    `xml:"lengthPerEncoder"`
+			SoundTrack       string `xml:"soundTrack"`
+		} `xml:"audioConfig"`
+	} `xml:"TalkConfig"`
+}
+
+func talkConfigXML(channel int, cfg TalkFormat) ([]byte, error) {
+	var b talkConfigBody
+	b.TalkConfig.Version = "1.1"
+	b.TalkConfig.ChannelID = channel
+	b.TalkConfig.Duplex = cfg.Duplex
+	b.TalkConfig.AudioStreamMode = cfg.StreamMode
+	b.TalkConfig.AudioConfig.AudioType = cfg.AudioType
+	b.TalkConfig.AudioConfig.SampleRate = cfg.SampleRate
+	b.TalkConfig.AudioConfig.SamplePrecision = cfg.SamplePrecision
+	b.TalkConfig.AudioConfig.LengthPerEncoder = cfg.LengthPerEncoder
+	b.TalkConfig.AudioConfig.SoundTrack = cfg.SoundTrack
+	return marshalDoc(&b, "talk config")
+}
+
+// talkDataBody is the extension header on a message carrying talk audio.
+type talkDataBody struct {
+	XMLName    xml.Name `xml:"Extension"`
+	Version    string   `xml:"version,attr"`
+	BinaryData int      `xml:"binaryData"`
+	ChannelID  int      `xml:"channelId"`
+}
+
+func talkDataXML(channel int) ([]byte, error) {
+	b := talkDataBody{Version: "1.1", BinaryData: 1, ChannelID: channel}
+	return marshalDoc(&b, "talk data")
+}
