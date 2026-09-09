@@ -16,8 +16,34 @@ and a hub, and the set any one camera answers is its own. A message a camera doe
 implement comes back 405 rather than failing the connection, so sending every known read
 is safe, and it is the only honest way to find out.
 
-On one 8 MP wired camera: 103 asked, 39 supported, 10 wanting parameters, 54 absent,
-none hanging up.
+Three models here, all on one fleet:
+
+| | RLC-810A | FE-P | Duo 3 PoE |
+|---|---|---|---|
+| supported | 39 | 45 | 47 |
+| wants parameters (400) | 10 | 11 | 11 |
+| absent (405) | 54 | 47 | 45 |
+| hung up | 0 | 0 | 0 |
+
+The useful number is the agreement: of 103 messages probed, **89 answer the same way on
+all three**, and these are not similar cameras. Only 14 differ, and they differ where you
+would expect:
+
+| message | RLC-810A | FE-P | Duo 3 PoE |
+|---|---|---|---|
+| `fisheyecfg` | - | yes | - |
+| `binosttichcfg` (dual lens stitch) | - | yes | yes |
+| `ptzcurpos` | - | yes | - |
+| `aitracklimitcfg`, `aitracktaskcfg` | - | yes | - |
+| `aidenoisecfg`, `wifisdbinfo` | - | yes | yes |
+| `crosslinedetectcfg`, `intrusiondetectcfg` | - | - | yes |
+| `loiteringdetectcfg`, `legacydetectcfg`, `lossdetectcfg` | - | - | yes |
+| `accessusercfg` | - | - | yes |
+| `crop` | yes | wants args | wants args |
+
+A fisheye has the fisheye and digital PTZ messages, the two lens models have stitching,
+and the newest model has the smart detection suite. Nothing here is surprising, which is
+the point: probe the camera and believe what it says.
 
 ## Where the message ids came from
 

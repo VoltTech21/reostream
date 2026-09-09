@@ -155,8 +155,12 @@ reocam -address 192.0.2.50 -password secret probe
 `probe` sends every read this tool knows and reports what the camera answered, because
 no table can say what a given model implements. A message a camera does not have comes
 back 405 rather than failing the connection, so asking is safe and is the only honest
-way to find out. On one 8 MP wired camera here: 103 asked, 39 supported, 10 wanting
-parameters, 54 absent.
+way to find out.
+
+Across three models here, a fixed 8 MP bullet, a fisheye and a dual lens pano, 89 of 103
+messages answer identically. The 14 that differ are the ones you would expect: fisheye
+and stitching messages on the models that have those lenses, the smart detection suite on
+the newest one. `docs/control.md` has the matrix.
 
 ```
 reocam -address ... get all          # sweep every readable block
