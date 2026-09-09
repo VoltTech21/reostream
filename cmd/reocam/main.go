@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -94,6 +95,8 @@ func main() {
 		err = fisheye(*addr, *user, *pass, flag.Args()[1:])
 	case "stitch":
 		err = stitch(*addr, *user, *pass, flag.Args()[1:])
+	case "floodlight":
+		err = floodlight(*addr, *user, *pass, flag.Args()[1:])
 	case "talk":
 		err = talk(conn, flag.Args()[1:], *withVideo, *noConfig)
 	default:
@@ -692,4 +695,88 @@ func set(conn *baichuan.Conn, args []string) error {
 			return nil
 		}
 	}
+}
+
+// floodlight reads or drives the white light over the camera's HTTP API.
+//
+// The Baichuan path (288, FloodlightManual) answers 200 for any well formed
+// body and does nothing observable, so this is the one shown to work.
+//
+// mode and state are separate: mode is what the light does, state is whether
+// it is lit right now. Mapped against the Baichuan FloodlightTask on a live
+// camera, mode 0 reads back as alarmMode 0 and is off, mode 1 and 2 both read
+// as alarmMode 1 and light on detection, and mode 3 reads as alarmMode 3 and
+// runs on the schedule. So "on" is mode 1 with state 1, and "motion" is the
+// same mode with state 0, which is how these cameras ship.
+func floodlight(addr, user, pass string, args []string) error {
+	c, err := cgi.Dial(addr, user, pass)
+	if err != nil {
+		return err
+	}
+	value, _, rng, err := c.Get("GetWhiteLed", 0)
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		fmt.Printf("current %s\n", value)
+		fmt.Printf("range   %s\n", rng)
+		return nil
+	}
+
+	var cur struct {
+		WhiteLed map[string]any `json:"WhiteLed"`
+	}
+	if err := json.Unmarshal(value, &cur); err != nil {
+		return fmt.Errorf("parsing current state: %w", err)
+	}
+	if cur.WhiteLed == nil {
+		return fmt.Errorf("camera returned no WhiteLed block")
+	}
+	// Change only what was asked for, and send the camera's own document
+	// back, so fields this build has never heard of survive the write.
+	switch args[0] {
+	case "on":
+		cur.WhiteLed["state"] = 1
+		cur.WhiteLed["mode"] = 1
+	case "off":
+		cur.WhiteLed["state"] = 0
+		cur.WhiteLed["mode"] = 0
+	case "motion":
+		// Dark now, lighting when the camera detects something. mode is
+		// what the light does, state is whether it is lit right now, so
+		// "on" and "motion" are the same mode with a different state.
+		cur.WhiteLed["mode"] = 1
+		cur.WhiteLed["state"] = 0
+	case "auto":
+		cur.WhiteLed["mode"] = 2
+		cur.WhiteLed["state"] = 0
+	case "schedule":
+		cur.WhiteLed["mode"] = 3
+		cur.WhiteLed["state"] = 0
+	default:
+		// Numeric mode, for pinning down what a firmware means by each.
+		m, err := strconv.Atoi(args[0])
+		if err != nil || m < 0 || m > 3 {
+			return fmt.Errorf("usage: floodlight [on|off|motion|auto|schedule|0-3] [brightness]")
+		}
+		cur.WhiteLed["mode"] = m
+		cur.WhiteLed["state"] = 0
+	}
+	cur.WhiteLed["channel"] = 0
+	if len(args) == 2 {
+		b, err := strconv.Atoi(args[1])
+		if err != nil || b < 0 || b > 100 {
+			return fmt.Errorf("brightness must be 0..100")
+		}
+		cur.WhiteLed["bright"] = b
+	}
+	if err := c.Set("SetWhiteLed", map[string]any{"WhiteLed": cur.WhiteLed}); err != nil {
+		return err
+	}
+	after, _, _, err := c.Get("GetWhiteLed", 0)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("now %s\n", after)
+	return nil
 }
