@@ -229,3 +229,56 @@ present and its address known, so any other parameter can be read the same way.
 
 The rule still stands regardless: this says what to look for. Confirm on the wire, implement
 from the capture.
+
+## Both features turned out to be reachable over plain HTTP, 2026-09-08
+
+Before implementing any of this over Baichuan, check the camera's own HTTP API. Both
+features are already exposed there, on cameras that have port 80 open, and no message ids
+are needed.
+
+Login returns a token, and the token goes in the query string. Passing the password in the
+query string does not work, which reads as "password wrong" and looks like a credential
+problem rather than a protocol one.
+
+    POST /cgi-bin/api.cgi?cmd=Login
+    [{"cmd":"Login","action":0,"param":{"User":{"userName":"admin","password":"..."}}}]
+
+### GetStitch and SetStitch, measured on a dual lens camera
+
+    value:   distance 10.0, stitchXMove 3, stitchYMove 4
+    initial: distance  8.0, stitchXMove 0, stitchYMove 0
+    range:   distance 2.0 to 20.0, stitchXMove and stitchYMove -100 to 100
+
+The response carries the current value, the factory default and the valid range together,
+which is everything needed to adjust it safely without guessing at bounds.
+
+### GetFishEye and SetFishEye, measured on a fisheye camera
+
+    value:   imageType 0, installType 1, rotationAngle 0
+    range:   imageType 0 to 3, installType 0 to 2, rotationAngle -45 to 45
+
+The field names match what the firmware serialiser builds exactly, which is a useful
+cross check: `installType`, `imageType` and `rotationAngle` were read out of
+`net_fish_eye_cfg_s2x` before any of this was queried.
+
+The command is `GetFishEye`, not `GetFishEyeCfg`. The latter returns `notsupport`.
+
+### Ask the camera rather than guessing
+
+`GetAbility` reports per channel capabilities including `supportBinoStitch` and
+`supportFishEyeCfg`, each with a permit and a version. On the fisheye here,
+`supportFishEyeCfg` is permit 6 version 1 while `supportBinoStitch` is permit 0, which is
+correct: it is a single lens camera. Unsupported commands return `ability error` rather
+than failing obscurely.
+
+### What this means for the Baichuan work
+
+Implementing these over Baichuan is now optional rather than necessary, and the case for
+doing it is narrower: a camera whose HTTP API is disabled or unreachable, or wanting one
+transport for everything. The message ids are still unknown and still need a capture, but
+nothing is blocked on them.
+
+`expandAbility`, which appears in the firmware's fisheye serialiser, is not in the HTTP
+response. So the HTTP surface is not necessarily the whole parameter, and Baichuan may
+still reach settings the CGI API does not expose. That is worth checking before concluding
+the two are equivalent.
