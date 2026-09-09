@@ -103,7 +103,8 @@ have no measurable effect should be treated as unverified no matter how clean th
   rendering them. The question an operator actually asks is whether a camera is streaming
   right now, and today that means reading JSON by hand. Cheap, no dependencies, fits the
   project.
-- **A camera control surface**, separate from this daemon. Started: `cmd/reocam` reads
+- **A camera control surface**, separate from this daemon. Started, and staying in this
+  repository rather than splitting out; see the release document for why. `cmd/reocam` reads
   103 configuration blocks, probes what a model implements, and writes. Writes are
   confirmed on two messages, OSD and LED, each read back on a fresh connection; the other
   52 read/write pairs use the same message shape and are untested. It stays out of
