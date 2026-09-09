@@ -10,6 +10,7 @@ const (
 	MsgIDLogin       = 1
 	MsgIDVideo       = 3
 	MsgIDPing        = 93
+	MsgIDHeartBeat   = 5
 	MsgIDSnap        = 109
 	MsgIDTalkAbility = 10
 	MsgIDTalkConfig  = 201

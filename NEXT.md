@@ -56,7 +56,14 @@ Two documented assumptions also turned out to be wrong:
 2. **Battery cameras.** Never tested, and the biggest gap for anyone else: battery models are
    why most people used the previous tool, since they have no RTSP at all, and they sleep,
    wake on motion and send battery state messages this client has never seen.
-3. **Protocol phases.** `HeartBeat`, then `GopCfg`, then the fisheye and stitching work in
+3. **Protocol phases.** Phase B is implemented and declined by every camera here: the
+   heartbeat is message 5, recovered from firmware, and all three models answer 421. The
+   proven ping stays, which is what the design said to do. Phase C should be dropped
+   rather than built: no camera here reports `supportGop`, so there is nothing to test it
+   against. Phases D and E are done over the HTTP API, because their message ids are still
+   unknown.
+
+   Old text follows. `HeartBeat`, then `GopCfg`, then the fisheye and stitching work in
    `docs/phase-d-e-groundwork.md`. That document has the field names already; what it lacks
    is the numeric message ids, which one capture of an NVR talking to a camera would give.
 

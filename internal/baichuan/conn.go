@@ -408,6 +408,46 @@ func (c *Conn) GetConfig(msgID uint32) error {
 	return c.w.Write(h, body)
 }
 
+// heartBeatTwoPart selects the message shape, for the experiment that
+// settles it against a camera.
+var heartBeatTwoPart = false
+
+// SetHeartBeatTwoPart switches that choice.
+func SetHeartBeatTwoPart(v bool) { heartBeatTwoPart = v }
+
+// HeartBeat sends the real heartbeat, message 5, and returns nothing: the
+// reply arrives on Messages and parses with ParseHeartBeat.
+//
+// Unlike Ping this is a round trip measurement rather than a liveness poke.
+// The camera answers with its own clock and a count of overlapped requests,
+// so it reports how far behind the client is rather than only that it is
+// still there. The camera's side of the same mechanism is the log line
+// "heartbeat timeout, session:%d chn:%d devname:%s disconnected".
+//
+// The message id is not in the dissector's table. It came from the camera
+// firmware, where bc_module::heartbeat's failure path calls
+// rpc_msg_name(5) to name the message it could not send.
+func (c *Conn) HeartBeat() error {
+	body, err := heartBeatXML()
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:     MsgIDHeartBeat,
+		Class:     ClassModern24,
+		EncOffset: EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+	}
+	if heartBeatTwoPart {
+		ext, err := channelXML(c.opts.Channel)
+		if err != nil {
+			return err
+		}
+		return c.w.WriteParts(h, ext, body)
+	}
+	h.PayloadOff = uint32(len(body))
+	return c.w.Write(h, body)
+}
+
 // Ping keeps the session alive. The camera times out a session it stops
 // hearing from, logging "session:%u login timeout", and the official NVR
 // heartbeats continuously.

@@ -255,3 +255,18 @@ func abilityXML(user string) ([]byte, error) {
 	b := abilityQueryBody{Version: "1.1", UserName: user, Token: abilityModules}
 	return marshalDoc(&b, "ability query")
 }
+
+// heartBeatBody is an empty element. The request carries no parameters; the
+// reply is what has content.
+type heartBeatBody struct {
+	XMLName   xml.Name `xml:"body"`
+	HeartBeat struct {
+		Version string `xml:"version,attr"`
+	} `xml:"HeartBeat"`
+}
+
+func heartBeatXML() ([]byte, error) {
+	var b heartBeatBody
+	b.HeartBeat.Version = "1.1"
+	return marshalDoc(&b, "heartbeat")
+}

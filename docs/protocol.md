@@ -94,7 +94,7 @@ Verified: three back-to-back connect/stream/close cycles with no delay all succe
 
 The camera times out a session it stops hearing from (its firmware logs
 `session:%u login timeout`), and the official NVR heartbeats continuously. A ping every
-10s is sufficient today; a proper `HeartBeat` is the next protocol job.
+10s is sufficient today, and remains what this project uses. See the heartbeat section.
 
 ## Two-way audio
 
@@ -169,3 +169,29 @@ every later attempt and never making a sound. Only the two with a speaker work r
 `talk` in GetAbility is present on all eight and is not the capability to test; the audio
 output cluster is (`alarmAudio`, `customAudio`, `supportAudioPlay`), and it names exactly
 the two that work.
+
+## HeartBeat, message 5, and why the ping stays
+
+The heartbeat is **message 5**. That id is not in the dissector's table and was recovered
+from camera firmware rather than a capture: `bc_module::heartbeat` in `libbase.so` sets up
+its send with the id in r2, and its failure path calls `rpc_msg_name(5)` to name the
+message it could not send. `rpc_msg_name` takes a message id, so 5 is one.
+
+It is not a bare ping. The request is an empty `<HeartBeat version="1.1"/>` element and the
+reply carries `size`, `sec`, `usec`, `overlapCount` and `delay`, so the camera returns its
+own clock and a count of requests that arrived while an earlier one was outstanding. That
+makes it a round trip and drift measurement, and `overlapCount` is the camera telling a
+client it is asking faster than the camera can answer.
+
+**Every camera here refuses it with status 421.** The shape is right: sent as a single
+body the camera parses it and answers 421, and sent as an extension plus a body it answers
+400, which is the malformed-request code. So 5 is recognised, the document is understood,
+and the camera is declining for some other reason. An active video stream on the same
+connection makes no difference, and no capability in the `Support` block mentions
+heartbeat.
+
+The firmware has both `HEART_BEAT_V20` and a `support_mod_heartbeat` capability, so the
+behaviour plainly varies by firmware, and these three models may simply not accept a
+heartbeat from an ordinary client. Whatever the reason, the 10 second ping has kept
+sessions alive across a fully cut over fleet for as long as this project has run, so it
+stays. The heartbeat is implemented and available; nothing depends on it.

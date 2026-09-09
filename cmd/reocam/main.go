@@ -26,6 +26,7 @@ func usage() {
   reocam -address CAM [-password PW] <command> [args]
 
 Commands:
+  heartbeat [N]          send N heartbeats and report the round trip
   support                what hardware this camera actually has
   abilities              what the logged in user may read and write
   get NAME               print one configuration block as the camera sends it
@@ -45,6 +46,7 @@ func main() {
 	pass := flag.String("password", "", "password")
 	withVideo := flag.String("with-video", "", "open this video stream first: main, sub or extern")
 	noConfig := flag.Bool("no-config", false, "skip TalkConfig and send audio into an existing session")
+	hb2 := flag.Bool("hb-twopart", false, "send the heartbeat as an extension plus a body")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -55,6 +57,8 @@ func main() {
 
 	// Long enough for a full sweep, which asks nearly thirty questions and
 	// waits out a timeout for each one a camera ignores.
+	baichuan.SetHeartBeatTwoPart(*hb2)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -71,6 +75,8 @@ func main() {
 	defer conn.Close()
 
 	switch flag.Arg(0) {
+	case "heartbeat":
+		err = heartbeat(conn, flag.Args()[1:], *withVideo)
 	case "support":
 		err = support(conn)
 	case "abilities":
@@ -428,6 +434,36 @@ func support(conn *baichuan.Conn) error {
 	fmt.Printf("rf alarm          %s\n", yes(v.RFVersion != 0))
 	fmt.Printf("disks             %d\n", v.DiskNum)
 	fmt.Printf("alarm in/out      %d/%d\n", v.IOInputPortNum, v.IOOutputPortNum)
+
+	ch, ok := s.Channel(0)
+	if !ok {
+		return nil
+	}
+	fmt.Printf("\nchannel 0\n")
+	// Several of these are bitmasks or versions rather than flags, so the
+	// value is printed as well as whether it is set.
+	for _, f := range []struct {
+		name string
+		v    int
+	}{
+		{"fisheye modes", ch.FishEye}, {"dual lens stitch", ch.BinoCfg},
+		{"battery", ch.Battery}, {"battery analysis", ch.BatAnalysis},
+		{"ptz control", ch.PTZControl}, {"ptz preset", ch.PTZPreset},
+		{"ptz patrol", ch.PTZPatrol}, {"ptz pattern", ch.PTZTattern},
+		{"auto pan/tilt", ch.AutoPT}, {"auto focus", ch.AutoFocus},
+		{"zoom/focus backlash", ch.ZFBacklash}, {"led control", ch.LEDCtrl},
+		{"isp", ch.ISPCfg}, {"isp (new)", ch.NewISPCfg}, {"osd", ch.OSDCfg},
+		{"encoder control", ch.EncCtrl}, {"motion", ch.Motion},
+		{"ai types", ch.AIType}, {"snapshot", ch.Snap}, {"video clip", ch.VideoClip},
+		{"timelapse", ch.Timelapse}, {"thumbnail", ch.Thumbnail},
+		{"rf alarm", ch.RFCfg}, {"audio version", ch.AudioVer},
+	} {
+		mark := " "
+		if f.v != 0 {
+			mark = "*"
+		}
+		fmt.Printf("  %s %-20s %d\n", mark, f.name, f.v)
+	}
 	return nil
 }
 
@@ -537,4 +573,67 @@ func stitch(addr, user, pass string, args []string) error {
 	}
 	fmt.Printf("distance %.1f, x %d, y %d\n", want.Distance, want.XMove, want.YMove)
 	return nil
+}
+
+// heartbeat measures the round trip and the camera's clock offset.
+func heartbeat(conn *baichuan.Conn, args []string, withVideo string) error {
+	if withVideo != "" {
+		kind := map[string]string{"main": baichuan.StreamMain, "sub": baichuan.StreamSub,
+			"extern": baichuan.StreamExtern}[withVideo]
+		if err := conn.StartVideo(kind); err != nil {
+			return err
+		}
+		time.Sleep(2 * time.Second)
+	}
+	n := 3
+	if len(args) == 1 {
+		var err error
+		if n, err = strconv.Atoi(args[0]); err != nil || n < 1 {
+			return fmt.Errorf("count must be a positive number")
+		}
+	}
+	for i := 0; i < n; i++ {
+		sent := time.Now()
+		if err := conn.HeartBeat(); err != nil {
+			return err
+		}
+		x, status, err := await(conn, baichuan.MsgIDHeartBeat)
+		if err != nil {
+			return err
+		}
+		rtt := time.Since(sent)
+		if len(x) == 0 {
+			return fmt.Errorf("camera answered status %d with no body; message 5 may not be the heartbeat on this model", status)
+		}
+		hb, err := baichuan.ParseHeartBeat(x)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("rtt %-8s camera clock %s  offset %s  overlap %d  delay %d\n",
+			rtt.Round(time.Microsecond), hb.CameraTime().Format("15:04:05.000"),
+			time.Since(hb.CameraTime()).Round(time.Millisecond), hb.OverlapCount, hb.Delay)
+		if i+1 < n {
+			time.Sleep(time.Second)
+		}
+	}
+	return nil
+}
+
+// await waits for the reply to a message id.
+func await(conn *baichuan.Conn, id uint32) ([]byte, int16, error) {
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case m, ok := <-conn.Messages():
+			if !ok {
+				return nil, 0, fmt.Errorf("connection closed")
+			}
+			if m.Header.MsgID != id {
+				continue
+			}
+			return m.XML, m.Header.Status(), nil
+		case <-deadline:
+			return nil, 0, fmt.Errorf("no reply to message %d", id)
+		}
+	}
 }

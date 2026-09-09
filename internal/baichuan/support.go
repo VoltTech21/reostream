@@ -44,7 +44,52 @@ type Support struct {
 		StorageMode     int    `xml:"storagemode"`
 		Reboot          int    `xml:"reboot"`
 		Upgrade         int    `xml:"upgrade"`
+
+		// Item carries the per channel capabilities, and it is where most of
+		// what distinguishes one model from another actually lives. The same
+		// element is reused for smart home integrations, which have a name
+		// and a version and no channel, so entries are told apart by whether
+		// they carry a chnID.
+		Item []SupportChannel `xml:"item"`
 	} `xml:"Support"`
+}
+
+// SupportChannel is one channel's capabilities.
+//
+// The values are not all booleans. Several are bitmasks or version numbers:
+// FishEye reads 3 on the fisheye here, AIType 3879, ISPCfg 195. Treat a
+// nonzero value as "present, in some form" and do not read the magnitude as
+// a count of anything without checking.
+type SupportChannel struct {
+	Name        string `xml:"name"`
+	ChannelID   *int   `xml:"chnID"`
+	PTZType     int    `xml:"ptzType"`
+	PTZControl  int    `xml:"ptzControl"`
+	PTZPreset   int    `xml:"ptzPreset"`
+	PTZPatrol   int    `xml:"ptzPatrol"`
+	PTZTattern  int    `xml:"ptzTattern"`
+	AutoPT      int    `xml:"autoPt"`
+	AutoFocus   int    `xml:"autoFocus"`
+	ZFBacklash  int    `xml:"zfBacklash"`
+	Battery     int    `xml:"battery"`
+	BatAnalysis int    `xml:"batAnalysis"`
+	NoAudio     int    `xml:"noAudio"`
+	AudioVer    int    `xml:"audioVersion"`
+	LEDCtrl     int    `xml:"ledCtrl"`
+	ISPCfg      int    `xml:"ispCfg"`
+	NewISPCfg   int    `xml:"newIspCfg"`
+	OSDCfg      int    `xml:"osdCfg"`
+	EncCtrl     int    `xml:"encCtrl"`
+	Motion      int    `xml:"motion"`
+	AIType      int    `xml:"aitype"`
+	Snap        int    `xml:"snap"`
+	VideoClip   int    `xml:"videoClip"`
+	Timelapse   int    `xml:"timelapse"`
+	Thumbnail   int    `xml:"thumbnail"`
+	DynamicReso int    `xml:"dynamicReso"`
+	RFCfg       int    `xml:"rfCfg"`
+	FishEye     int    `xml:"fishEye"`
+	BinoCfg     int    `xml:"binoCfg"`
 }
 
 // ParseSupport reads a Support reply.
@@ -65,6 +110,17 @@ func (s Support) CanTalk() bool { return s.Support.AudioTalk != 0 }
 
 // HasExternStream reports whether the camera serves the balanced stream.
 func (s Support) HasExternStream() bool { return s.Support.NoExternStream == 0 }
+
+// Channel returns the capabilities for one channel, or false if the camera
+// did not report it.
+func (s Support) Channel(id int) (SupportChannel, bool) {
+	for _, it := range s.Support.Item {
+		if it.ChannelID != nil && *it.ChannelID == id {
+			return it, true
+		}
+	}
+	return SupportChannel{}, false
+}
 
 // HasPTZ reports whether the camera has motors. ptzMode reads "none" on every
 // fixed camera here.
