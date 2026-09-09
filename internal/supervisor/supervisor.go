@@ -10,6 +10,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -222,6 +223,16 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 
 		if ran > s.backoffReset {
 			backoff = s.backoffStart
+		}
+
+		// The status endpoint carries last_error, but a stream that has been
+		// failing and reconnecting for an hour leaves nothing behind in the
+		// log to say when it started or how often: during the fleet cutover
+		// two streams sat at 19 restarts with an empty container log, which
+		// told an operator nothing about what to fix.
+		if err != nil {
+			log.Printf("reostream: %s: %v; reconnecting in %s",
+				hubName(e.cfg.Name, e.cfg.Stream), err, backoff)
 		}
 
 		select {

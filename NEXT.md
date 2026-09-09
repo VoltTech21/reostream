@@ -1,6 +1,6 @@
 # Where reostream is, and what is next
 
-Updated 2026-09-08.
+Updated 2026-09-09.
 
 ## State
 
@@ -9,7 +9,8 @@ supervises one connection per stream with backoff, carries audio, starts new sub
 keyframe, and reports health over `/api/status` and `/metrics`. See README for the measured
 numbers and `docs/measurements.md` for how they were taken.
 
-Production still runs the previous tool on all cameras. Nothing has been cut over.
+Production is fully cut over. All eight cameras and ten streams run through this daemon,
+the previous tool is gone from the recorder config, and no wrapper processes remain.
 
 ## What was found by pointing it at real cameras
 
@@ -26,6 +27,19 @@ Worth reading before adding features, because every one of these passed the unit
 - **Connected but silent streams never restarted.** The idle timeout watches bytes, and a
   camera holding a stale session still answers keepalives, so reads succeed while no video
   arrives. Fixed with a media watchdog distinct from the byte one.
+- **An extension header is not a packet boundary.** The rule was "a packet begins at a
+  message carrying an extension header". Six cameras agree, because they send one only on
+  the first message of a packet. The fisheye and the pano put an extension carrying
+  `checkPos` and `checkValue` on every continuation message, so every message looked like a
+  new packet and a 940 KB keyframe spanning hundreds of messages never completed. Both
+  cameras logged in, answered pings and moved 6 Mbps while delivering zero frames. The
+  boundary is `binaryData`.
+- **A packet is longer than its size field says.** Size counts the coded picture, not the
+  metadata before the first NAL start code, so a packet is hdr+prefix+size bytes. Trimming
+  the prefix on the way out looked like a fix and was not: the tail of every frame was
+  still being dropped as filler, which cost the fisheye the bottom eighth of every picture
+  and left the pano's HEVC with a residual decode error the earlier measurement recorded
+  and did not chase.
 
 Two documented assumptions also turned out to be wrong:
 
@@ -37,15 +51,12 @@ Two documented assumptions also turned out to be wrong:
 
 ## Next
 
-1. **Long soak.** Everything so far was measured in minutes to hours. The 71.6 minute camera
-   clock wrap has still never been crossed against a real camera.
-2. **Per camera cutover.** One motion only camera first, left overnight, before anything on
-   continuous recording moves. Rollback is the previous tool's source line, left commented in
-   the recorder config.
-3. **Battery cameras.** Never tested, and the biggest gap for anyone else: battery models are
+1. **Long soak on the full fleet.** The single camera soak ran 8h34m clean. Everything
+   measured since the cutover is minutes to hours across ten streams.
+2. **Battery cameras.** Never tested, and the biggest gap for anyone else: battery models are
    why most people used the previous tool, since they have no RTSP at all, and they sleep,
    wake on motion and send battery state messages this client has never seen.
-4. **Protocol phases.** `HeartBeat`, then `GopCfg`, then the fisheye and stitching work in
+3. **Protocol phases.** `HeartBeat`, then `GopCfg`, then the fisheye and stitching work in
    `docs/phase-d-e-groundwork.md`. That document has the field names already; what it lacks
    is the numeric message ids, which one capture of an NVR talking to a camera would give.
 

@@ -88,6 +88,16 @@ accepts direction operations and returns success on a camera with no motors, whi
 A test moving one direction repeatedly produced no visible change, most likely because the
 call needs the screen number to say which sub view to move. Unresolved.
 
+## The balanced stream
+
+Alongside `mainStream` and `subStream` the cameras answer `externStream`, the "balanced"
+stream the Reolink apps do not expose: roughly 896x512 H.264 at about 1 Mbps, with audio.
+It is a useful middle option on the six single lens cameras.
+
+The fisheye does not serve it. A request returns an empty video message and then the
+camera's ordinary post login config push, with no media following, which reads exactly
+like a held session and is not one.
+
 ## Pano stitching
 
 `GetStitch` and `SetStitch`, fields `distance`, `stitchXMove`, `stitchYMove`. The response
