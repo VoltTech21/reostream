@@ -49,6 +49,18 @@ Two documented assumptions also turned out to be wrong:
    `docs/phase-d-e-groundwork.md`. That document has the field names already; what it lacks
    is the numeric message ids, which one capture of an NVR talking to a camera would give.
 
+## Wanted, not started
+
+- **A read only status page.** `/api/status` and `/metrics` already carry everything; this is
+  rendering them. The question an operator actually asks is whether a camera is streaming
+  right now, and today that means reading JSON by hand. Cheap, no dependencies, fits the
+  project.
+- **A camera control surface**, separate from this daemon. `docs/camera-capabilities.md`
+  records what the cameras expose and it is a lot: full ISP control, IR and LED, on camera AI
+  with per type sensitivity, webhooks, a floodlight on one camera, fisheye view modes and
+  pano stitching. None of it is used today. It does not belong inside reostream, whose value
+  is a small surface and a short list of non goals, but it is worth having.
+
 ## Open items
 
 - `cmd/reostream` is at 15% coverage. The shutdown ordering is tested; flag parsing is not.
