@@ -17,17 +17,26 @@ import (
 // ready and, once a reader is attached, produces RTP.
 func feed(t *testing.T, s *Stream, frames []baichuan.Frame, n int) {
 	t.Helper()
-	sent := 0
-	for _, f := range frames {
-		if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
-			continue
+	for i, f := range frames {
+		if i >= n {
+			return
 		}
 		s.Frame(f)
-		sent++
-		if sent >= n {
+	}
+}
+
+// feedUntilReady runs frames through until the stream can describe itself.
+// That takes more than one keyframe: the description is fixed at
+// initialisation, so the stream waits to see whether audio turns up.
+func feedUntilReady(t *testing.T, s *Stream, frames []baichuan.Frame) {
+	t.Helper()
+	for _, f := range frames {
+		s.Frame(f)
+		if s.Ready() {
 			return
 		}
 	}
+	t.Fatal("stream never became ready from the fixture")
 }
 
 // playAndExpectRTP drives a client through the full sequence and waits for a
@@ -73,7 +82,7 @@ func playAndExpectRTP(t *testing.T, c *gortsplib.Client, addr, path string, s *S
 	go func() {
 		defer close(done)
 		for i := 0; i < 40; i++ {
-			feed(t, s, frames, 4)
+			feed(t, s, frames, len(frames))
 			time.Sleep(20 * time.Millisecond)
 			select {
 			case <-done:
@@ -111,10 +120,7 @@ func TestClientCanPlayOverTCP(t *testing.T) {
 	srv, st := serverWithStream(t, "cam_main")
 
 	// Bring the stream ready so DESCRIBE has parameter sets to offer.
-	feed(t, st, frames, 1)
-	if !st.Ready() {
-		t.Fatal("stream did not become ready from a real keyframe")
-	}
+	feedUntilReady(t, st, frames)
 
 	tr := gortsplib.ProtocolTCP
 	playAndExpectRTP(t, &gortsplib.Client{Protocol: &tr}, srv.Addr(), "cam_main", st, frames)
@@ -148,10 +154,7 @@ func TestClientCanPlayOverUDP(t *testing.T) {
 	frames := captureFrames(t)
 	srv, st := serverWithStream(t, "cam_main")
 
-	feed(t, st, frames, 8)
-	if !st.Ready() {
-		t.Fatal("stream did not become ready")
-	}
+	feedUntilReady(t, st, frames)
 
 	tr := gortsplib.ProtocolUDP
 	playAndExpectRTP(t, &gortsplib.Client{Protocol: &tr}, srv.Addr(), "cam_main", st, frames)
