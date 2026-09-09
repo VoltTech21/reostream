@@ -385,6 +385,29 @@ func (c *Conn) Abilities() error {
 	return c.w.Write(h, body)
 }
 
+// GetConfig asks the camera for one configuration block and returns nothing;
+// the reply arrives on Messages carrying the same message id, with the XML in
+// Message.XML.
+//
+// Most read requests share one shape: an extension naming the channel and
+// nothing else. That covers the LED state, the encoder settings, the ISP
+// settings, the record schedule and the rest, so they need one implementation
+// rather than one each. A message that wants more than a channel is not this,
+// and needs its own method.
+func (c *Conn) GetConfig(msgID uint32) error {
+	body, err := channelXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:      msgID,
+		Class:      ClassModern24,
+		EncOffset:  EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+		PayloadOff: uint32(len(body)),
+	}
+	return c.w.Write(h, body)
+}
+
 // Ping keeps the session alive. The camera times out a session it stops
 // hearing from, logging "session:%u login timeout", and the official NVR
 // heartbeats continuously.

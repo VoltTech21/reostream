@@ -264,9 +264,9 @@ The lens group is the only one worth a second purchase, and only if the zoom and
 surface is ever implemented here. Most of the rest are settings this firmware generation
 appears not to carry at all, so chasing them may be chasing nothing.
 
-## Two ability lists, and what each is actually for
+## Three capability lists, and only one worth trusting
 
-There are two, they are not the same question, and neither answers it fully.
+There are three, they answer different questions, and two of them will mislead you.
 
 **`GetAbility` over HTTP** returns around 190 entries with a permit per entry, and it does
 vary by model: it is what says the fisheye has `supportFishEyeCfg` and the pano has
@@ -282,3 +282,24 @@ It answers "may this user change the LED state", not "does this camera have a sp
 
 So `AbilityInfo` cannot be used to decide whether a feature exists. Its value is the
 read/write split, which is real and which the HTTP list does not give.
+
+**`Support`, Baichuan message 199, is the one to trust.** It is the camera describing its
+own hardware in plain counts and flags, and on this fleet it is right about everything that
+was established the slow way:
+
+| field | fisheye | pano | the other six | what it predicts |
+|---|---|---|---|---|
+| `audioTalk` | 1 | 1 | 0 | exactly the two cameras that make a sound |
+| `audioAlarm` | 1 | 1 | 0 | the same two |
+| `noExternStream` | 1 | 0 | 0 | exactly the one camera with no balanced stream |
+| `ptzMode` | none | none | none | no motors anywhere |
+| `IOInputPortNum` / `IOOutputPortNum` | 0/0 | 0/0 | 0/0 | no alarm terminals |
+| `wifi`, `gps`, `diskNum`, `B485`, `rfVersion` | 0 | 0 | 0 | none of it present |
+
+Two of those rows are findings that each cost an afternoon. That the fisheye does not serve
+the balanced stream was discovered by probing every camera and watching one return an empty
+video message; `noExternStream` says so outright. That six cameras cannot talk was
+discovered by opening a session on each and wedging it; `audioTalk` says so outright.
+
+`reocam talk` now reads this block before opening a session, so a camera with no speaker
+gets a clear refusal instead of losing the feature until it reboots.

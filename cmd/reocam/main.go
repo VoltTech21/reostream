@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/adpcm"
@@ -23,7 +24,10 @@ func usage() {
   reocam -address CAM [-password PW] <command> [args]
 
 Commands:
-  abilities              list what this camera can do and what is writable
+  support                what hardware this camera actually has
+  abilities              what the logged in user may read and write
+  get NAME               print one configuration block as the camera sends it
+  get all                try every known block and report which the camera has
   snap [main|sub] FILE   save a still image
   talk FILE              play raw 16 bit mono PCM through the camera speaker
   talkinfo               report the two-way audio formats the camera accepts`)
@@ -43,9 +47,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Long enough for a full sweep, which asks nearly thirty questions and
+	// waits out a timeout for each one a camera ignores.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	conn, err := baichuan.Dial(ctx, *addr, baichuan.Options{Username: *user, Password: *pass})
+
+	// Some messages make a camera hang up rather than answer, so a sweep has
+	// to be able to start a fresh connection partway through.
+	dial := func() (*baichuan.Conn, error) {
+		return baichuan.Dial(ctx, *addr, baichuan.Options{Username: *user, Password: *pass})
+	}
+	conn, err := dial()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "reocam:", err)
 		os.Exit(1)
@@ -53,8 +65,12 @@ func main() {
 	defer conn.Close()
 
 	switch flag.Arg(0) {
+	case "support":
+		err = support(conn)
 	case "abilities":
 		err = abilities(conn)
+	case "get":
+		err = get(conn, dial, flag.Args()[1:])
 	case "snap":
 		err = snap(conn, flag.Args()[1:])
 	case "talkinfo":
@@ -168,6 +184,19 @@ func talk(conn *baichuan.Conn, args []string, withVideo string, noConfig bool) e
 	if format.AudioType != "adpcm" {
 		return fmt.Errorf("this camera wants %q, which is not implemented", format.AudioType)
 	}
+	// Refuse before opening a session rather than after. A camera with no
+	// speaker accepts the configuration, answers 200, plays nothing, and then
+	// refuses every later session until it reboots, so getting this wrong
+	// costs the feature rather than just the attempt.
+	if !noConfig {
+		sup, err := fetchSupport(conn)
+		if err != nil {
+			return fmt.Errorf("could not check whether this camera has a speaker: %w", err)
+		}
+		if !sup.CanTalk() {
+			return fmt.Errorf("this camera has no speaker (Support reports audioTalk 0)")
+		}
+	}
 	if withVideo != "" {
 		kind := map[string]string{"main": baichuan.StreamMain, "sub": baichuan.StreamSub,
 			"extern": baichuan.StreamExtern}[withVideo]
@@ -274,4 +303,120 @@ func abilities(conn *baichuan.Conn) error {
 			return fmt.Errorf("no ability reply")
 		}
 	}
+}
+
+// get prints a configuration block, or sweeps every known one.
+//
+// A camera answers 405 for a message it does not implement, so the sweep is
+// also the cheapest survey of what a model supports, and unlike the ability
+// lists it reports what the camera will actually do rather than what it
+// claims.
+func get(conn *baichuan.Conn, dial func() (*baichuan.Conn, error), args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: get NAME|all\n  names: %s", strings.Join(baichuan.ConfigNames(), " "))
+	}
+	if args[0] != "all" {
+		id, ok := baichuan.ConfigMessages[args[0]]
+		if !ok {
+			return fmt.Errorf("unknown block %q\n  names: %s", args[0], strings.Join(baichuan.ConfigNames(), " "))
+		}
+		xml, status, err := fetch(conn, id)
+		if err != nil {
+			return err
+		}
+		if status != 200 && status != 0 {
+			return fmt.Errorf("camera answered status %d", status)
+		}
+		fmt.Printf("%s\n", xml)
+		return nil
+	}
+
+	var hangups []string
+	for _, name := range baichuan.ConfigNames() {
+		id := baichuan.ConfigMessages[name]
+		xml, status, err := fetch(conn, id)
+		switch {
+		case err != nil:
+			// A camera that hangs up on a request has still told us
+			// something, and the rest of the sweep is worth having, so
+			// reconnect and carry on rather than stopping here.
+			fmt.Printf("%-14s %-4d %v, reconnecting\n", name, id, err)
+			hangups = append(hangups, name)
+			conn.Close()
+			if conn, err = dial(); err != nil {
+				return fmt.Errorf("could not reconnect after %s: %w", name, err)
+			}
+		case len(xml) > 0:
+			fmt.Printf("%-14s %-4d supported, %d bytes\n", name, id, len(xml))
+		default:
+			fmt.Printf("%-14s %-4d status %d\n", name, id, status)
+		}
+	}
+	if len(hangups) > 0 {
+		fmt.Printf("\nthe camera hung up on: %s\n", strings.Join(hangups, " "))
+	}
+	return nil
+}
+
+// fetch sends one config request and waits for the matching reply.
+func fetch(conn *baichuan.Conn, id uint32) (xml []byte, status int16, err error) {
+	if err := conn.GetConfig(id); err != nil {
+		return nil, 0, err
+	}
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case m, ok := <-conn.Messages():
+			if !ok {
+				return nil, 0, fmt.Errorf("connection closed")
+			}
+			// A ping reply, or anything else in flight, is not the answer.
+			if m.Header.MsgID != id {
+				continue
+			}
+			return m.XML, m.Header.Status(), nil
+		case <-deadline:
+			return nil, 0, fmt.Errorf("no reply")
+		}
+	}
+}
+
+// fetchSupport reads the camera's hardware description.
+func fetchSupport(conn *baichuan.Conn) (baichuan.Support, error) {
+	x, status, err := fetch(conn, baichuan.ConfigMessages["support"])
+	if err != nil {
+		return baichuan.Support{}, err
+	}
+	if len(x) == 0 {
+		return baichuan.Support{}, fmt.Errorf("camera answered status %d", status)
+	}
+	return baichuan.ParseSupport(x)
+}
+
+// support prints what the camera says its hardware is.
+func support(conn *baichuan.Conn) error {
+	s, err := fetchSupport(conn)
+	if err != nil {
+		return err
+	}
+	v := s.Support
+	yes := func(b bool) string {
+		if b {
+			return "yes"
+		}
+		return "no"
+	}
+	fmt.Printf("channels          %d\n", v.ChannelNum)
+	fmt.Printf("speaker (talk)    %s\n", yes(s.CanTalk()))
+	fmt.Printf("audio alarm       %s\n", yes(v.AudioAlarm != 0))
+	fmt.Printf("balanced stream   %s\n", yes(s.HasExternStream()))
+	fmt.Printf("ptz               %s (mode %q)\n", yes(s.HasPTZ()), v.PTZMode)
+	fmt.Printf("wifi              %s\n", yes(v.WiFi != 0))
+	fmt.Printf("gps               %s\n", yes(v.GPS != 0))
+	fmt.Printf("power saving      %s\n", yes(v.PowerSavingCfg != 0))
+	fmt.Printf("rs485             %s\n", yes(v.B485 != 0))
+	fmt.Printf("rf alarm          %s\n", yes(v.RFVersion != 0))
+	fmt.Printf("disks             %d\n", v.DiskNum)
+	fmt.Printf("alarm in/out      %d/%d\n", v.IOInputPortNum, v.IOOutputPortNum)
+	return nil
 }
