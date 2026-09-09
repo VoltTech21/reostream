@@ -62,6 +62,12 @@ and the substream is too small to be worth looking at.
 | `GET /api/status` | per-camera JSON: connected, fps, bitrate, keyframe age, clients, reconnects |
 | `GET /metrics` | the same in Prometheus format |
 
+`extern` is `externStream` on the wire, 896x512 H.264 at roughly 1 Mbps. It is not
+documented by Reolink and Neolink never implemented it. It sits between the 4K main
+stream and the sub thumbnail, and being H.264 rather than HEVC it avoids the browser
+codec problem that main runs into. See docs/measurements.md for the four-camera
+measurement.
+
 ## Configuration
 
 ```toml
@@ -99,10 +105,48 @@ WebRTC and browsers cannot play HEVC over WebRTC. Detect and record do not go th
 
 ## Status
 
-Working: the protocol client, tested against captures and live cameras.
+The daemon runs from a TOML config file, one `[[camera]]` block per camera, with
+`$ENVVAR` password references and unknown keys rejected at startup rather than ignored.
+Each stream is one supervised goroutine: backoff starts at 1s, doubles up to a 15s
+ceiling, and resets once a connection has stayed up for more than a minute, so a flaky
+camera does not carry a long backoff into an unrelated later failure. A restart never
+overlaps the connection it is replacing. Audio is carried on its own PID with the same
+clock as video. A slow client is disconnected rather than buffered; verified against a
+live camera on a 280 kbps stream, dropped at about 65 seconds with memory flat
+throughout.
 
-In progress: the daemon. See `docs/design/` for the design and `docs/protocol.md` for what
-the wire actually does, which differs from the published documentation in several places.
+Measured against a live 8 camera fleet: 16 streams, 40.2 Mbps, about 14% of one CPU
+core, 16 MB resident. A live 4K HEVC main stream gave 1498 frames in 60.04 seconds,
+24.95 fps against a 25 fps camera, zero decode errors. See docs/measurements.md for the
+full numbers.
+
+Not yet done, and worth being direct about:
+
+- It has run for hours at a time, not weeks. No long soak has completed.
+- Tested against one fleet: four camera models, one firmware generation. Nobody else's
+  cameras have been tried.
+- **Battery cameras have never been tested.** This is the biggest gap on this list.
+  Battery models are the main reason most people reached for Neolink in the first
+  place, since they have no RTSP server at all, and they behave differently from wired
+  cameras: they sleep, wake on motion, and send battery-state messages the protocol
+  client has never seen.
+- No Docker image is published yet, though a Dockerfile now exists; see Deployment
+  below.
+
+See `docs/design/` for the design and `docs/protocol.md` for what the wire actually
+does, which differs from the published documentation in several places.
+
+## Deployment
+
+A multi-stage `Dockerfile` builds a static binary and runs it from a minimal base image
+as a non-root user; see `docker-compose.yml` for an example that mounts the config file
+and passes a password through the environment. Neither the config nor any credential is
+baked into the image.
+
+For a plain Linux host, `contrib/reostream.service` is a systemd unit. Read the comment
+on `KillSignal` and `TimeoutStopSec` before changing either: a shutdown that does not
+give the daemon time to send its stream-stop messages leaves every camera in the fleet
+refusing new connections for minutes.
 
 ## Licence
 
