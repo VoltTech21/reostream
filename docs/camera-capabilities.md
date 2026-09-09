@@ -132,8 +132,11 @@ the previous tool.
 
 **A wireless camera**: `wifi`, `supportWiFiFreqPolicy`, `3g`.
 
-**A camera with local storage**: `disk`. No camera here has an SD card slot that reports,
-so on-camera recording and playback are entirely untested.
+**A microSD card**, not a camera: `disk`. These cameras have slots, they are just empty
+because an NVR does the recording. `GetHddInfo` is the tell: it answers `code 0` with an
+empty `HddInfo` list, which is a supported command reporting no media, not a refusal. An
+unsupported command looks like `GetRec` does here, `"detail": "not support", "rspCode": -9`.
+So on-camera storage is one card away from being testable, with no new hardware.
 
 **A camera with alarm terminals**: `alarmIoIn`, `alarmIoOut`, `alarmRf`.
 
