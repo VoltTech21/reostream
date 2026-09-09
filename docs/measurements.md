@@ -287,3 +287,30 @@ each stream, after both fixes:
 What is left is join noise: a client attaching mid GOP. Ten of ten streams, zero restarts,
 zero dropped consumers, and all eight recorder cameras at their configured 5 fps with no
 skipped frames.
+
+## Every stream, 2026-09-09
+
+Extended from ten streams to twenty-three: main, sub and balanced on all eight cameras,
+except the fisheye, which does not serve the balanced stream. The recorder now has no
+direct camera connection of any kind; its detect substreams, which had stayed on RTSP
+through the first cutover, moved at the same time.
+
+| | value |
+|---|---|
+| streams | 23 of 23, zero restarts |
+| aggregate | 75.2 Mbps |
+| reostream CPU | 53% of one core |
+| reostream RSS | 37 MB |
+| recorder cameras | 8 of 8 at their configured 5 fps, zero skipped |
+
+Cost per stream is roughly flat: ten streams at 60 Mbps took 48% of a core and 28 MB, and
+twenty-three at 75 Mbps take 53% and 37 MB. The work is per byte, not per connection.
+
+The balanced stream is exposed as a third live-view tier rather than as a replacement for
+the full resolution H.264 transcode. At 896x512 it is not a substitute for that; it is a
+cheaper option beside it, and it costs no GPU at all because the camera encodes it.
+
+One thing this makes visible: reostream opens every configured stream at startup and holds
+it whether or not anything is consuming it. For a main stream feeding a recorder that is
+correct. For a balanced stream nobody is watching it is about 13 Mbps of pointless traffic
+across seven cameras. An on-demand mode is worth having and does not exist.
