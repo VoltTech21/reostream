@@ -114,9 +114,17 @@ func (d *Depacketiser) Filler() int { return d.filler }
 
 // maxFramePrefix bounds the search for the first NAL start code in a media
 // packet. The camera metadata that precedes it has been measured at 80, 104,
-// 112, 152, 176 and 184 bytes across the fleet; 256 leaves room without
-// letting a corrupt packet scan into the picture data looking for a match.
-const maxFramePrefix = 256
+// 112, 144, 152, 176, 184, 328 and 352 bytes across the fleet, and it varies
+// frame to frame on the same stream, so this is not a length to guess at:
+// a bound of 256 looked generous against the fisheye and then cut every
+// frame whose prefix ran past it on the pano's substream, which is the same
+// dropped-tail corruption this search exists to prevent.
+//
+// The cap is here only so a packet with a corrupt header cannot scan an
+// entire picture looking for a byte pattern that will eventually appear by
+// chance. 4096 is an order of magnitude above anything observed and still
+// a small fraction of any real frame.
+const maxFramePrefix = 4096
 
 func match(b, magic []byte) bool {
 	return len(b) >= 4 && b[0] == magic[0] && b[1] == magic[1] &&

@@ -59,8 +59,10 @@ encrypted, the rest is plaintext. Decrypting them turns random-looking bytes int
 `00dcH264` / `05wb` magics.
 
 **A frame's size field does not count the metadata prefix.** Between a packet header and
-the first NAL start code sit 80 to 184 bytes of camera metadata, varying per frame, so a
-packet occupies `hdr + prefix + size` bytes. Most cameras here send no prefix on H.264
+the first NAL start code sit 80 to 352 bytes of camera metadata, varying frame to frame on
+the same stream, so a packet occupies `hdr + prefix + size` bytes. Do not assume a bound:
+a search capped at 256 bytes covered the fisheye and then cut every longer-prefixed frame
+on the pano's substream, reintroducing the same corruption on one stream out of ten. Most cameras here send no prefix on H.264
 and the two lengths agree, which is why the difference stayed hidden; the pano's HEVC and
 the fisheye's H.264 both carry one.
 
