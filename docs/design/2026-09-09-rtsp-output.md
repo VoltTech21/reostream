@@ -106,10 +106,18 @@ Integration: the fake camera driving a real `gortsplib` client through
 SETUP and PLAY, and a teardown that leaves no session behind.
 
 Live, and this is the gate that matters: ffprobe and VLC against a real camera,
-then the pano specifically. The pano is the camera whose own RTSP server
-produced 147 bad segments out of 178, so HEVC over RTSP is where this is most
-likely to fail. A decode error count is a measurement, not a judgement, and it
-decides whether this ships.
+then the pano specifically.
+
+Not because its own RTSP server was bad. That measurement, 147 bad segments of
+178 in docs/measurements.md, is about the camera as a source and says nothing
+about serving RTSP outward. Different software, opposite direction. The reason
+to gate on the pano is its frames: HEVC, the largest keyframes in the fleet at
+around 940 KB spanning hundreds of messages, and the extension header on every
+continuation message that already broke packet framing once. If RTP
+packetisation has a problem anywhere, it has it there.
+
+A decode error count is a measurement, not a judgement, and it decides whether
+this ships.
 
 ## Rollout
 
