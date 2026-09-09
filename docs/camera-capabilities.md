@@ -100,13 +100,60 @@ like a held session and is not one.
 
 ## Pano stitching
 
-`GetStitch` and `SetStitch`, fields `distance`, `stitchXMove`, `stitchYMove`. The response
-carries the current value, the factory default and the valid range together, which is
-everything needed to adjust it without guessing at bounds. Measured on the pano here:
-distance 10.0 against a default of 8.0, and x and y moved to 3 and 4, so it has been
-adjusted from factory at some point.
+`GetStitch` and `SetStitch`, fields `distance`, `stitchXMove`, `stitchYMove`. Sending
+`action: 1` returns the current value, the factory default and the valid range together,
+which is everything needed to adjust it without guessing at bounds.
 
-Unlike the fisheye mode change, this is a numeric nudge and does not reboot the camera.
+Measured on the pano here:
+
+| field | type | range | default | current |
+|---|---|---|---|---|
+| `distance` | float | 2.0 to 20.0 | 8.0 | 8.0 |
+| `stitchXMove` | int | -100 to 100 | 0 | 0 |
+| `stitchYMove` | int | -100 to 100 | 0 | 0 |
+
+An earlier note here recorded distance 10.0 with x and y at 3 and 4, and concluded the
+camera had been adjusted from factory. Re-measured, everything reads factory default. The
+discrepancy is unexplained and the earlier reading should not be trusted.
+
+**`distance` is not a third offset.** Three separate pieces of evidence say so:
+
+- The firmware has a dedicated type for it, `net_distance_t`, with its own parser,
+  `get_distance_from_xmlnode(net_distance_t*, TiXmlNode*, const char*)`. The two moves have
+  no such type; they are plain integers.
+- The functions that handle this configuration are named for two things, not one:
+  `nets_stitch_and_dc_x2s`, `nets_stitch_and_dc_v3_s2x`, and the stored blobs
+  `StitchAndDc`, `StitchV2Dc`, `StitchV3Dc`. Stitching is consistently paired with a
+  second concern abbreviated Dc.
+- The ranges say it outright. `distance` is a float from 2 to 20 defaulting to 8, which is
+  the shape of a physical measurement. The two moves are integers symmetric about a zero
+  default, which is the shape of an offset.
+
+The reason a stitched dual lens camera needs a distance at all is parallax. The two lenses
+sit a few centimetres apart, so in the region where their fields of view overlap, an object
+appears in a different place in each image, and by how much depends on how far away it is.
+Near objects shift a lot between the two views, distant objects barely at all. That means no
+single alignment is correct for the whole scene: a seam can only be made to disappear at one
+depth. `distance` chooses that depth. Set it to roughly how far away the things you care
+about at the seam are, and they line up; objects much nearer than that duplicate across the
+seam, objects much further get clipped out of it.
+
+`stitchXMove` and `stitchYMove` are a fixed nudge of one image against the other, applied on
+top, and they correct something else entirely: mechanical tolerance in how the two lens
+modules are mounted. That error is the same no matter what the camera is looking at, which
+is exactly why it is a constant rather than a function of depth.
+
+So the two controls fix two different errors. If the seam is misaligned the same way
+everywhere in the frame regardless of subject, that is X and Y. If it lines up for things at
+one depth and splits or doubles for things at another, that is `distance`.
+
+Unlike the fisheye mode change, none of these reboot the camera.
+
+**Confidence.** The ranges and the type are measured. Reading Dc as distance correction is
+inference from naming, not proof; the strings never expand it. The parallax explanation
+follows from the geometry of any two lens stitch and from `distance` being a physical
+quantity in the first place, but it has not been confirmed by changing the value and
+watching the image, which is the obvious next test and needs someone at the camera.
 
 ## What this fleet cannot exercise
 
