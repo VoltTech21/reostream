@@ -117,3 +117,30 @@ fleet was held by the tool being replaced, and a camera permits only one connect
 stream, so there was no free HEVC stream to measure. This is worth closing during the
 per camera migration, when a camera moves across permanently and the measurement costs
 nothing.
+
+## The remote HEVC degradation question, answered 2026-09-08
+
+An open question carried for weeks: the panoramic camera decoded cleanly on the server but
+showed 9 to 27 bitstream errors per 15 seconds when played on a laptop across the network.
+The leading theory was that the restreamer's H.265 RTP packetisation corrupted it in transit,
+which would have been an argument for serving MPEG-TS over HTTP instead.
+
+Measured again from the same laptop, same camera, same transport, after the camera had been
+migrated from its own RTSP server to the Baichuan path:
+
+| sample | window | bitstream errors |
+|---|---|---|
+| 1 | 15s | 0 |
+| 2 | 15s | 0 |
+| 3 | 15s | 0 |
+| 4 | 15s | 0 |
+| longer run | 30s | 0, 584 frames, 20.03 fps against a configured 20 |
+
+**The theory was wrong.** The restreamer's packetisation was never the cause. The remote
+degradation had the same origin as the local degradation, the camera's own RTSP server, and
+migrating the source to Baichuan fixed both at once. There was never a second problem.
+
+Worth recording because a negative result here is as useful as a positive one: it removes a
+reason to prefer HTTP-TS that turned out not to exist. The reasons that remain, no session
+pool, no per-consumer queues, no orphaned connections holding a camera's session, are all
+about the daemon's own failure modes rather than about the wire format.
