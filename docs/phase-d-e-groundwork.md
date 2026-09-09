@@ -1,5 +1,16 @@
 # Groundwork for pano stitching and fisheye control
 
+> **Superseded in part.** This document concluded that the numeric message ids were not
+> recoverable from firmware and that only a packet capture would give them. That was
+> wrong, and the section below saying so is kept rather than deleted because the reason
+> it was wrong is instructive: the search was for parameter strings referenced from a
+> table, and the ids live in a dispatch table keyed the other way round, by id, with the
+> name inline. 246 ids were recovered statically. `fishEyeCfg` is 443/444,
+> `fishEyeSubChnCtrl` is 541, `BinoStitch` is 417/418, and the Baichuan heartbeat is 0,
+> not the 5 recorded here. See `docs/control.md`.
+>
+> The field names below are still good, and still not a specification.
+
 Notes from reading the NVR firmware, 2026-09-08. Nothing here is implemented yet, and
 nothing here should be implemented from this document alone: these are names to look for on
 the wire, not a specification. The wire is the specification. See CONTRIBUTING for why that
@@ -183,18 +194,25 @@ latency, and this is the setting that turns that from inherited to chosen.
 
 ## What is still missing for all four phases
 
-**The numeric message ids.** Baichuan gives each parameter its own id and uses the parameter
-name as the XML root, so knowing the root element and every child field still leaves the
-message unsendable. None of the ids for `HeartBeat`, `GopCfg`, `fishEyeCfg`,
-`fishEyeSubChnCtrl` or `BinoStitch` appear in the Wireshark dissector, which names 121 of
-them, and they are not recoverable from the firmware by the techniques used here: the
-parameter strings are not referenced by absolute address in any table, and the code that
-sends them does not reference the literal in a pattern the reference finder can follow.
+**The numeric message ids.** ~~Not recoverable from the firmware by the techniques used
+here.~~ They were, and the paragraph that said otherwise is left below in strikethrough
+because the mistake is worth keeping.
 
-One capture settles all five at once. The NVR is the right source because its camera facing
-client sends every one of these, over the same protocol and port, so a `tcpdump` of the NVR
-talking to a camera while the fisheye or stitching settings are touched gives the ids
-directly. That is the same method that produced `docs/protocol.md`.
+The search looked for the parameter strings and asked what referenced them. Nothing did,
+in any followable pattern, and that was read as "the ids are not in here". The dispatch
+table is keyed the other way round: a record per message, id first, with the name as an
+inline 32 byte field rather than a pointer to the string pool. Searching for the strings
+could never find it. Anchoring on a known record and walking the stride does, and gives
+all of them at once.
+
+~~None of the ids for `HeartBeat`, `GopCfg`, `fishEyeCfg`, `fishEyeSubChnCtrl` or
+`BinoStitch` appear in the Wireshark dissector, which names 121 of them, and they are not
+recoverable from the firmware by the techniques used here. One capture settles all five at
+once.~~
+
+A capture is still the only source for the XML *schemas*, which no dispatch table
+contains. But the schema for any message with a matching read comes from the camera
+itself: read the document, change a field, send it back.
 
 ## Suggested order
 
@@ -275,8 +293,13 @@ than failing obscurely.
 
 Implementing these over Baichuan is now optional rather than necessary, and the case for
 doing it is narrower: a camera whose HTTP API is disabled or unreachable, or wanting one
-transport for everything. The message ids are still unknown and still need a capture, but
-nothing is blocked on them.
+transport for everything.
+
+The ids are no longer the obstacle: `fishEyeCfg` is 443/444, `fishEyeSubChnCtrl` is 541,
+`BinoStitch` is 417/418. The obstacle turned out to be that this firmware serves these
+over CGI regardless. The floodlight is the proven case: message 288 takes the right
+element name, answers 200, and does nothing observable. Expect the same here and test the
+effect rather than the reply.
 
 `expandAbility`, which appears in the firmware's fisheye serialiser, is not in the HTTP
 response. So the HTTP surface is not necessarily the whole parameter, and Baichuan may

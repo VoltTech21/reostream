@@ -170,28 +170,42 @@ every later attempt and never making a sound. Only the two with a speaker work r
 output cluster is (`alarmAudio`, `customAudio`, `supportAudioPlay`), and it names exactly
 the two that work.
 
-## HeartBeat, message 5, and why the ping stays
+## The heartbeat, message 5, and a wrong id that survived a plausible story
 
-The heartbeat is **message 5**. That id is not in the dissector's table and was recovered
-from camera firmware rather than a capture: `bc_module::heartbeat` in `libbase.so` sets up
-its send with the id in r2, and its failure path calls `rpc_msg_name(5)` to name the
-message it could not send. `rpc_msg_name` takes a message id, so 5 is one.
+**Message 5 is `replay start`. The Baichuan heartbeat is message 0.** Both come from the
+dispatch table in the NVR's camera-facing client, which lists 183 ids by name; the
+HomeHub Pro's client lists 240. See `docs/control.md`.
 
-It is not a bare ping. The request is an empty `<HeartBeat version="1.1"/>` element and the
-reply carries `size`, `sec`, `usec`, `overlapCount` and `delay`, so the camera returns its
-own clock and a count of requests that arrived while an earlier one was outstanding. That
-makes it a round trip and drift measurement, and `overlapCount` is the camera telling a
-client it is asking faster than the camera can answer.
+This section previously asserted that the heartbeat was message 5, and it is worth
+keeping the correction rather than quietly editing the number, because the wrong answer
+was reached carefully and still held for days.
 
-**Every camera here refuses it with status 421.** The shape is right: sent as a single
-body the camera parses it and answers 421, and sent as an extension plus a body it answers
-400, which is the malformed-request code. So 5 is recognised, the document is understood,
-and the camera is declining for some other reason. An active video stream on the same
-connection makes no difference, and no capability in the `Support` block mentions
-heartbeat.
+The reasoning was: `bc_module::heartbeat` in `libbase.so` sets up its send with an id in
+r2, and its failure path calls `rpc_msg_name(5)` to name the message it could not send.
+`rpc_msg_name` takes a message id, so 5 is a message id. Every step of that is true.
 
-The firmware has both `HEART_BEAT_V20` and a `support_mod_heartbeat` capability, so the
-behaviour plainly varies by firmware, and these three models may simply not accept a
-heartbeat from an ordinary client. Whatever the reason, the 10 second ping has kept
-sessions alive across a fully cut over fleet for as long as this project has run, so it
-stays. The heartbeat is implemented and available; nothing depends on it.
+The error is that there are **two numbering schemes in the same binaries**, and
+`rpc_msg_name` reads the wrong one for this purpose. Alongside the Baichuan dispatch
+table there are 724 `MSG_*` strings belonging to the device's internal IPC bus. Index 5
+of that pool is `MSG_APP_HB` — an application heartbeat, on a message bus that never
+reaches the wire. The name matched, so the id looked confirmed.
+
+That also explains the symptom this section documented and could not account for.
+
+**Every camera answered 421.** They were being asked to begin playback of recorded video
+on a connection with no replay session, and declining. Not a heartbeat they would not
+serve — a different message entirely. The observation that the document was understood
+and the camera was "declining for some other reason" was right; the other reason was that
+the document had nothing to do with the id it was sent under.
+
+The shape observations still stand and are now easier to read: as a single body it
+answers 421, as an extension plus a body it answers 400. A configuration *write* is the
+other way round, single section 421 and two sections accepted, so framing is per message
+and cannot be generalised from one.
+
+The `HeartBeat` document itself was read out of the firmware and is probably accurate: an
+empty `<HeartBeat version="1.1"/>` request, with a reply carrying `size`, `sec`, `usec`,
+`overlapCount` and `delay`. It has never been sent under an id that would accept it.
+
+The 10 second ping has kept sessions alive across a fully cut over fleet for as long as
+this project has run, and it stays. Nothing depends on the heartbeat.
