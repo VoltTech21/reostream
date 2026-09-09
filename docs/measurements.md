@@ -226,3 +226,64 @@ Recorded segments verified against segments the previous tool wrote for the same
 the same hour: identical, 250 frames in 10.068 seconds, valid mdat, audio present, and two
 decoder messages per segment on both, so that count is inherent to the camera rather than
 anything the bridge introduced.
+
+## Full fleet cutover, 2026-09-09
+
+All eight cameras and ten streams moved at once, with the recorder's own sources removed
+from its config and the container restarted so the change survives a restart. Six cameras
+came up immediately. The fisheye and the pano, main and sub, did not.
+
+### Two cameras, four streams, zero frames
+
+Both reported `no video frame in 30s: camera is answering but not sending media (held
+session)`. That message is the media watchdog doing its job, but the diagnosis it offers is
+wrong here: nothing was holding a session. The camera had authenticated, was answering
+pings, and was sending roughly 6 Mbps that never became a frame.
+
+Ruling things out, in the order that turned out to be cheapest:
+
+| test | result |
+|---|---|
+| literal password in place of `$CAM_PW` | still zero frames, so not the environment |
+| the same binary run on the host, one camera, nothing else | reproduced, so not the container |
+| a deliberately wrong password on a working camera | `empty login reply`, so authentication was genuinely fine |
+| two clients on the same camera at once | both healthy, so not a connection limit |
+| dumping message ids and extension XML | the fault |
+
+The last one took a minute and should have been first. The two cameras put an extension
+header on every message of a media packet, not just the first, so every message looked like
+a packet boundary and each one discarded the partial frame before it. A 940 KB keyframe
+spanning hundreds of messages never completed.
+
+### The second fault, which the first was hiding
+
+With framing fixed both cameras streamed, and the fisheye then produced 929 decoder warning
+lines per 20 seconds against 3 on a healthy camera. Every one was in the last twelve percent
+of the picture: `error while decoding MB x 141..159` on a 160 row frame.
+
+A packet's size field counts the coded picture only, not the metadata that precedes the
+first NAL start code, so a packet is `hdr + prefix + size` bytes. Consuming `hdr + size`
+dropped the tail of every frame. Trimming the prefix on the way out, which this had been
+doing since the HEVC work, hides half the fault: the decoder gets a clean start code and
+only the bottom rows go missing.
+
+A first fix capped the prefix search at 256 bytes, which covered the fisheye's 104 to 184
+and cut every longer frame on the pano's substream, where the prefix runs 328 to 352. That
+one stream stayed at 438 warnings while the other nine dropped into the noise.
+
+### Result
+
+Decoder warning lines per 20 seconds, measured through the recorder's own ffmpeg against
+each stream, after both fixes:
+
+| stream | before | after |
+|---|---|---|
+| fisheye | 929 | 1 |
+| fisheye sub | not streaming | 0 |
+| pano | not streaming | 1 |
+| pano sub | 438 | 8 |
+| the six single lens cameras | 3 to 10 | 0 to 5 |
+
+What is left is join noise: a client attaching mid GOP. Ten of ten streams, zero restarts,
+zero dropped consumers, and all eight recorder cameras at their configured 5 fps with no
+skipped frames.
