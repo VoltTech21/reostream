@@ -363,6 +363,28 @@ func (c *Conn) RawChannelRequest(msgID uint32) error {
 	return c.w.Write(h, body)
 }
 
+// Abilities asks the camera what the logged in user may do, module by
+// module. The reply arrives on Messages as MsgIDAbilityInfo; parse it with
+// ParseAbilities.
+//
+// This is the Baichuan equivalent of the HTTP API's GetAbility, and it is
+// worth preferring over a hardcoded assumption about a model. It is not
+// infallible: the HTTP ability list reports "talk" on cameras that have no
+// speaker at all.
+func (c *Conn) Abilities() error {
+	body, err := abilityXML(c.opts.Username)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:      MsgIDAbilityInfo,
+		Class:      ClassModern24,
+		EncOffset:  EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+		PayloadOff: uint32(len(body)),
+	}
+	return c.w.Write(h, body)
+}
+
 // Ping keeps the session alive. The camera times out a session it stops
 // hearing from, logging "session:%u login timeout", and the official NVR
 // heartbeats continuously.

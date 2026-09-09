@@ -23,6 +23,7 @@ func usage() {
   reocam -address CAM [-password PW] <command> [args]
 
 Commands:
+  abilities              list what this camera can do and what is writable
   snap [main|sub] FILE   save a still image
   talk FILE              play raw 16 bit mono PCM through the camera speaker
   talkinfo               report the two-way audio formats the camera accepts`)
@@ -52,6 +53,8 @@ func main() {
 	defer conn.Close()
 
 	switch flag.Arg(0) {
+	case "abilities":
+		err = abilities(conn)
 	case "snap":
 		err = snap(conn, flag.Args()[1:])
 	case "talkinfo":
@@ -230,6 +233,45 @@ func waitForAck(conn *baichuan.Conn, msgID uint32) error {
 			return nil
 		case <-deadline:
 			return fmt.Errorf("no reply to message %d", msgID)
+		}
+	}
+}
+
+// abilities prints what the camera says it can do.
+func abilities(conn *baichuan.Conn) error {
+	if err := conn.Abilities(); err != nil {
+		return err
+	}
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case m, ok := <-conn.Messages():
+			if !ok {
+				return fmt.Errorf("connection closed before an ability reply")
+			}
+			if m.Header.MsgID != baichuan.MsgIDAbilityInfo || len(m.XML) == 0 {
+				continue
+			}
+			list, err := baichuan.ParseAbilities(m.XML)
+			if err != nil {
+				return err
+			}
+			module := ""
+			for _, a := range list {
+				if a.Module != module {
+					module = a.Module
+					fmt.Printf("\n%s\n", module)
+				}
+				access := "read"
+				if a.Writable {
+					access = "read/write"
+				}
+				fmt.Printf("  %-18s %s\n", a.Name, access)
+			}
+			fmt.Printf("\n%d abilities\n", len(list))
+			return nil
+		case <-deadline:
+			return fmt.Errorf("no ability reply")
 		}
 	}
 }

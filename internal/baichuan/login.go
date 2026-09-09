@@ -236,3 +236,22 @@ func snapXML(channel int, stream string) ([]byte, error) {
 	b.Snap.StreamType = stream
 	return marshalDoc(&b, "snap")
 }
+
+// abilityQueryBody asks what a user may do. The token here is not the login
+// token: it is the list of modules to report on, and the camera answers only
+// for the ones named.
+type abilityQueryBody struct {
+	XMLName  xml.Name `xml:"Extension"`
+	Version  string   `xml:"version,attr"`
+	UserName string   `xml:"userName"`
+	Token    string   `xml:"token"`
+}
+
+// abilityModules is every module the cameras here recognise. Asking for all
+// of them costs one round trip and avoids a caller having to know the names.
+const abilityModules = "system, network, alarm, record, video, image"
+
+func abilityXML(user string) ([]byte, error) {
+	b := abilityQueryBody{Version: "1.1", UserName: user, Token: abilityModules}
+	return marshalDoc(&b, "ability query")
+}

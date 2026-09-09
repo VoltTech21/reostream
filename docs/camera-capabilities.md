@@ -263,3 +263,22 @@ and tilt models but not universal.
 The lens group is the only one worth a second purchase, and only if the zoom and focus
 surface is ever implemented here. Most of the rest are settings this firmware generation
 appears not to carry at all, so chasing them may be chasing nothing.
+
+## Two ability lists, and what each is actually for
+
+There are two, they are not the same question, and neither answers it fully.
+
+**`GetAbility` over HTTP** returns around 190 entries with a permit per entry, and it does
+vary by model: it is what says the fisheye has `supportFishEyeCfg` and the pano has
+`supportBinoStitch`. This is the closest thing to a hardware capability list. It is also
+the one that reports `talk` on six cameras with no speaker, so it is not to be trusted
+entry by entry.
+
+**`AbilityInfo`, Baichuan message 151**, returns a much shorter list grouped into system,
+network, alarm, record, video and image, each entry suffixed `_rw` or `_ro`. It is a
+**per-user permission list, not a hardware list**: all eight cameras here return an
+identical 35 entries despite being three different models with visibly different hardware.
+It answers "may this user change the LED state", not "does this camera have a speaker".
+
+So `AbilityInfo` cannot be used to decide whether a feature exists. Its value is the
+read/write split, which is real and which the HTTP list does not give.
