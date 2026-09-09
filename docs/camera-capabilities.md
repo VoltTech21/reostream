@@ -203,10 +203,27 @@ configuration work has nothing to test against on this fleet.
 `supportFLIntelligent` and `supportFLSchedule` is a contradiction worth resolving before
 trusting either flag.
 
-## Two-way audio
+## Two-way audio, and why `talk` is not the flag to trust
 
-`talk` is present on **all eight cameras** and has never been exercised. It is the largest
-thing this fleet can test and has not.
+`talk` reports present on all eight cameras. Only two of them have a speaker.
+
+Every other audio *output* capability lands on the same two and no others:
+
+| capability | cameras |
+|---|---|
+| `talk` | all eight |
+| `alarmAudio`, `customAudio`, `supportAudioAlarm` and its Enable/Schedule/TaskEnable | fisheye, pano |
+| `supportAudioPlay` | fisheye |
+
+`talk` is the outlier, and the fleet behaviour matches the cluster rather than the flag:
+the fisheye and the pano open a talk session repeatedly and play audibly, while the other
+six accept a TalkConfig exactly once, return 422 on every attempt afterwards, and never
+make a sound. A camera with no speaker appears to accept the configuration and then wedge
+the feature until it reboots.
+
+So treat the cluster as the capability test and `talk` as meaningless on its own. Nothing
+is harmed by trying: the six that refuse carry on streaming, recording and snapping
+normally, and only their two-way audio is unavailable until a reboot.
 
 ## What a battery PTZ would and would not close
 

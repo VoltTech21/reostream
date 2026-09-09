@@ -160,5 +160,12 @@ for.
 
 Status is a 16 bit little endian field at bytes 16 and 17, not two independent bytes.
 Reading it a byte at a time turns 400 into 144 and hides what the camera is telling you.
-200 is success, 400 is a request it could not parse, 422 has been seen from a camera that
-already has a talk session open.
+200 is success, 400 is a request it could not parse, and 422 means the camera will not open
+a talk session.
+
+**A 200 here does not mean the camera can speak.** Six of the eight cameras have no
+speaker, and each accepted a TalkConfig once, with status 200, before returning 422 to
+every later attempt and never making a sound. Only the two with a speaker work repeatedly.
+`talk` in GetAbility is present on all eight and is not the capability to test; the audio
+output cluster is (`alarmAudio`, `customAudio`, `supportAudioPlay`), and it names exactly
+the two that work.

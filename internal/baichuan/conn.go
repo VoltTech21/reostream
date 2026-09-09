@@ -324,6 +324,45 @@ func (c *Conn) Talk(packet []byte) error {
 	return c.w.WriteMedia(h, ext, packet)
 }
 
+// Snap asks the camera for a still image. The camera answers with one
+// message naming the file and its size, then sends the JPEG bytes across as
+// many further messages as it needs. Collect them with a SnapReader.
+//
+// stream is "main" or "sub" and selects which encoder the still comes from,
+// so it is also the resolution control.
+func (c *Conn) Snap(stream string) error {
+	ext, err := channelXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	body, err := snapXML(c.opts.Channel, stream)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:     MsgIDSnap,
+		Class:     ClassModern24,
+		EncOffset: EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+	}
+	return c.w.WriteParts(h, ext, body)
+}
+
+// RawChannelRequest sends a bare request carrying only a channel, for
+// probing message ids whose shape is not yet known.
+func (c *Conn) RawChannelRequest(msgID uint32) error {
+	body, err := channelXML(c.opts.Channel)
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:      msgID,
+		Class:      ClassModern24,
+		EncOffset:  EncOffsetFor(byte(c.opts.Channel), 0, c.nextCounter(), 0),
+		PayloadOff: uint32(len(body)),
+	}
+	return c.w.Write(h, body)
+}
+
 // Ping keeps the session alive. The camera times out a session it stops
 // hearing from, logging "session:%u login timeout", and the official NVR
 // heartbeats continuously.

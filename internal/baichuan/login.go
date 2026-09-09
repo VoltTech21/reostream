@@ -210,3 +210,29 @@ func talkDataXML(channel int) ([]byte, error) {
 	b := talkDataBody{Version: "1.1", BinaryData: 1, ChannelID: channel}
 	return marshalDoc(&b, "talk data")
 }
+
+// snapBody asks the camera for a still. fullFrame 0 asks for the encoded
+// frame as the stream carries it; the reply names a file and its size, and
+// the bytes follow in later messages.
+type snapBody struct {
+	XMLName xml.Name `xml:"body"`
+	Snap    struct {
+		Version      string `xml:"version,attr"`
+		ChannelID    int    `xml:"channelId"`
+		LogicChannel int    `xml:"logicChannel"`
+		Time         int    `xml:"time"`
+		FullFrame    int    `xml:"fullFrame"`
+		StreamType   string `xml:"streamType"`
+	} `xml:"Snap"`
+}
+
+func snapXML(channel int, stream string) ([]byte, error) {
+	var b snapBody
+	b.Snap.Version = "1.1"
+	b.Snap.ChannelID = channel
+	b.Snap.LogicChannel = channel
+	b.Snap.Time = 0
+	b.Snap.FullFrame = 0
+	b.Snap.StreamType = stream
+	return marshalDoc(&b, "snap")
+}
