@@ -89,9 +89,11 @@ type Depacketiser struct {
 func NewDepacketiser() *Depacketiser { return &Depacketiser{} }
 
 // Write adds the payload of one message. startsPacket must be true when the
-// message carried an extension header, which is what marks the start of a new
-// media packet: anything still buffered at that point is trailing filler from
-// the previous packet's last message and is dropped.
+// message's extension header declared binaryData, which is what marks the
+// start of a new media packet: anything still buffered at that point is
+// trailing filler from the previous packet's last message and is dropped.
+// The presence of an extension header alone is not the boundary, since some
+// cameras put one on continuation messages too (see Message.StartsPacket).
 func (d *Depacketiser) Write(b []byte, startsPacket bool) {
 	if startsPacket {
 		d.filler += len(d.buf)
@@ -109,6 +111,12 @@ func (d *Depacketiser) Skipped() int { return d.skipped }
 // message carrying it. A healthy stream has a nonzero, slowly growing count:
 // this is the camera's own padding, not a parsing error.
 func (d *Depacketiser) Filler() int { return d.filler }
+
+// maxFramePrefix bounds the search for the first NAL start code in a media
+// packet. The camera metadata that precedes it has been measured at 80, 104,
+// 112, 152, 176 and 184 bytes across the fleet; 256 leaves room without
+// letting a corrupt packet scan into the picture data looking for a match.
+const maxFramePrefix = 256
 
 func match(b, magic []byte) bool {
 	return len(b) >= 4 && b[0] == magic[0] && b[1] == magic[1] &&
@@ -140,13 +148,31 @@ func (d *Depacketiser) Next() (Frame, bool) {
 			if len(d.buf) < hdr+size {
 				return Frame{}, false
 			}
+			// size counts the coded picture only, not the camera metadata
+			// that sits between the packet header and the first NAL start
+			// code, so a packet occupies hdr+prefix+size bytes. Cameras that
+			// send no metadata have prefix 0 and are unaffected.
+			//
+			// Measured on the fisheye: prefix 104, 176 or 184 bytes varying
+			// per frame, and consuming hdr+size instead cut that many bytes
+			// off the end of every frame. The picture still decoded, since
+			// only the last macroblock rows were missing, which is why this
+			// showed up as "error while decoding MB x 141..159" rather than
+			// as a stream that failed outright.
+			prefix := indexStartCode(d.buf[hdr:min(hdr+maxFramePrefix, len(d.buf))])
+			if prefix < 0 {
+				prefix = 0
+			}
+			if len(d.buf) < hdr+prefix+size {
+				return Frame{}, false
+			}
 			f := Frame{
 				Kind:   kind,
 				Codec:  string(trimNul(d.buf[4:8])),
 				Micros: binary.LittleEndian.Uint32(d.buf[16:]),
-				Data:   append([]byte(nil), d.buf[hdr:hdr+size]...),
+				Data:   append([]byte(nil), d.buf[hdr+prefix:hdr+prefix+size]...),
 			}
-			d.consume(hdr + size)
+			d.consume(hdr + prefix + size)
 			return f, true
 
 		case match(d.buf, magicAAC), match(d.buf, magicADPCM):

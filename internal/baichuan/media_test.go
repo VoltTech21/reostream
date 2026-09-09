@@ -131,3 +131,44 @@ func TestDepacketiserOnRealCapture(t *testing.T) {
 		t.Errorf("resynchronised %d times; the stream should parse cleanly", d.Skipped())
 	}
 }
+
+// The size field counts the coded picture only. Cameras that put metadata
+// between the packet header and the first NAL start code make the packet
+// hdr+prefix+size bytes long, and consuming hdr+size instead cut the last
+// prefix bytes off every frame: on the fisheye that was 104 to 184 bytes,
+// enough to corrupt the bottom macroblock rows of every picture while the
+// stream otherwise looked healthy.
+func TestDepacketiserAccountsForAFramePrefix(t *testing.T) {
+	prefix := bytes.Repeat([]byte{0xAB}, 104)
+	picture := append([]byte{0, 0, 0, 1}, []byte("first picture")...)
+	second := append([]byte{0, 0, 0, 1}, []byte("second picture")...)
+
+	// The size field covers the picture, not the prefix, so build the header
+	// from the picture alone and splice the prefix in behind it.
+	first := buildFrame(magicIFrame, 32, "H264", 1, picture)
+	first = append(first[:32], append(prefix, picture...)...)
+
+	d := NewDepacketiser()
+	d.Write(append(first, buildFrame(magicPFrame, 24, "H264", 2, second)...), true)
+
+	f, ok := d.Next()
+	if !ok {
+		t.Fatal("no frame emitted")
+	}
+	if string(f.Data) != string(picture) {
+		t.Errorf("Data = %q, want %q", f.Data, picture)
+	}
+
+	// The next packet must still parse, which it only can if the prefix was
+	// counted when the first one was consumed.
+	f, ok = d.Next()
+	if !ok {
+		t.Fatal("no second frame emitted")
+	}
+	if string(f.Data) != string(second) {
+		t.Errorf("second Data = %q, want %q", f.Data, second)
+	}
+	if d.Skipped() != 0 {
+		t.Errorf("Skipped = %d, want 0", d.Skipped())
+	}
+}

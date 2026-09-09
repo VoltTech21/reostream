@@ -91,10 +91,15 @@ func TestDepacketiserOnH265Capture(t *testing.T) {
 	}
 }
 
-// HEVC frames carry a proprietary prefix before the first NAL start code:
-// 112 bytes on some frames, 80 on others. H.264 frames do not. This test
-// records the fact so a change in behaviour is noticed; see docs/protocol.md.
-func TestH265FramesCarryAPrefixBeforeTheFirstNAL(t *testing.T) {
+// A media packet carries camera metadata between its header and the first
+// NAL start code: 112 bytes on some HEVC frames, 80 on others, and 104 to
+// 184 on the fisheye's H.264. The packet's size field does not count it, so
+// the depacketiser skips it and every frame it emits now begins at a NAL
+// boundary. This test holds that line: a nonzero offset here means the
+// prefix is being handed to the decoder again, and, since the prefix is what
+// makes a packet longer than hdr+size, that the tail of every frame is being
+// dropped with it. See docs/protocol.md.
+func TestFramesBeginAtANALBoundary(t *testing.T) {
 	name := "h265_s2c.bin"
 	key := AESKey(nonceFromCapture(t, name), "")
 	r := NewReader(bytes.NewReader(loadFixture(t, name)))
@@ -127,15 +132,12 @@ func TestH265FramesCarryAPrefixBeforeTheFirstNAL(t *testing.T) {
 		}
 	}
 	t.Logf("NAL start-code offsets seen: %v", offsets)
-	if _, ok := offsets[0]; ok {
-		t.Log("note: some HEVC frames now start at a NAL boundary, which is a change")
-	}
 	if len(offsets) == 0 {
 		t.Fatal("no video frames decoded")
 	}
-	for off := range offsets {
-		if off < 0 {
-			t.Error("a frame contained no NAL start code at all")
+	for off, n := range offsets {
+		if off != 0 {
+			t.Errorf("%d frames start %d bytes before their first NAL start code", n, off)
 		}
 	}
 }

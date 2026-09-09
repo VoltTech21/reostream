@@ -36,9 +36,17 @@ is 0 main, 1 sub, 4 extern.
 
 This is the part no document describes, and getting it wrong looks like it almost works.
 
-**A media packet begins at the start of a message that carries an extension header, and
-continues through following messages that carry none.** Bytes between the packet's
-declared end and the end of its final message are filler.
+**A media packet begins at the start of a message whose extension header declares
+`<binaryData>`, and continues through the following messages.** Bytes between the
+packet's declared end and the end of its final message are filler.
+
+The presence of an extension header is not the boundary, only `binaryData` is. Most
+cameras send an extension on the first message of a packet and nothing at all on the
+continuations, so the two rules look identical. The 2560x2560 fisheye and the dual lens
+pano do not: they put an extension carrying `<checkPos>` and `<checkValue>` on every
+continuation message. Reading those as boundaries discards the partial frame on every
+message, so a 940 KB keyframe spanning hundreds of messages never completes. Both
+cameras log in, answer pings and move 6 Mbps while delivering zero decoded frames.
 
 Do not byte-scan for packet magics to resynchronise. Filler can contain a byte sequence
 that looks like a magic, and large frames span many messages. Framing on the message
@@ -50,10 +58,18 @@ capture and 22,667 on 8 MB of HEVC.
 encrypted, the rest is plaintext. Decrypting them turns random-looking bytes into the
 `00dcH264` / `05wb` magics.
 
-**HEVC frames carry a proprietary prefix.** Before the first NAL start code there are
-80, 112 or 152 bytes (varies per frame) of camera metadata. H.264 frames have none.
-Passing the prefix to a decoder produces sporadic `cu_qp_delta out of range` errors:
-trimming to the first start code took a 20-second HEVC capture from 13 decode errors to 1.
+**A frame's size field does not count the metadata prefix.** Between a packet header and
+the first NAL start code sit 80 to 184 bytes of camera metadata, varying per frame, so a
+packet occupies `hdr + prefix + size` bytes. Most cameras here send no prefix on H.264
+and the two lengths agree, which is why the difference stayed hidden; the pano's HEVC and
+the fisheye's H.264 both carry one.
+
+Getting this wrong is quiet. Trimming to the first start code fixes what the decoder is
+handed but not what is consumed, so the packet is short by the prefix and the last bytes
+of every frame are dropped as filler. The picture still decodes, missing only its bottom
+macroblock rows: a 20-second fisheye capture gave 532 `error while decoding MB x 141..159`
+lines, all in the last 12% of the frame. Counting the prefix takes both that and the
+residual HEVC `cu_qp_delta out of range` errors to zero.
 
 Packet header layouts are as `mediapacket.md` describes: I frames 32 bytes, P frames 24,
 audio 8, info variable. The camera's `microseconds` field is real and monotonic: emit it.
