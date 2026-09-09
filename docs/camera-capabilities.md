@@ -160,3 +160,42 @@ trusting either flag.
 
 `talk` is present on **all eight cameras** and has never been exercised. It is the largest
 thing this fleet can test and has not.
+
+## What a battery PTZ would and would not close
+
+The 52 grouped again, this time against one hypothetical purchase, because a battery pan
+and tilt camera covers four of the groups above at once. This is a mapping of ability flags
+to physical hardware, not a measurement: no such camera has been queried here, and the
+sweep should be re-run the moment one is.
+
+**Certain**, because the hardware class guarantees them (10): `battery`, `batAnalysis`,
+`mdWithPir`, `wifi`, `supportWiFiFreqPolicy`, `ptzCtrl`, `ptzPreset`, `ptzType`,
+`supportPt`, `supportPtzSpeed`.
+
+**Only on the right model** (11): the auto-tracking set `aiTrack`, `aiTrackDogCat`,
+`supportAiTrackClassify`, `supportAutoTrackStream`, `supportAITrackLimit` needs a tracking
+model; `floodLight` and `supportFLKeepOn` need a spotlight; `supportDigitalZoom`,
+`supportPtzCheck`, `supportPtzPresetImage` and `supportGuardPointImage` are common on pan
+and tilt models but not universal.
+
+**Still absent afterwards**, best case, 30 of the 52:
+
+| still missing | why | count |
+|---|---|---|
+| `supportZoom`, `supportFocus`, `disableAutoFocus`, `supportZoomAndFocusSliderCfg`, `supportPtzCalibration` | needs a motorised optical lens, which battery models do not carry | 5 |
+| `ptzPatrol`, `ptzTattern` | patrol and pattern are wired PTZ features | 2 |
+| `supportBuzzer`, `supportBuzzerEnable`, `supportBuzzerTask`, `supportBuzzerTaskEnable` | needs a model with a buzzer | 4 |
+| `alarmIoIn`, `alarmIoOut`, `alarmRf` | needs physical alarm terminals | 3 |
+| `isp3Dnr`, `ispBackLight`, `ispExposureMode`, `ispHue` | ISP controls absent from this firmware generation | 4 |
+| `supportGop`, `mainEncType`, `supportEncoderSelect` | encoder controls, absent fleet wide | 3 |
+| `mdTriggerAudio`, `mdTriggerRecord` | motion trigger actions | 2 |
+| `indicatorLight`, `powerLed` | status LED control | 2 |
+| `supportAiFace` | face detection, doorbell and a few other models | 1 |
+| `ftpPic`, `supportAoAdjust`, `supportImportExportImage` | miscellaneous, no obvious single model | 3 |
+| `3g` | cellular, needs an LTE model rather than a WiFi one | 1 |
+
+`disk` is not in that table because it needs a microSD card rather than a camera.
+
+The lens group is the only one worth a second purchase, and only if the zoom and focus
+surface is ever implemented here. Most of the rest are settings this firmware generation
+appears not to carry at all, so chasing them may be chasing nothing.
