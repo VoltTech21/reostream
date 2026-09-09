@@ -147,6 +147,55 @@ up, which is what makes an automated alignment loop possible rather than just a 
     linewidth
     heightDiff
 
+## Phases B and C, recovered the same way
+
+### HeartBeat
+
+`netclient` carries the request body as a literal, so there is nothing to infer:
+
+    <?xml version="1.0" encoding="UTF-8" ?><body><HeartBeat version="1.1"></HeartBeat></body>
+
+An empty element. The reply is not empty, and `nets_param_heart_beat_x2s` parses:
+
+    size
+    sec
+    usec
+    overlapCount
+    delay
+
+So this is not a bare ping. The camera returns timing and an overlap count, which makes it a
+round trip measurement rather than a liveness poke. The firmware also logs
+`heartbeat timeout, session:%d chn:%d devname:%s disconnected`, which is the camera side of
+the session timeout this project keeps running into from the client side.
+
+There is also `HEART_BEAT_V20` and a `support_mod_heartbeat` capability, so behaviour likely
+differs by firmware and should be probed rather than assumed.
+
+### GopCfg
+
+    channel
+    gopTime
+    streamType
+
+Three fields, and `gopTime` rather than a frame count, so the interval is expressed in time.
+Worth knowing before implementing: a client joins at a keyframe, so GOP length is join
+latency, and this is the setting that turns that from inherited to chosen.
+
+## What is still missing for all four phases
+
+**The numeric message ids.** Baichuan gives each parameter its own id and uses the parameter
+name as the XML root, so knowing the root element and every child field still leaves the
+message unsendable. None of the ids for `HeartBeat`, `GopCfg`, `fishEyeCfg`,
+`fishEyeSubChnCtrl` or `BinoStitch` appear in the Wireshark dissector, which names 121 of
+them, and they are not recoverable from the firmware by the techniques used here: the
+parameter strings are not referenced by absolute address in any table, and the code that
+sends them does not reference the literal in a pattern the reference finder can follow.
+
+One capture settles all five at once. The NVR is the right source because its camera facing
+client sends every one of these, over the same protocol and port, so a `tcpdump` of the NVR
+talking to a camera while the fisheye or stitching settings are touched gives the ids
+directly. That is the same method that produced `docs/protocol.md`.
+
 ## Suggested order
 
 1. Query the ability list on a fisheye camera and a panoramic camera. Confirm `fishEye` and
