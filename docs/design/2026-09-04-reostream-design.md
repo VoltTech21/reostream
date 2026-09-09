@@ -115,7 +115,7 @@ the wire; nothing below `camera` knows about HTTP.
     internal/baichuan/     conn.go login.go crypto.go message.go media.go
     internal/ts/           mux.go pes.go pat.go
     internal/camera/       camera.go supervisor.go
-    internal/server/       server.go stream.go status.go snapshot.go
+    internal/server/       server.go stream.go status.go keyframe.go
     docs/                  protocol.md (what we learned, from captures)
 
 ## Camera lifecycle
@@ -204,7 +204,7 @@ it turns join time into something we tune rather than inherit.
 | `GET /<cam>.ts` | MPEG-TS, main stream. The primary product. |
 | `GET /<cam>_sub.ts` | MPEG-TS, substream. |
 | `GET /<cam>_extern.ts` | MPEG-TS, extern (balanced) stream. |
-| `GET /<cam>.jpg` | Most recent keyframe as a still. Cheap, and a health check that does not open a stream. |
+| `GET /<cam>.keyframe` | Most recent keyframe, as raw elementary stream. Cheap, and a health check that does not open a stream. Originally specified as `.jpg`; producing a JPEG would mean a decoder in the serving path, which is a non-goal, so it serves the keyframe as-is with an honest content type. |
 | `GET /api/status` | JSON with per-camera fields: connected, fps, bitrate, last-keyframe age, client count, reconnect count, ping failures, camera-reported `PerformanceInfo`. |
 | `GET /metrics` | The same, Prometheus format. |
 
