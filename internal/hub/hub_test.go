@@ -13,7 +13,8 @@ func TestPublishReachesEverySubscriber(t *testing.T) {
 	defer closeA()
 	defer closeB()
 
-	h.Publish([]byte("frame"))
+	// startsKeyframe true: this test is about fan-out, not the sync gate.
+	h.PublishKey([]byte("frame"), true)
 
 	for i, ch := range []<-chan []byte{a, b} {
 		select {
@@ -37,7 +38,9 @@ func TestPublishNeverBlocksOnASlowClient(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 1000; i++ {
-			h.Publish([]byte("x"))
+			// startsKeyframe true throughout: this test is about never
+			// blocking, not the sync gate.
+			h.PublishKey([]byte("x"), true)
 		}
 		close(done)
 	}()
@@ -55,7 +58,9 @@ func TestSlowClientIsDroppedNotBuffered(t *testing.T) {
 	defer cancel()
 
 	for i := 0; i < 100; i++ {
-		h.Publish([]byte("x"))
+		// startsKeyframe true throughout: this test is about the drop path,
+		// not the sync gate.
+		h.PublishKey([]byte("x"), true)
 	}
 	if h.Dropped() == 0 {
 		t.Fatal("expected the stalled subscriber to have been dropped")
@@ -276,5 +281,95 @@ func TestMarkDisconnectedZeroesRateNotCounters(t *testing.T) {
 	}
 	if after.AudioFrames != 3 || after.DroppedAudio != 2 {
 		t.Fatalf("MarkDisconnected touched cumulative counters: AudioFrames=%d DroppedAudio=%d, want 3 and 2", after.AudioFrames, after.DroppedAudio)
+	}
+}
+
+func TestSubscriberReceivesNothingUntilTheFirstKeyframe(t *testing.T) {
+	h := New(8)
+	ch, cancel := h.Subscribe()
+	defer cancel()
+
+	h.PublishKey([]byte("mid-gop-a"), false)
+	h.PublishKey([]byte("mid-gop-b"), false)
+	select {
+	case got := <-ch:
+		t.Fatalf("received %q before any keyframe", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	h.PublishKey([]byte("KEY"), true)
+	select {
+	case got := <-ch:
+		if string(got) != "KEY" {
+			t.Fatalf("first delivery was %q, want the keyframe", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("keyframe was not delivered")
+	}
+
+	h.PublishKey([]byte("after"), false)
+	select {
+	case got := <-ch:
+		if string(got) != "after" {
+			t.Fatalf("second delivery was %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("nothing delivered after the keyframe")
+	}
+}
+
+func TestEachSubscriberWaitsForItsOwnKeyframe(t *testing.T) {
+	// A subscriber joining after the stream is running must wait for the NEXT
+	// keyframe, not inherit the fact that an earlier subscriber already saw one.
+	h := New(8)
+	first, cancelFirst := h.Subscribe()
+	defer cancelFirst()
+	h.PublishKey([]byte("KEY1"), true)
+	<-first
+
+	late, cancelLate := h.Subscribe()
+	defer cancelLate()
+	h.PublishKey([]byte("mid"), false)
+	select {
+	case got := <-late:
+		t.Fatalf("late subscriber got %q before its own keyframe", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	h.PublishKey([]byte("KEY2"), true)
+	if got := <-late; string(got) != "KEY2" {
+		t.Fatalf("late subscriber got %q, want KEY2", got)
+	}
+}
+
+func TestPublishIsGatedBehindTheSameSyncAsPublishKey(t *testing.T) {
+	// Audio flows through plain Publish, which must not reach a subscriber
+	// that has not yet synced to a video keyframe: unaligned audio is noise
+	// a player cannot place against the video it hasn't started decoding
+	// yet. Once synced, Publish must deliver immediately, not wait for a
+	// second keyframe.
+	h := New(8)
+	ch, cancel := h.Subscribe()
+	defer cancel()
+
+	h.Publish([]byte("audio-before-sync"))
+	select {
+	case got := <-ch:
+		t.Fatalf("received %q before any keyframe", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	h.PublishKey([]byte("KEY"), true)
+	if got := <-ch; string(got) != "KEY" {
+		t.Fatalf("got %q, want KEY", got)
+	}
+
+	h.Publish([]byte("audio-after-sync"))
+	select {
+	case got := <-ch:
+		if string(got) != "audio-after-sync" {
+			t.Fatalf("got %q, want audio-after-sync", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("audio was not delivered once synced")
 	}
 }

@@ -44,7 +44,9 @@ func TestStreamServesTSWithTheRightContentType(t *testing.T) {
 	// then live data.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		h.Publish([]byte("PAYLOAD"))
+		// startsKeyframe true: this test is about header/payload ordering
+		// and content type, not the hub's keyframe sync gate.
+		h.PublishKey([]byte("PAYLOAD"), true)
 	}()
 
 	buf := make([]byte, 13)

@@ -153,18 +153,36 @@ func (m *Muxer) Header() []byte {
 // declared audio at all, counted via DroppedAudio when audio was declared
 // but the frame's codec, such as ADPCM, is not carried). Info frames and any
 // frame arriving before the first video keyframe are dropped too.
+//
+// It wraps FrameWithKey, discarding the keyframe flag, for every caller that
+// only ever wanted the bytes.
 func (m *Muxer) Frame(f baichuan.Frame) []byte {
+	chunk, _ := m.FrameWithKey(f)
+	return chunk
+}
+
+// FrameWithKey is Frame plus a flag telling the caller whether chunk begins
+// a video keyframe, meaning it contains that frame's PES start (and, when
+// due, the PAT/PMT ahead of it). Only the muxer knows this: a subscriber
+// that joins mid GOP has to wait for exactly this boundary before its
+// decoder sees anything, since a decoder handed slices before the parameter
+// sets that describe them logs reference errors until the next I frame
+// (measured against a live camera: about 9 error groups in the first 60
+// seconds of a fresh join, then clean). startsKeyframe is only ever true for
+// a video I frame; audio and P frames always report false.
+func (m *Muxer) FrameWithKey(f baichuan.Frame) (chunk []byte, startsKeyframe bool) {
 	if f.Kind == baichuan.FrameAAC || f.Kind == baichuan.FrameADPCM {
-		return m.audioFrame(f)
+		return m.audioFrame(f), false
 	}
 	if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
-		return nil
+		return nil, false
 	}
+	isKey := f.Kind == baichuan.FrameIFrame
 	if !m.sawKeyframe {
-		if f.Kind != baichuan.FrameIFrame {
+		if !isKey {
 			// Starting a decoder mid GOP only makes it complain about
 			// references it never saw, so nothing goes out until an I frame.
-			return nil
+			return nil, false
 		}
 		m.sawKeyframe = true
 	}
@@ -202,7 +220,7 @@ func (m *Muxer) Frame(f baichuan.Frame) []byte {
 		m.lastPCRPTS = pts
 	}
 	out = append(out, m.packetisePES(PIDVideo, pes)...)
-	return out
+	return out, isKey
 }
 
 // audioFrame encodes one audio frame onto PIDAudio, or drops it.

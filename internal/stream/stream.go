@@ -154,10 +154,14 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 							// no PAT/PMT and stalls until the next table repeat.
 							h.SetHeader(mux.Header())
 						}
-						// Frame returns a fresh slice per call, so it is safe to
-						// hand straight to Publish, which does not copy it.
-						if pkt := mux.Frame(f); pkt != nil {
-							h.Publish(pkt)
+						// FrameWithKey returns a fresh slice per call, so it
+						// is safe to hand straight to PublishKey, which does
+						// not copy it. The keyframe flag is what lets a
+						// subscriber joining mid GOP wait for its own first
+						// legal frame instead of a decoder choking on
+						// slices with no parameter sets (see hub.PublishKey).
+						if pkt, key := mux.FrameWithKey(f); pkt != nil {
+							h.PublishKey(pkt, key)
 							h.RecordFrame(len(pkt))
 						}
 

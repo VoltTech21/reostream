@@ -58,6 +58,16 @@ type subscriber struct {
 	ch     chan []byte
 	mu     sync.Mutex
 	closed bool
+
+	// synced is false until this subscriber has seen a video keyframe
+	// boundary. A decoder handed slices before the parameter sets that
+	// describe them logs reference errors until the next I frame (measured
+	// against a live camera: about 9 error groups in the first 60 seconds
+	// of a fresh join). Gating on the subscriber, not the hub, is what lets
+	// a subscriber that joins after another one has already synced still
+	// wait for its own keyframe: two subscribers joining at different
+	// points in the GOP have different first legal frames.
+	synced bool
 }
 
 // closeOnce closes the channel if it has not already been closed, reporting
@@ -156,16 +166,29 @@ func (h *Hub) Close() {
 	}
 }
 
-// Publish delivers b to every subscriber. It never blocks: a subscriber
-// whose buffer is full is dropped instead of stalling this call, because
-// this is called from the camera's read goroutine and any delay here is a
-// delay in draining the socket.
+// Publish delivers b to every synced subscriber, meaning "not a keyframe
+// boundary": it is PublishKey(b, false). Every caller that has no notion of
+// keyframes, audio in particular, calls this directly.
+func (h *Hub) Publish(b []byte) {
+	h.PublishKey(b, false)
+}
+
+// PublishKey delivers b to every subscriber, gated by whether that
+// subscriber has synced to the stream yet. A subscriber that joins mid GOP
+// must not receive anything until startsKeyframe is true for it: see
+// subscriber.synced for why this is measured, not theoretical. Once a
+// subscriber has synced, every later call, keyframe or not, delivers to it
+// normally; startsKeyframe only matters for the transition.
+//
+// It never blocks: a subscriber whose buffer is full is dropped instead of
+// stalling this call, because this is called from the camera's read
+// goroutine and any delay here is a delay in draining the socket.
 //
 // b is not copied per subscriber. The MPEG-TS muxer (internal/ts) allocates
 // a fresh slice for every chunk it returns, so subscribers never see a
 // buffer that gets mutated out from under them. A caller that reused buffers
 // would need this to change.
-func (h *Hub) Publish(b []byte) {
+func (h *Hub) PublishKey(b []byte, startsKeyframe bool) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -185,6 +208,18 @@ func (h *Hub) Publish(b []byte) {
 		if s.closed {
 			s.mu.Unlock()
 			continue
+		}
+		if !s.synced {
+			if !startsKeyframe {
+				// Nothing legal to hand this subscriber yet, video or
+				// audio: buffering it would just be bytes it cannot use
+				// once its decoder does start. This is a silent skip, not
+				// the stalled-subscriber drop path below; the subscriber
+				// is still healthy, just not synced yet.
+				s.mu.Unlock()
+				continue
+			}
+			s.synced = true
 		}
 		select {
 		case s.ch <- b:
