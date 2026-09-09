@@ -56,12 +56,27 @@ const pingInterval = 10 * time.Second
 const DefaultMediaTimeout = 30 * time.Second
 
 // Config names one camera stream to run.
+// FrameSink receives every frame a stream decodes, before it is muxed.
+//
+// It exists so an output that needs frames rather than TS bytes, such as
+// RTSP, can have them without the hub carrying frames and without demuxing
+// TS back into them. Implementations must not block: this runs on the
+// camera goroutine, and anything slow here stalls the read loop that the
+// media watchdog is watching.
+type FrameSink interface {
+	Frame(baichuan.Frame)
+}
+
 type Config struct {
 	Name     string
 	Address  string
 	Username string
 	Password string
 	Stream   string // "main", "sub" or "extern"
+
+	// Sink, when non-nil, receives every decoded frame before muxing. Nil
+	// is the default and the only state the HTTP output has ever run in.
+	Sink FrameSink
 
 	// MediaTimeout overrides DefaultMediaTimeout. Zero means the default.
 	//
@@ -239,6 +254,11 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						// subscriber joining mid GOP wait for its own first
 						// legal frame instead of a decoder choking on
 						// slices with no parameter sets (see hub.PublishKey).
+						// Before muxing, so an RTSP output receives the
+						// frame rather than TS bytes.
+						if cfg.Sink != nil {
+							cfg.Sink.Frame(f)
+						}
 						if pkt, key := mux.FrameWithKey(f); pkt != nil {
 							h.PublishKey(pkt, key)
 							h.RecordFrame(len(pkt))
@@ -258,6 +278,9 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 								h.AddDroppedAudio(1)
 							}
 							continue
+						}
+						if cfg.Sink != nil {
+							cfg.Sink.Frame(f)
 						}
 						if pkt := mux.Frame(f); pkt != nil {
 							h.Publish(pkt)
