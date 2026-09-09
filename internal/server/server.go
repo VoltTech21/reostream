@@ -32,8 +32,24 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.serveStatus)
 	mux.HandleFunc("/metrics", s.serveMetrics)
-	mux.HandleFunc("/", s.serveStream)
+	// Both stream and keyframe routes are dispatched from one catch-all
+	// rather than two ServeMux patterns: the stdlib mux's {wildcard}
+	// segments have to occupy a whole path segment, so a pattern like
+	// "/{name}.keyframe" is not expressible and this is simpler than a
+	// second mux layered on top.
+	mux.HandleFunc("/", s.serveStreamOrKeyframe)
 	return mux
+}
+
+// serveStreamOrKeyframe dispatches on the path suffix, since the stdlib
+// mux's wildcard segments can't express "/<name>.keyframe" alongside
+// "/<name>.ts" as separate registered patterns (see Handler).
+func (s *Server) serveStreamOrKeyframe(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, ".keyframe") {
+		s.serveKeyframe(w, r)
+		return
+	}
+	s.serveStream(w, r)
 }
 
 func (s *Server) serveStream(w http.ResponseWriter, r *http.Request) {

@@ -88,11 +88,13 @@ func (s *subscriber) closeOnce() bool {
 type Hub struct {
 	buffer int
 
-	mu      sync.Mutex
-	subs    map[*subscriber]struct{}
-	dropped int
-	header  []byte
-	closed  bool
+	mu            sync.Mutex
+	subs          map[*subscriber]struct{}
+	dropped       int
+	header        []byte
+	closed        bool
+	keyframeCodec string
+	keyframe      []byte
 
 	statsMu     sync.Mutex
 	stats       FrameStats
@@ -289,6 +291,33 @@ func (h *Hub) Header() []byte {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.header
+}
+
+// SetKeyframe records the most recent video keyframe's raw elementary
+// stream bytes (baichuan.Frame.Video, not muxed into any container) along
+// with the codec they are encoded in, "h264" or "h265" matching
+// ts.NewMuxer's own spelling. internal/server's snapshot endpoint reads this
+// back to answer a health check without opening a stream, which would cost
+// a client slot and a keyframe wait for no reason: a still only needs the
+// bytes that are already sitting here.
+//
+// es is not copied. internal/baichuan.Depacketiser allocates a fresh Data
+// slice per frame (see its Next), so this never ends up holding a buffer
+// that gets overwritten by the next frame out from under a concurrent
+// reader.
+func (h *Hub) SetKeyframe(codec string, es []byte) {
+	h.mu.Lock()
+	h.keyframeCodec = codec
+	h.keyframe = es
+	h.mu.Unlock()
+}
+
+// Keyframe returns the most recently recorded keyframe and its codec, or
+// ("", nil) if no video keyframe has arrived yet.
+func (h *Hub) Keyframe() (codec string, es []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.keyframeCodec, h.keyframe
 }
 
 // RecordFrame reports that n bytes of a published packet came from a video

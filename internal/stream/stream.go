@@ -164,6 +164,12 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 							h.PublishKey(pkt, key)
 							h.RecordFrame(len(pkt))
 						}
+						if f.Kind == baichuan.FrameIFrame {
+							// Kept for the snapshot endpoint, which serves
+							// this raw elementary stream directly rather
+							// than decoding it: see hub.SetKeyframe.
+							h.SetKeyframe(f.Codec, f.Video())
+						}
 
 					case baichuan.FrameAAC, baichuan.FrameADPCM:
 						if mux == nil {
