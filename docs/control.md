@@ -128,13 +128,22 @@ reading it back on a fresh connection:
 | `45 osd set` | takes effect |
 | `209 led set` | takes effect |
 | `43 email cfg set` | takes effect |
-| `47 md set` | **200, and nothing changes** |
+| `47 md set` | **200, and nothing changes** (both models) |
 | `288 floodlight set` | **200, and nothing changes** |
 
 `md set` was tried with one sensitivity window changed, all four changed, and `enable`
-turned off. The camera answered 200 every time and re-read identical every time. So a
-message being accepted, on a model that implements the matching read, still says nothing
-about whether it does anything.
+turned off. The camera answered 200 every time and re-read identical every time.
+
+Repeated on a second model, a Duo 3 PoE, with `osd set` as a control:
+
+| | `45 osd set` | `47 md set` |
+|---|---|---|
+| RLC-810A | effect | 200, inert |
+| Duo 3 PoE | effect | 200, inert |
+
+So this is not one model being odd. A message being accepted, on hardware that implements
+the matching read and hands over a full document, still says nothing about whether the
+write does anything. Assume nothing here works until its effect has been observed.
 
 ## The three things that will mislead you
 
