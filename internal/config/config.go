@@ -19,12 +19,24 @@ type Camera struct {
 	Username string
 	Password string
 	Streams  []string
+
+	// RTSP names which of this camera's streams to serve over RTSP. Absent
+	// means none, and every stream still reaches the HTTP output either way.
+	RTSP []string
+}
+
+// RTSPConfig configures the RTSP listener. Its absence turns RTSP off
+// entirely, which is the default: HTTP MPEG-TS is what this daemon has
+// always served, and RTSP is opt-in for consumers that cannot take it.
+type RTSPConfig struct {
+	Listen string
 }
 
 // Config is the top level shape of the TOML file.
 type Config struct {
 	Listen  string
-	Cameras []Camera `toml:"camera"`
+	RTSP    *RTSPConfig `toml:"rtsp"`
+	Cameras []Camera    `toml:"camera"`
 }
 
 // validStreamNames mirrors the three independent connections a Reolink
@@ -107,6 +119,21 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("camera %q: stream %q is listed more than once", cam.Name, s)
 			}
 			seenStreams[s] = true
+		}
+
+		for _, want := range cam.RTSP {
+			if !validStreamNames[want] {
+				return fmt.Errorf("camera %q: unknown rtsp stream %q", cam.Name, want)
+			}
+			if !seenStreams[want] {
+				// Serving a stream the camera is not pulling would publish a
+				// URL that never carries a frame, and a URL that is silent
+				// rather than absent is much harder to diagnose.
+				return fmt.Errorf("camera %q: rtsp stream %q is not in streams", cam.Name, want)
+			}
+		}
+		if c.RTSP == nil && len(cam.RTSP) > 0 {
+			return fmt.Errorf("camera %q sets rtsp but there is no [rtsp] section", cam.Name)
 		}
 	}
 	return nil

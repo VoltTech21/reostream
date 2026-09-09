@@ -63,3 +63,75 @@ func TestUnknownStreamNameIsRejected(t *testing.T) {
 		t.Fatal("expected an unknown stream name to be rejected")
 	}
 }
+
+func TestLoadRTSPSection(t *testing.T) {
+	cfg, err := Load("testdata/rtsp.toml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.RTSP == nil {
+		t.Fatal("RTSP section not decoded")
+	}
+	if cfg.RTSP.Listen != "0.0.0.0:8554" {
+		t.Errorf("listen = %q", cfg.RTSP.Listen)
+	}
+	if got := cfg.Cameras[0].RTSP; len(got) != 1 || got[0] != "main" {
+		t.Errorf("camera rtsp = %v, want [main]", got)
+	}
+}
+
+// Absent section means RTSP is off, which is the default posture.
+func TestRTSPAbsentMeansOff(t *testing.T) {
+	t.Setenv("TEST_CAM_PASSWORD", "x")
+	cfg, err := Load("testdata/valid.toml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.RTSP != nil {
+		t.Error("RTSP should be nil when the section is absent")
+	}
+}
+
+// Serving a stream the camera is not pulling would publish a URL that never
+// carries a frame, which is the kind of thing found at three in the morning.
+func TestRTSPStreamMustBePulled(t *testing.T) {
+	cfg := Config{
+		Listen: ":8560",
+		RTSP:   &RTSPConfig{Listen: ":8554"},
+		Cameras: []Camera{{
+			Name: "a", Address: "192.0.2.1", Username: "admin",
+			Streams: []string{"main"}, RTSP: []string{"sub"},
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected an error for an rtsp stream that is not pulled")
+	}
+}
+
+// An rtsp entry with no listener configured cannot be served either.
+func TestRTSPWithoutListenerIsAnError(t *testing.T) {
+	cfg := Config{
+		Listen: ":8560",
+		Cameras: []Camera{{
+			Name: "a", Address: "192.0.2.1", Username: "admin",
+			Streams: []string{"main"}, RTSP: []string{"main"},
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected an error for rtsp with no [rtsp] section")
+	}
+}
+
+func TestRTSPUnknownStreamName(t *testing.T) {
+	cfg := Config{
+		Listen: ":8560",
+		RTSP:   &RTSPConfig{Listen: ":8554"},
+		Cameras: []Camera{{
+			Name: "a", Address: "192.0.2.1", Username: "admin",
+			Streams: []string{"main"}, RTSP: []string{"quad"},
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected an error for an unknown rtsp stream name")
+	}
+}

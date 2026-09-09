@@ -1,0 +1,12 @@
+listen = "0.0.0.0:8560"
+
+[rtsp]
+listen = "0.0.0.0:8554"
+
+[[camera]]
+name = "driveway"
+address = "192.0.2.50"
+username = "admin"
+password = ""
+streams = ["main", "sub"]
+rtsp = ["main"]
