@@ -1,0 +1,23 @@
+# Example compose file for running reostream. Copy config.toml.example from
+# docs/ (or write your own) alongside this file as config.toml, and reference
+# the password as an environment variable rather than writing it into the
+# config or this file.
+#
+# GET /api/status is used as the health check, deliberately not a stream
+# endpoint: probing a stream costs a client slot and a keyframe wait, which
+# is a worse health check than none.
+services:
+  reostream:
+    image: reostream:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8560:8560"
+    volumes:
+      - ./config.toml:/etc/reostream/config.toml:ro
+    environment:
+      REOSTREAM_DRIVEWAY_PASSWORD: "${REOSTREAM_DRIVEWAY_PASSWORD}"
+    # No container healthcheck is set here: the run stage is a distroless
+    # image with no shell or curl to run one from inside the container.
+    # Point your orchestrator's own HTTP healthcheck, or an external
+    # monitor, at http://localhost:8560/api/status instead.
