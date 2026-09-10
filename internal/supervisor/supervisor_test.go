@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/hub"
 	"github.com/VoltTech21/reostream/internal/stream"
@@ -192,3 +193,41 @@ func TestRunReturnsOnlyAfterEveryStreamHasStopped(t *testing.T) {
 		t.Fatal("Run returned before the stream finished closing")
 	}
 }
+
+// A camera with no rtsp entry gets no sink, which is the state the HTTP path
+// has always run in.
+func TestNoSinkWithoutRTSPConfig(t *testing.T) {
+	s := New([]config.Camera{{
+		Name: "a", Address: "192.0.2.1", Streams: []string{"main"},
+	}}, nil)
+	s.AttachSinks(func(camera, st string) stream.FrameSink {
+		t.Errorf("factory called for %s/%s, which has no rtsp entry", camera, st)
+		return nil
+	})
+	if s.entries[0].cfg.Sink != nil {
+		t.Error("a camera without rtsp config got a sink")
+	}
+}
+
+// Only the streams named in rtsp get a sink, not every stream the camera
+// pulls.
+func TestSinkOnlyForNamedStreams(t *testing.T) {
+	s := New([]config.Camera{{
+		Name: "a", Address: "192.0.2.1",
+		Streams: []string{"main", "sub"},
+		RTSP:    []string{"sub"},
+	}}, nil)
+	s.AttachSinks(func(_, st string) stream.FrameSink {
+		return stubSink{}
+	})
+	for _, e := range s.entries {
+		want := e.cfg.Stream == "sub"
+		if got := e.cfg.Sink != nil; got != want {
+			t.Errorf("%s: sink=%v, want %v", e.cfg.Stream, got, want)
+		}
+	}
+}
+
+type stubSink struct{}
+
+func (stubSink) Frame(baichuan.Frame) {}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/config"
+	"github.com/VoltTech21/reostream/internal/rtsp"
 	"github.com/VoltTech21/reostream/internal/server"
 	"github.com/VoltTech21/reostream/internal/stream"
 	"github.com/VoltTech21/reostream/internal/supervisor"
@@ -61,6 +62,21 @@ func main() {
 	srv := server.New(sup.Hubs())
 	srv.SetSupervisor(sup)
 
+	// RTSP is constructed only when the config asks for it. With no [rtsp]
+	// section nothing here runs and every stream keeps a nil sink, which is
+	// what the HTTP output has always seen.
+	var rtspSrv *rtsp.Server
+	if cfg.RTSP != nil {
+		rtspSrv = rtsp.New(cfg.RTSP.Listen)
+		sup.AttachSinks(func(camera, st string) stream.FrameSink {
+			return rtspSrv.Add(rtsp.Path(camera, st))
+		})
+		if err := rtspSrv.Start(); err != nil {
+			log.Fatalf("reostream: %v", err)
+		}
+		log.Printf("reostream: rtsp listening on %s", cfg.RTSP.Listen)
+	}
+
 	httpSrv := &http.Server{Addr: listen, Handler: srv.Handler()}
 
 	supCtx, cancelSup := context.WithCancel(context.Background())
@@ -88,6 +104,13 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	sig := <-sigs
 	log.Printf("reostream: got %s, shutting down", sig)
+
+	// Close RTSP before the streams stop. A reader still attached when the
+	// camera sessions are released would otherwise be served from a stream
+	// that is being torn down underneath it.
+	if rtspSrv != nil {
+		rtspSrv.Close()
+	}
 
 	if err := runShutdown(cancelSup, runDone, httpSrv, runStopGrace, httpShutdownTimeout); err != nil {
 		log.Printf("reostream: http shutdown: %v", err)

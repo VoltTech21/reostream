@@ -64,8 +64,11 @@ type StreamStat struct {
 // entry is everything one goroutine in runStream needs for the one stream
 // it owns for its entire life.
 type entry struct {
-	cfg  stream.Config
-	h    *hub.Hub
+	cfg stream.Config
+	h   *hub.Hub
+	// rtsp is the camera's rtsp stream list, kept so AttachSinks can tell
+	// which of a camera's streams an output was asked for.
+	rtsp []string
 	stat StreamStat
 }
 
@@ -113,6 +116,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 			h := hub.New(64)
 			s.hubs[hubName(cam.Name, st)] = h
 			s.entries = append(s.entries, &entry{
+				rtsp: cam.RTSP,
 				cfg: stream.Config{
 					Name:     cam.Name,
 					Address:  cam.Address,
@@ -126,6 +130,31 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 		}
 	}
 	return s
+}
+
+// AttachSinks gives every stream named in a camera's rtsp list a frame sink,
+// built by sinkFor.
+//
+// It takes a factory rather than an RTSP server so this package does not
+// depend on that one: the supervisor's job is running camera connections, and
+// which outputs consume them is not its concern. A camera with no rtsp entry
+// keeps a nil sink, which is the state the HTTP path has always run in.
+//
+// Call before Run. It panics afterwards rather than racing a live fleet,
+// matching setBackoff.
+func (s *Supervisor) AttachSinks(sinkFor func(camera, stream string) stream.FrameSink) {
+	if s.started.Load() {
+		panic("supervisor: AttachSinks called after Run")
+	}
+	for _, e := range s.entries {
+		for _, want := range e.rtsp {
+			if want != e.cfg.Stream {
+				continue
+			}
+			e.cfg.Sink = sinkFor(e.cfg.Name, e.cfg.Stream)
+			break
+		}
+	}
 }
 
 // setBackoff overrides the backoff parameters. Unexported: production code

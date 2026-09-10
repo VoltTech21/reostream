@@ -3,7 +3,7 @@
 # Build stage: static binary, no cgo. No config or credentials are copied
 # into either stage; the config comes in as a mounted file at run time and
 # the password comes from the environment, per docker-compose.yml.
-FROM golang:1.23-bookworm AS build
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./

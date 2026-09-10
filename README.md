@@ -62,6 +62,40 @@ and the substream is too small to be worth looking at.
 | `GET /api/status` | per-camera JSON: connected, fps, bitrate, keyframe age, clients, reconnects |
 | `GET /metrics` | the same in Prometheus format |
 
+## RTSP
+
+RTSP is served alongside HTTP, not instead of it, for software that takes an
+RTSP URL and nothing else.
+
+    [rtsp]
+    listen = "0.0.0.0:8554"
+
+    [[camera]]
+    name = "driveway"
+    streams = ["main", "sub"]
+    rtsp = ["main"]
+
+| Endpoint | Stream |
+|---|---|
+| `rtsp://host:8554/<cam>` | main |
+| `rtsp://host:8554/<cam>_sub` | sub |
+| `rtsp://host:8554/<cam>_extern` | extern |
+
+Absent the `[rtsp]` section nothing is served and every stream keeps the same
+path it has always had.
+
+TCP interleaved is the default transport. UDP is offered for clients that
+insist, and is not preferred: a lost RTP packet is a corrupt frame with no
+retransmit, which is worse than the larger header interleaving costs.
+
+**RTSP is not an upgrade to the HTTP output.** HTTP is stateless, one long
+lived GET, and MPEG-TS resynchronises itself, so a client that loses the
+connection reconnects with a single request. RTSP carries session state that
+a network blip can leave half open, and reconnecting costs a full handshake.
+What RTSP is better at is telling a client that a stream has died, through
+RTCP and keepalives, where a stalled TS stream looks alive until the
+consumer's own timeout fires. Running both keeps both properties.
+
 `extern` is `externStream` on the wire, 896x512 H.264 at roughly 1 Mbps. It is not
 documented by Reolink and Neolink never implemented it. It sits between the 4K main
 stream and the sub thumbnail, and being H.264 rather than HEVC it avoids the browser

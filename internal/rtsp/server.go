@@ -44,7 +44,7 @@ func New(listen string) *Server {
 func (s *Server) Add(path string) *Stream {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := &Stream{}
+	st := &Stream{srv: s.srv}
 	s.streams[path] = st
 	return st
 }
@@ -132,5 +132,20 @@ func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	s.mu.Unlock()
 	if st != nil {
 		st.removeReader()
+	}
+}
+
+// Path returns the RTSP path for one camera stream.
+//
+// It mirrors the HTTP endpoints so the two outputs name the same feed the
+// same way: main is the bare camera name, and the other two take the suffix
+// they have on the HTTP side. A camera at http://host:8560/lounge_sub.ts is
+// at rtsp://host:8554/lounge_sub.
+func Path(camera, stream string) string {
+	switch stream {
+	case "main":
+		return camera
+	default:
+		return camera + "_" + stream
 	}
 }

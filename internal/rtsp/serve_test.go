@@ -103,7 +103,6 @@ func serverWithStream(t *testing.T, path string) (*Server, *Stream) {
 	t.Helper()
 	srv := New("127.0.0.1:8554")
 	st := srv.Add(path)
-	st.srv = srv.srv
 	if err := srv.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
