@@ -23,6 +23,7 @@ var templateFS embed.FS
 type Options struct {
 	Password        string
 	AllowNoPassword bool
+	Status          StatusSource
 }
 
 type Server struct {
@@ -68,11 +69,9 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	}
 }
 
-// serveDashboard is replaced in Task 6. It exists now so auth has something
-// to protect.
 func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "login.html", struct {
-		Title  string
-		Failed bool
-	}{Title: "Status"})
+	s.render(w, "dashboard.html", struct {
+		Title string
+		Rows  []row
+	}{Title: "Status", Rows: s.rows()})
 }

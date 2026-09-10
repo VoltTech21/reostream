@@ -1,0 +1,17 @@
+{{define "body"}}
+<h1>Status</h1>
+<table>
+<tr><th>Stream</th><th>State</th><th>FPS</th><th>Bitrate</th><th>Clients</th><th>Restarts</th><th>Last error</th></tr>
+{{range .Rows}}
+<tr>
+<td>{{.Name}}</td>
+<td class="state-{{.State}}">{{.State}}</td>
+<td>{{printf "%.1f" .FPS}}</td>
+<td>{{printf "%.0f" .BitrateBps}}</td>
+<td>{{.Clients}}</td>
+<td>{{.Restarts}}</td>
+<td>{{.LastError}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}

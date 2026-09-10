@@ -86,6 +86,7 @@ func main() {
 		ctl := control.New(control.Options{
 			Password:        cfg.Control.Password,
 			AllowNoPassword: cfg.Control.AllowNoPassword,
+			Status:          srv,
 		})
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
 		go func() {

@@ -88,9 +88,11 @@ func (s *Server) SetSupervisor(sup *supervisor.Supervisor) {
 	s.sup = sup
 }
 
-// streamStats builds the current status for every configured stream, keyed
-// the same way s.src is: "<camera>/<stream>".
-func (s *Server) streamStats() map[string]StreamStatus {
+// StreamStats builds the current status for every configured stream, keyed
+// the same way hubs are: "<camera>/<stream>". Exported because the control
+// page renders exactly this and must not compute a second, drifting version
+// of it.
+func (s *Server) StreamStats() map[string]StreamStatus {
 	var bySup map[string]supervisor.StreamStat
 	if s.sup != nil {
 		bySup = make(map[string]supervisor.StreamStat)
@@ -146,7 +148,7 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(statusBody{Streams: s.streamStats()})
+	json.NewEncoder(w).Encode(statusBody{Streams: s.StreamStats()})
 }
 
 // serveMetrics writes Prometheus text exposition format. It is built by
@@ -160,7 +162,7 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := s.streamStats()
+	stats := s.StreamStats()
 	names := make([]string, 0, len(stats))
 	for name := range stats {
 		names = append(names, name)
