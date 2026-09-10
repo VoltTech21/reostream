@@ -37,6 +37,7 @@ type Options struct {
 	Logs            *LogBuffer
 	Hubs            server.HubSource
 	StreamBase      string
+	ConfigPath      string
 }
 
 type Server struct {
@@ -79,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /logs", s.authed(http.HandlerFunc(s.serveLogsPage)))
 	mux.Handle("GET /logs/history", s.authed(http.HandlerFunc(s.serveLogHistory)))
 	mux.Handle("GET /logs/stream", s.authed(http.HandlerFunc(s.serveLogStream)))
+	mux.Handle("GET /config", s.authed(http.HandlerFunc(s.serveConfigPage)))
+	mux.Handle("POST /config", s.authed(http.HandlerFunc(s.saveConfigPage)))
 	mux.Handle("GET /assets/", s.authed(http.StripPrefix("/assets/",
 		http.FileServer(http.FS(assetSub)))))
 	return mux
