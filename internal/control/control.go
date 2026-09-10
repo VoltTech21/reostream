@@ -61,14 +61,25 @@ type Server struct {
 	// would hold shutdown open for its full timeout.
 	done     chan struct{}
 	closeOne sync.Once
+
+	// inFlightMu and inFlightProbes serialise setup probes against each
+	// other, not just against the daemon's own config: probeGuarded's
+	// config-membership check closes the window against an already
+	// configured camera, but nothing else in-process stops two browser
+	// tabs, a double click, or a browser retry from running two
+	// probeCamera calls for the same unconfigured address at once, each
+	// dialling up to four real connections to it. See beginProbe.
+	inFlightMu     sync.Mutex
+	inFlightProbes map[string]bool
 }
 
 func New(opts Options) *Server {
 	return &Server{
-		opts:     opts,
-		tmpl:     template.Must(template.ParseFS(templateFS, "templates/*.html")),
-		sessions: newSessionStore(),
-		done:     make(chan struct{}),
+		opts:           opts,
+		tmpl:           template.Must(template.ParseFS(templateFS, "templates/*.html")),
+		sessions:       newSessionStore(),
+		done:           make(chan struct{}),
+		inFlightProbes: make(map[string]bool),
 	}
 }
 

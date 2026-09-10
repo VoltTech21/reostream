@@ -112,7 +112,41 @@ func (s *Server) probeGuarded(ctx context.Context, addr, user, pass string) Came
 	if msg, blocked := s.alreadyStreaming(addr); blocked {
 		return CameraReport{Err: msg}
 	}
+
+	key := config.NormalizeAddr(addr)
+	if !s.beginProbe(key) {
+		return CameraReport{Err: fmt.Sprintf(
+			"a probe of %q is already running; wait for it to finish before starting another. "+
+				"Two probes at once would dial this camera twice concurrently, which is the same "+
+				"one-session-per-stream hazard this page exists to avoid.", addr)}
+	}
+	defer s.endProbe(key)
+
 	return probeCamera(ctx, addr, user, pass)
+}
+
+// beginProbe claims key for the duration of one probe, and reports whether
+// the claim succeeded. alreadyStreaming only checks the daemon's own
+// config, which says nothing about a second probe of a not-yet-configured
+// address running concurrently with this one: two browser tabs, a
+// double-clicked button, or a browser retry can each reach probeGuarded for
+// the same address before either has returned. Nothing about an HTTP
+// handler in Go serialises that on its own.
+func (s *Server) beginProbe(key string) bool {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if s.inFlightProbes[key] {
+		return false
+	}
+	s.inFlightProbes[key] = true
+	return true
+}
+
+// endProbe releases a claim made by beginProbe.
+func (s *Server) endProbe(key string) {
+	s.inFlightMu.Lock()
+	delete(s.inFlightProbes, key)
+	s.inFlightMu.Unlock()
 }
 
 // alreadyStreaming reports whether addr belongs to a camera already present
