@@ -1,0 +1,37 @@
+{{define "body"}}
+<h1>Cameras</h1>
+{{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
+{{if .ReloadNote}}<p class="state-streaming">{{.ReloadNote}}</p>{{end}}
+{{range .Cameras}}
+<form method="post" action="/cameras">
+<input type="hidden" name="name" value="{{.Name}}">
+<h2>{{.Name}}</h2>
+<label>Address <input name="address" value="{{.Address}}"></label>
+<label>Username <input name="username" value="{{.Username}}"></label>
+<label>Password <input type="password" name="password" value="{{$.Unchanged}}"
+  placeholder="unchanged"></label>
+<fieldset><legend>Streams</legend>
+{{$cam := .}}
+{{range $.AllStreams}}
+<label><input type="checkbox" name="streams" value="{{.}}"
+  {{if $cam.HasStream .}}checked{{end}}> {{.}}</label>
+{{end}}
+</fieldset>
+<button type="submit">Save and apply</button>
+</form>
+{{end}}
+
+<h2>Add a camera</h2>
+<form method="post" action="/cameras">
+<label>Name <input name="name"></label>
+<label>Address <input name="address"></label>
+<label>Username <input name="username" value="admin"></label>
+<label>Password <input type="password" name="password"></label>
+<fieldset><legend>Streams</legend>
+{{range .AllStreams}}
+<label><input type="checkbox" name="streams" value="{{.}}"> {{.}}</label>
+{{end}}
+</fieldset>
+<button type="submit">Add</button>
+</form>
+{{end}}

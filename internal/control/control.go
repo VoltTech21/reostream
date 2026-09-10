@@ -83,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /logs/stream", s.authed(http.HandlerFunc(s.serveLogStream)))
 	mux.Handle("GET /config", s.authed(http.HandlerFunc(s.serveConfigPage)))
 	mux.Handle("POST /config", s.authed(http.HandlerFunc(s.saveConfigPage)))
+	mux.Handle("GET /cameras", s.authed(http.HandlerFunc(s.serveCameras)))
+	mux.Handle("POST /cameras", s.authed(http.HandlerFunc(s.saveCamera)))
 	mux.Handle("GET /assets/", s.authed(http.StripPrefix("/assets/",
 		http.FileServer(http.FS(assetSub)))))
 	return mux
