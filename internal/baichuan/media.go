@@ -63,6 +63,29 @@ func hevcFirstNAL(b []byte) int {
 	return -1
 }
 
+// h264NALHeaderValid reports whether the byte after a start code is a
+// well-formed H.264 NAL header: forbidden_zero_bit clear and a defined
+// nal_unit_type (1-23). The fisheye is H.264 and carries the same false
+// start codes in its prefix metadata as the HEVC cameras.
+func h264NALHeaderValid(b0 byte) bool {
+	if b0&0x80 != 0 {
+		return false
+	}
+	t := b0 & 0x1f
+	return t >= 1 && t <= 23
+}
+
+// h264FirstNAL returns the offset of the first start code that begins a
+// valid H.264 NAL, skipping false start codes in the prefix metadata.
+func h264FirstNAL(b []byte) int {
+	for i := 0; i+5 <= len(b); i++ {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 && h264NALHeaderValid(b[i+4]) {
+			return i
+		}
+	}
+	return -1
+}
+
 func (k FrameKind) String() string {
 	switch k {
 	case FrameInfo:
@@ -200,9 +223,12 @@ func (d *Depacketiser) Next() (Frame, bool) {
 			// 00 00 00 01, and stopping there leaks a garbage reserved-type
 			// NAL into the frame and truncates its tail.
 			var prefix int
-			if codec == "H265" || codec == "h265" {
+			switch codec {
+			case "H265", "h265":
 				prefix = hevcFirstNAL(region)
-			} else {
+			case "H264", "h264":
+				prefix = h264FirstNAL(region)
+			default:
 				prefix = indexStartCode(region)
 			}
 			if prefix < 0 {
