@@ -131,10 +131,21 @@ func main() {
 		rtspSrv.Close()
 	}
 
+	// Shut the control server down in its own goroutine, not inline here.
+	// http.Server.Shutdown blocks until active connections finish and does
+	// not cancel their request contexts, so a long-lived connection on the
+	// control listener (the log stream Task 7 adds, or just a browser tab
+	// left open on the page) would otherwise delay runShutdown's cancel()
+	// below by up to its own timeout, and that cancel is what starts
+	// releasing camera sessions. Running it concurrently means a slow
+	// control-page client only delays the control listener's own shutdown,
+	// never the start of camera session release.
 	if controlSrv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
-		controlSrv.Shutdown(ctx)
-		cancel()
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+			defer cancel()
+			controlSrv.Shutdown(ctx)
+		}()
 	}
 
 	if err := runShutdown(cancelSup, runDone, httpSrv, runStopGrace, httpShutdownTimeout); err != nil {
