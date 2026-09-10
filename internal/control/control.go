@@ -38,6 +38,7 @@ type Options struct {
 	Hubs            server.HubSource
 	StreamBase      string
 	ConfigPath      string
+	Supervisor      Reloader
 }
 
 type Server struct {

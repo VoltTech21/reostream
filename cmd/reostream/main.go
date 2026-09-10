@@ -99,6 +99,7 @@ func main() {
 			Hubs:            sup,
 			StreamBase:      *streamBase,
 			ConfigPath:      *configPath,
+			Supervisor:      sup,
 		})
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits

@@ -10,7 +10,47 @@ import (
 	"syscall"
 
 	"github.com/VoltTech21/reostream/internal/config"
+	"github.com/VoltTech21/reostream/internal/supervisor"
 )
+
+// Reloader applies a new camera list to the running fleet. An interface so
+// this package does not import the supervisor's construction, only its
+// behaviour.
+type Reloader interface {
+	Reload(cams []config.Camera) (supervisor.ReloadResult, error)
+}
+
+// listenersChanged names the listeners whose addresses differ between two
+// configs. These cannot be moved on a running process, so the page says so
+// instead of saving the value and quietly not applying it, which is the
+// failure mode where an operator believes a port changed and it did not.
+func listenersChanged(old, next *config.Config) []string {
+	var out []string
+	if old.Listen != next.Listen {
+		out = append(out, "http")
+	}
+	if rtspListen(old) != rtspListen(next) {
+		out = append(out, "rtsp")
+	}
+	if controlListen(old) != controlListen(next) {
+		out = append(out, "control")
+	}
+	return out
+}
+
+func rtspListen(c *config.Config) string {
+	if c.RTSP == nil {
+		return ""
+	}
+	return c.RTSP.Listen
+}
+
+func controlListen(c *config.Config) string {
+	if c.Control == nil {
+		return ""
+	}
+	return c.Control.Listen
+}
 
 // renameConfig is os.Rename, kept as a variable so a test can force the
 // bind-mount fallback path below without needing a real single-file bind
@@ -140,14 +180,44 @@ func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveConfigPage(w http.ResponseWriter, r *http.Request) {
 	text := r.FormValue("toml")
+
+	before, _ := config.Load(s.opts.ConfigPath)
+
 	if err := saveConfig(s.opts.ConfigPath, text); err != nil {
 		s.render(w, "config.html", configPage{
 			Title: "Config", Text: text, Error: err.Error(),
 		})
 		return
 	}
-	s.render(w, "config.html", configPage{
-		Title: "Config", Text: text, Saved: true,
-		ReloadNote: "Not applied yet.",
-	})
+
+	after, err := config.Load(s.opts.ConfigPath)
+	if err != nil {
+		// saveConfig already loaded this file successfully, so reaching here
+		// means something changed underneath us.
+		s.render(w, "config.html", configPage{
+			Title: "Config", Text: text, Error: err.Error(),
+		})
+		return
+	}
+
+	page := configPage{Title: "Config", Text: text, Saved: true}
+
+	if s.opts.Supervisor != nil {
+		res, err := s.opts.Supervisor.Reload(after.Cameras)
+		if err != nil {
+			page.Error = "saved, but not applied: " + err.Error()
+		} else {
+			page.ReloadNote = fmt.Sprintf(
+				"%d added, %d removed, %d restarted, %d left alone.",
+				res.Added, res.Removed, res.Restarted, res.Unchanged)
+		}
+	}
+
+	if before != nil {
+		if moved := listenersChanged(before, after); len(moved) > 0 {
+			page.ReloadNote += " Restart required for: " + strings.Join(moved, ", ") + "."
+		}
+	}
+
+	s.render(w, "config.html", page)
 }
