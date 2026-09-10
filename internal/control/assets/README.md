@@ -7,12 +7,22 @@ This directory holds the only third party file in this repository.
 - Version: 1.8.2
 - Source: `dist/mpegts.js` from the npm package `mpegts.js@1.8.2`
 - Fetched from: https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.js
-- License: Apache License 2.0 (see the package's own `LICENSE` at
-  https://github.com/xqq/mpegts.js/blob/master/LICENSE). Note: this
-  license is Apache-2.0, not MIT; the package's `package.json` and its
-  repository's LICENSE file both say Apache-2.0.
-- SHA-256 of the file as committed:
+- License: Apache License 2.0. The full text as fetched from the same
+  pinned source (`https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/LICENSE`,
+  verified byte-identical to `https://raw.githubusercontent.com/xqq/mpegts.js/master/LICENSE`)
+  is committed verbatim at `internal/control/assets/LICENSE-mpegts.txt`,
+  SHA-256 `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd`.
+  The upstream LICENSE file is the unmodified Apache-2.0 boilerplate and
+  does not fill in the "[name of copyright owner]" line; the copyright
+  holder per the package's own `package.json` `author` field is zheng qian
+  <xqq@xqq.im> (project author/maintainer of xqq/mpegts.js).
+- SHA-256 of `mpegts.js` as committed:
   `bda31748736a69cb610c2edf4623e633f1f4f47b5bda83668c8d287e51b0c3a8`
+- NOTICE file: none exists upstream. The npm package file listing for
+  `mpegts.js@1.8.2` has no `NOTICE` entry, and both
+  `https://raw.githubusercontent.com/xqq/mpegts.js/master/NOTICE` and
+  `.../NOTICE.txt` return 404. There is nothing to include under
+  Apache-2.0 section 4(d) beyond the LICENSE file itself.
 
 The upstream build is already minified (a webpack production build with a
 separate `mpegts.js.LICENSE.txt` for its own bundled third party notices,
