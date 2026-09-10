@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/config"
+	"github.com/VoltTech21/reostream/internal/control"
 	"github.com/VoltTech21/reostream/internal/rtsp"
 	"github.com/VoltTech21/reostream/internal/server"
 	"github.com/VoltTech21/reostream/internal/stream"
@@ -77,6 +78,24 @@ func main() {
 		log.Printf("reostream: rtsp listening on %s", cfg.RTSP.Listen)
 	}
 
+	// The control page is a separate listener from the streaming one. The
+	// streaming port stays unauthenticated because that is what a recorder
+	// points at; this one holds camera credentials.
+	var controlSrv *http.Server
+	if cfg.Control != nil && cfg.Control.Listen != "" {
+		ctl := control.New(control.Options{
+			Password:        cfg.Control.Password,
+			AllowNoPassword: cfg.Control.AllowNoPassword,
+		})
+		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
+		go func() {
+			log.Printf("reostream: control listening on %s", cfg.Control.Listen)
+			if err := controlSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("reostream: control: %v", err)
+			}
+		}()
+	}
+
 	httpSrv := &http.Server{Addr: listen, Handler: srv.Handler()}
 
 	supCtx, cancelSup := context.WithCancel(context.Background())
@@ -110,6 +129,12 @@ func main() {
 	// that is being torn down underneath it.
 	if rtspSrv != nil {
 		rtspSrv.Close()
+	}
+
+	if controlSrv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+		controlSrv.Shutdown(ctx)
+		cancel()
 	}
 
 	if err := runShutdown(cancelSup, runDone, httpSrv, runStopGrace, httpShutdownTimeout); err != nil {

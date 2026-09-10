@@ -1,0 +1,22 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - reostream</title>
+<style>
+:root { color-scheme: light dark; }
+body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 70rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8883; }
+nav a { margin-right: 1rem; }
+.state-streaming { color: #1a7f37; }
+.state-novideo, .state-reconnecting { color: #9a6700; }
+.state-down { color: #cf222e; }
+</style>
+</head>
+<body>
+<nav><a href="/">Status</a><a href="/config">Config</a><a href="/logs">Logs</a></nav>
+{{template "body" .}}
+</body>
+</html>{{end}}
