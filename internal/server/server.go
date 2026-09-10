@@ -9,22 +9,51 @@ import (
 	"github.com/VoltTech21/reostream/internal/supervisor"
 )
 
+// HubSource supplies the hubs a Server routes to. It is an interface rather
+// than a map because reload adds and removes streams while the server is
+// running, so a snapshot taken at construction goes stale the first time a
+// camera is added.
+type HubSource interface {
+	Hub(name string) (*hub.Hub, bool)
+	HubNames() []string
+}
+
+// staticHubs is a HubSource over a fixed map, for callers with no
+// supervisor: tests, and the single camera command form.
+type staticHubs map[string]*hub.Hub
+
+func (s staticHubs) Hub(name string) (*hub.Hub, bool) {
+	h, ok := s[name]
+	return h, ok
+}
+
+func (s staticHubs) HubNames() []string {
+	out := make([]string, 0, len(s))
+	for name := range s {
+		out = append(out, name)
+	}
+	return out
+}
+
+// StaticHubs wraps a fixed hub map as a HubSource.
+func StaticHubs(m map[string]*hub.Hub) HubSource { return staticHubs(m) }
+
 // Server routes GET /<cam>.ts, /<cam>_sub.ts and /<cam>_extern.ts to the
 // matching hub, plus /api/status and /metrics for the whole fleet.
 type Server struct {
-	streams map[string]*hub.Hub
+	src HubSource
 
 	// sup is optional; see SetSupervisor in status.go.
 	sup *supervisor.Supervisor
 }
 
-// New builds a Server over the given named streams. The header each client
-// receives on connect comes from the hub itself (hub.Header), not from a
-// value passed in here: the header is the muxer's PAT/PMT pair, which does
-// not exist until the muxer has seen a first frame and learned the codec,
-// which is after the server is constructed.
-func New(streams map[string]*hub.Hub) *Server {
-	return &Server{streams: streams}
+// New builds a Server over src. The header each client receives on connect
+// comes from the hub itself (hub.Header), not from a value passed in here:
+// the header is the muxer's PAT/PMT pair, which does not exist until the
+// muxer has seen a first frame and learned the codec, which is after the
+// server is constructed.
+func New(src HubSource) *Server {
+	return &Server{src: src}
 }
 
 // Handler returns the HTTP handler serving all configured streams.
@@ -58,15 +87,15 @@ func (s *Server) Handler() http.Handler {
 // "gate_sub", where it means the real camera wins over a suffix reading of
 // its name.
 func (s *Server) lookup(stem string) (*hub.Hub, bool) {
-	if h, ok := s.streams[stem]; ok {
+	if h, ok := s.src.Hub(stem); ok {
 		return h, true
 	}
-	if h, ok := s.streams[stem+"/main"]; ok {
+	if h, ok := s.src.Hub(stem + "/main"); ok {
 		return h, true
 	}
 	for suffix, stream := range map[string]string{"_sub": "sub", "_extern": "extern"} {
 		if cam, cut := strings.CutSuffix(stem, suffix); cut {
-			if h, ok := s.streams[cam+"/"+stream]; ok {
+			if h, ok := s.src.Hub(cam + "/" + stream); ok {
 				return h, true
 			}
 		}

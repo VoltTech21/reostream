@@ -89,7 +89,7 @@ func (s *Server) SetSupervisor(sup *supervisor.Supervisor) {
 }
 
 // streamStats builds the current status for every configured stream, keyed
-// the same way s.streams is: "<camera>/<stream>".
+// the same way s.src is: "<camera>/<stream>".
 func (s *Server) streamStats() map[string]StreamStatus {
 	var bySup map[string]supervisor.StreamStat
 	if s.sup != nil {
@@ -99,8 +99,13 @@ func (s *Server) streamStats() map[string]StreamStatus {
 		}
 	}
 
-	out := make(map[string]StreamStatus, len(s.streams))
-	for name, h := range s.streams {
+	names := s.src.HubNames()
+	out := make(map[string]StreamStatus, len(names))
+	for _, name := range names {
+		h, ok := s.src.Hub(name)
+		if !ok {
+			continue
+		}
 		fs := h.Stats()
 		st := StreamStatus{
 			Clients:             h.Clients(),

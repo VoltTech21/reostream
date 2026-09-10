@@ -6,14 +6,72 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/hub"
 )
 
+// growable is a HubSource whose contents change after the Server is built,
+// which is what Reload does to a live fleet.
+type growable struct {
+	mu   sync.Mutex
+	hubs map[string]*hub.Hub
+}
+
+func (g *growable) Hub(name string) (*hub.Hub, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	h, ok := g.hubs[name]
+	return h, ok
+}
+
+func (g *growable) HubNames() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]string, 0, len(g.hubs))
+	for name := range g.hubs {
+		out = append(out, name)
+	}
+	return out
+}
+
+func (g *growable) add(name string, h *hub.Hub) {
+	g.mu.Lock()
+	g.hubs[name] = h
+	g.mu.Unlock()
+}
+
+func TestServerServesAHubAddedAfterNew(t *testing.T) {
+	src := &growable{hubs: map[string]*hub.Hub{}}
+	srv := New(src)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Head(ts.URL + "/late.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("before add: got %d, want 404", resp.StatusCode)
+	}
+
+	src.add("late/main", hub.New(4))
+
+	resp, err = http.Head(ts.URL + "/late.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("after add: got %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestUnknownStreamIs404(t *testing.T) {
-	s := New(map[string]*hub.Hub{})
+	s := New(StaticHubs(map[string]*hub.Hub{}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/nope.ts", nil))
 	if rec.Code != http.StatusNotFound {
@@ -24,7 +82,7 @@ func TestUnknownStreamIs404(t *testing.T) {
 func TestStreamServesTSWithTheRightContentType(t *testing.T) {
 	h := hub.New(8)
 	h.SetHeader([]byte("HEADER"))
-	s := New(map[string]*hub.Hub{"cam": h})
+	s := New(StaticHubs(map[string]*hub.Hub{"cam": h}))
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
@@ -61,7 +119,7 @@ func TestStreamServesTSWithTheRightContentType(t *testing.T) {
 
 func TestClientDisconnectUnsubscribes(t *testing.T) {
 	h := hub.New(8)
-	s := New(map[string]*hub.Hub{"cam": h})
+	s := New(StaticHubs(map[string]*hub.Hub{"cam": h}))
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
@@ -97,11 +155,11 @@ func TestClientDisconnectUnsubscribes(t *testing.T) {
 // written against this project, said "/lounge.ts".
 func TestFlatURLFormsResolveToHubKeys(t *testing.T) {
 	main, sub, extern := hub.New(1), hub.New(1), hub.New(1)
-	s := New(map[string]*hub.Hub{
+	s := New(StaticHubs(map[string]*hub.Hub{
 		"lounge/main":   main,
 		"lounge/sub":    sub,
 		"lounge/extern": extern,
-	})
+	}))
 	for _, tc := range []struct {
 		path string
 		want *hub.Hub
@@ -130,7 +188,7 @@ func TestFlatURLFormsResolveToHubKeys(t *testing.T) {
 // not to a suffix reading of its name.
 func TestARealCameraNameBeatsASuffixReading(t *testing.T) {
 	real, other := hub.New(1), hub.New(1)
-	s := New(map[string]*hub.Hub{"gate_sub/main": real, "gate/sub": other})
+	s := New(StaticHubs(map[string]*hub.Hub{"gate_sub/main": real, "gate/sub": other}))
 	got, ok := s.lookup("gate_sub")
 	if !ok || got != real {
 		t.Error("gate_sub resolved to gate's substream rather than the camera named gate_sub")

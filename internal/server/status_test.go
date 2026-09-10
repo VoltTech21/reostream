@@ -12,7 +12,7 @@ import (
 func TestStatusReportsEveryStream(t *testing.T) {
 	// Status must list a stream that is down, not omit it. A missing entry
 	// reads as "no such camera" when the truth is "camera is broken".
-	s := New(map[string]*hub.Hub{"a": hub.New(4), "b": hub.New(4)})
+	s := New(StaticHubs(map[string]*hub.Hub{"a": hub.New(4), "b": hub.New(4)}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
 	if rec.Code != 200 {
@@ -40,7 +40,7 @@ func TestDroppedAudioSurfacesInStatus(t *testing.T) {
 	// status, not just live inside internal/ts.
 	h := hub.New(4)
 	h.AddDroppedAudio(7)
-	s := New(map[string]*hub.Hub{"a": h})
+	s := New(StaticHubs(map[string]*hub.Hub{"a": h}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
 	var body struct {
@@ -59,7 +59,7 @@ func TestDroppedAudioSurfacesInStatus(t *testing.T) {
 func TestDroppedAudioSurfacesInMetrics(t *testing.T) {
 	h := hub.New(4)
 	h.AddDroppedAudio(7)
-	s := New(map[string]*hub.Hub{"a": h})
+	s := New(StaticHubs(map[string]*hub.Hub{"a": h}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	body := rec.Body.String()
@@ -69,7 +69,7 @@ func TestDroppedAudioSurfacesInMetrics(t *testing.T) {
 }
 
 func TestMetricsAreValidPrometheusText(t *testing.T) {
-	s := New(map[string]*hub.Hub{"a": hub.New(4)})
+	s := New(StaticHubs(map[string]*hub.Hub{"a": hub.New(4)}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	body := rec.Body.String()
@@ -92,7 +92,7 @@ func TestThreeAudioStatesReportDistinctlyInStatus(t *testing.T) {
 	healthy := hub.New(4)
 	healthy.AddAudioFrames(9)
 
-	s := New(map[string]*hub.Hub{"silent": silent, "dropping": dropping, "healthy": healthy})
+	s := New(StaticHubs(map[string]*hub.Hub{"silent": silent, "dropping": dropping, "healthy": healthy}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
 	var body struct {
@@ -119,7 +119,7 @@ func TestThreeAudioStatesReportDistinctlyInStatus(t *testing.T) {
 func TestAudioFramesSurfacesInMetrics(t *testing.T) {
 	h := hub.New(4)
 	h.AddAudioFrames(9)
-	s := New(map[string]*hub.Hub{"a": h})
+	s := New(StaticHubs(map[string]*hub.Hub{"a": h}))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	body := rec.Body.String()

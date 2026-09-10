@@ -59,7 +59,7 @@ func main() {
 	}
 
 	sup := supervisor.New(cfg.Cameras, stream.Run)
-	srv := server.New(sup.Hubs())
+	srv := server.New(server.StaticHubs(sup.Hubs()))
 	srv.SetSupervisor(sup)
 
 	// RTSP is constructed only when the config asks for it. With no [rtsp]
