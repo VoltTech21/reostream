@@ -1,0 +1,35 @@
+{{define "body"}}
+<h1>Set up reostream</h1>
+<p>Add a camera. reostream will connect to it and report what it is before anything is saved.</p>
+<form id="probe-form">
+<label>Address <input name="address" placeholder="192.168.1.50" required></label>
+<label>Username <input name="username" value="admin"></label>
+<label>Password <input type="password" name="password"></label>
+<button type="submit">Ask this camera</button>
+</form>
+<div id="result"></div>
+<form id="add-camera" method="post" action="/cameras" hidden>
+<input type="hidden" name="address" id="add-address">
+<input type="hidden" name="username" id="add-username">
+<input type="hidden" name="password" id="add-password">
+<label>Call it <input name="name" id="add-label" required></label>
+<button type="submit">Add this camera</button>
+</form>
+<p><a href="/setup/urls">I have added my cameras, show me the URLs</a></p>
+<script>
+const probeForm = document.getElementById('probe-form');
+const result = document.getElementById('result');
+const add = document.getElementById('add-camera');
+probeForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = new URLSearchParams(new FormData(probeForm));
+  result.innerHTML = 'Asking the camera...';
+  const resp = await fetch('/setup/probe', {method: 'POST', body});
+  result.innerHTML = await resp.text();
+  document.getElementById('add-address').value = probeForm.address.value;
+  document.getElementById('add-username').value = probeForm.username.value;
+  document.getElementById('add-password').value = probeForm.password.value;
+  add.hidden = result.querySelector('table') === null;
+});
+</script>
+{{end}}

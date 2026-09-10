@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/server"
 )
 
@@ -91,6 +92,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /config", s.authed(http.HandlerFunc(s.saveConfigPage)))
 	mux.Handle("GET /cameras", s.authed(http.HandlerFunc(s.serveCameras)))
 	mux.Handle("POST /cameras", s.authed(http.HandlerFunc(s.saveCamera)))
+	mux.Handle("GET /setup", s.authed(http.HandlerFunc(s.serveSetup)))
+	mux.Handle("GET /setup/urls", s.authed(http.HandlerFunc(s.serveURLs)))
 	mux.Handle("POST /setup/probe", s.authed(http.HandlerFunc(s.serveProbe)))
 	mux.Handle("GET /assets/", s.authed(http.StripPrefix("/assets/",
 		http.FileServer(http.FS(assetSub)))))
@@ -118,6 +121,14 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 }
 
 func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
+	// A config that loaded fine but lists no cameras is a first run: send
+	// the operator to setup rather than an empty table. A config that
+	// failed to load is a different situation entirely and must not be
+	// mistaken for "no cameras yet".
+	if cfg, err := config.LoadRaw(s.opts.ConfigPath); err == nil && len(cfg.Cameras) == 0 {
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		return
+	}
 	s.render(w, "dashboard.html", struct {
 		Title string
 		Rows  []row

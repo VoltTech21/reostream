@@ -1,0 +1,23 @@
+{{define "body"}}
+<h1>Point your recorder at these</h1>
+
+<h2>Frigate</h2>
+<p>Paste into your Frigate config. The sub stream does detection and the main stream records.</p>
+<pre style="border:1px solid #8883;padding:.5rem;overflow:auto">{{.URLs.Frigate}}</pre>
+
+{{if .URLs.RTSP}}
+<h2>RTSP</h2>
+<p>For Blue Iris, Synology, or anything that takes an RTSP URL.</p>
+<ul>{{range .URLs.RTSP}}<li><code>{{.}}</code></li>{{end}}</ul>
+{{else}}
+<h2>RTSP</h2>
+<p>No RTSP output is configured. Add an <code>[rtsp]</code> section on the
+<a href="/config">config page</a> and list the streams to serve on each camera.</p>
+{{end}}
+
+<h2>Anything else</h2>
+<p>These play in VLC and mpv directly.</p>
+<ul>{{range .URLs.HTTP}}<li><code>{{.}}</code></li>{{end}}</ul>
+
+<p><a href="/">Watch it work</a></p>
+{{end}}
