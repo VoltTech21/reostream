@@ -18,6 +18,14 @@ import (
 // behaviour.
 type Reloader interface {
 	Reload(cams []config.Camera) (supervisor.ReloadResult, error)
+
+	// Validate reports whether cams would be accepted by Reload, without
+	// applying anything. writeAndApply calls this before the config file
+	// is written, so a change Reload would refuse is never persisted in
+	// the first place; see Supervisor.Validate's own doc comment for the
+	// one class of check (RTSP wiring) that only this method, not
+	// config.Config.Validate alone, can catch.
+	Validate(cams []config.Camera) error
 }
 
 // listenersChanged names the listeners whose addresses differ between two
@@ -58,13 +66,18 @@ func controlListen(c *config.Config) string {
 var renameConfig = os.Rename
 
 // saveConfig validates text and, only if it is a config the daemon would
-// boot on, replaces the file at path.
+// boot on AND checkFleet accepts its camera list, replaces the file at
+// path. checkFleet may be nil, meaning there is no running fleet to check
+// against (no supervisor wired up).
 //
 // Validation runs the real loader, not a second implementation of it, so
 // the browser rejects exactly what startup would reject, including the
 // unknown key check that exists to stop a typo becoming a silent 404 at
-// three in the morning.
-func saveConfig(path, text string) error {
+// three in the morning. checkFleet runs before anything is written for the
+// same reason: a config that cannot actually be applied must not land on
+// disk just because it is well formed, or a restart is left unable to boot
+// from the very file it wrote.
+func saveConfig(path, text string, checkFleet func([]config.Camera) error) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".reostream-config-*")
 	if err != nil {
 		return err
@@ -80,13 +93,20 @@ func saveConfig(path, text string) error {
 		return err
 	}
 
-	if _, err := config.Load(tmpPath); err != nil {
+	cfg, err := config.Load(tmpPath)
+	if err != nil {
 		// config.Load embeds the path it was given in its message, and
 		// here that is the temp file's random name, not anything the
 		// operator recognizes. Swap in the real path so the message they
 		// see matches the file they are editing; the rest of the loader's
 		// wording, which names the camera and the key, is left intact.
 		return errors.New(strings.Replace(err.Error(), tmpPath, path, 1))
+	}
+
+	if checkFleet != nil {
+		if err := checkFleet(cfg.Cameras); err != nil {
+			return fmt.Errorf("not applying: %w", err)
+		}
 	}
 
 	// Preserve whatever mode the target already has rather than letting a
@@ -186,7 +206,11 @@ func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeAndApply(text string) (string, error) {
 	before, _ := config.Load(s.opts.ConfigPath)
 
-	if err := saveConfig(s.opts.ConfigPath, text); err != nil {
+	var checkFleet func([]config.Camera) error
+	if s.opts.Supervisor != nil {
+		checkFleet = s.opts.Supervisor.Validate
+	}
+	if err := saveConfig(s.opts.ConfigPath, text, checkFleet); err != nil {
 		return "", err
 	}
 

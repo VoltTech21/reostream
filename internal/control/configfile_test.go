@@ -1,12 +1,15 @@
 package control
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/VoltTech21/reostream/internal/config"
 )
 
 const validTOML = `listen = "0.0.0.0:8560"
@@ -24,7 +27,7 @@ func TestSaveConfigWritesAndBacksUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := saveConfig(path, validTOML); err != nil {
+	if err := saveConfig(path, validTOML, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,7 +52,7 @@ func TestSaveConfigRejectsAnUnknownKeyAndLeavesTheFileAlone(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	os.WriteFile(path, []byte(validTOML), 0o600)
 
-	err := saveConfig(path, validTOML+"\nnonsense = 1\n")
+	err := saveConfig(path, validTOML+"\nnonsense = 1\n", nil)
 	if err == nil {
 		t.Fatal("an unknown key was accepted")
 	}
@@ -67,7 +70,7 @@ func TestSaveConfigRejectsAnInvalidCamera(t *testing.T) {
 	err := saveConfig(path, `[[camera]]
 name = "one"
 streams = ["main"]
-`)
+`, nil)
 	if err == nil {
 		t.Fatal("a camera with no address was accepted")
 	}
@@ -81,7 +84,7 @@ func TestSaveConfigReportsTheRealPathNotTheTempFile(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	os.WriteFile(path, []byte(validTOML), 0o600)
 
-	err := saveConfig(path, validTOML+"\nnonsense = 1\n")
+	err := saveConfig(path, validTOML+"\nnonsense = 1\n", nil)
 	if err == nil {
 		t.Fatal("an unknown key was accepted")
 	}
@@ -100,7 +103,7 @@ func TestSaveConfigPreservesTheTargetsExistingMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := saveConfig(path, validTOML); err != nil {
+	if err := saveConfig(path, validTOML, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,6 +113,33 @@ func TestSaveConfigPreservesTheTargetsExistingMode(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o640 {
 		t.Fatalf("mode changed to %v, want 0640 preserved", info.Mode().Perm())
+	}
+}
+
+// TestSaveConfigDoesNotWriteWhenTheFleetCheckRejects is Finding 4 from the
+// 2026-09-10 review: writeAndApply used to write the file first and only
+// find out from Reload afterwards that the running fleet could not accept
+// it, which is reachable (an [rtsp] section added to a daemon that booted
+// without one passes config.Load but fails Reload's own RTSP-wiring
+// check). checkFleet now runs before anything reaches disk.
+func TestSaveConfigDoesNotWriteWhenTheFleetCheckRejects(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte(validTOML), 0o600)
+
+	checkFleet := func(cams []config.Camera) error {
+		return errors.New("simulated: rtsp is not wired up on this running supervisor")
+	}
+	err := saveConfig(path, validTOML, checkFleet)
+	if err == nil {
+		t.Fatal("expected the fleet check's rejection to surface")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != validTOML {
+		t.Fatal("a config the fleet check rejected was still written to disk")
+	}
+	if _, statErr := os.Stat(path + ".bak"); statErr == nil {
+		t.Fatal("a rejected save should not even reach the backup step")
 	}
 }
 
@@ -131,7 +161,7 @@ func TestSaveConfigFallsBackToInPlaceWriteWhenRenameIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := saveConfig(path, validTOML); err != nil {
+	if err := saveConfig(path, validTOML, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,7 +202,7 @@ func TestSaveConfigDoesNotFallBackOnAnUnrelatedRenameError(t *testing.T) {
 	}
 
 	err := saveConfig(path, `listen = "0.0.0.0:9999"
-`)
+`, nil)
 	if err == nil {
 		t.Fatal("expected the permission error to surface, not trigger a fallback")
 	}

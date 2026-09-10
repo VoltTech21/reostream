@@ -141,6 +141,37 @@ func TestReloadRejectsAnInvalidCameraListWithoutTouchingAnything(t *testing.T) {
 	}
 }
 
+// TestValidateCatchesWhatConfigLoadCannot is Finding 4 from the 2026-09-10
+// review: a camera's rtsp entries pass config.Config.Validate whenever the
+// candidate config's own [rtsp] section is present, but that says nothing
+// about whether THIS Supervisor's RTSP server actually exists. A daemon
+// that booted with no [rtsp] section has a nil sinkFor for its whole life;
+// Validate must catch that mismatch so a caller can refuse to persist the
+// change before it ever reaches disk, not find out only from Reload after
+// the file is already written.
+func TestValidateCatchesWhatConfigLoadCannotAboutRTSPWiring(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, func() bool { return c.count("a/main") == 1 })
+
+	// No AttachSinks call: this Supervisor has no RTSP server, matching a
+	// daemon that booted with no [rtsp] section.
+	cams := []config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}, RTSP: []string{"main"}},
+	}
+	if err := s.Validate(cams); err == nil {
+		t.Fatal("Validate accepted an rtsp entry on a Supervisor with no RTSP wiring")
+	}
+	if _, err := s.Reload(cams); err == nil {
+		t.Fatal("Reload accepted the same camera list Validate should have rejected")
+	}
+}
+
 func TestReloadBeforeRunIsRefused(t *testing.T) {
 	c := &runCounter{calls: map[string]int{}}
 	s := New(nil, c.runner())

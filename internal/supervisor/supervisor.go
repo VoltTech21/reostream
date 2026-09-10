@@ -263,6 +263,32 @@ type ReloadResult struct {
 // until Run would make a reload that appeared to succeed do nothing.
 var ErrNotRunning = errors.New("supervisor: not running")
 
+// Validate reports whether cams would be accepted by Reload, without
+// applying anything or requiring Run to have started.
+//
+// This exists so a caller writing a config file to disk, such as the
+// control page's config editor, can check it against the running fleet's
+// own constraints BEFORE the write, not just against config.Config's
+// context-free rules. The two disagree in one real case: an [rtsp] section
+// added to a daemon that booted without one passes config.Load (the file
+// is self-consistent) but fails this exact check, because RTSP was never
+// wired up on this Supervisor and cfg.RTSP stays nil here regardless of
+// what the file says. Catching that before the file is written, rather
+// than after, is what stops "saved, but not applied" from leaving a config
+// on disk that the daemon's next restart cannot even boot from.
+func (s *Supervisor) Validate(cams []config.Camera) error {
+	cfg := config.Config{Cameras: cams}
+	s.mu.Lock()
+	hasRTSP := s.sinkFor != nil
+	s.mu.Unlock()
+	if hasRTSP {
+		// Validate treats rtsp entries as an error without an [rtsp]
+		// section, and by this point the RTSP server exists.
+		cfg.RTSP = &config.RTSPConfig{}
+	}
+	return cfg.Validate()
+}
+
 // Reload brings the running fleet in line with cams, touching only what
 // changed. A stream whose camera is unchanged keeps its connection, its hub
 // and its subscribers: adding a ninth camera must not interrupt the other
@@ -284,13 +310,7 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 
 	// Validate before touching anything. A reload that half applies leaves
 	// a fleet in a state no config file describes.
-	cfg := config.Config{Cameras: cams}
-	if s.sinkFor != nil {
-		// Validate treats rtsp entries as an error without an [rtsp]
-		// section, and by this point the RTSP server exists.
-		cfg.RTSP = &config.RTSPConfig{}
-	}
-	if err := cfg.Validate(); err != nil {
+	if err := s.Validate(cams); err != nil {
 		return ReloadResult{}, err
 	}
 

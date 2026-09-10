@@ -27,6 +27,14 @@ func (r *recordingReloader) Reload(cams []config.Camera) (supervisor.ReloadResul
 	return supervisor.ReloadResult{Added: len(cams)}, nil
 }
 
+// Validate is a stand-in for the real fleet check writeAndApply runs before
+// writing the config file. This fake always accepts, since the tests using
+// it are about whether Reload gets called at all, not about what the real
+// supervisor's own constraints reject.
+func (r *recordingReloader) Validate(cams []config.Camera) error {
+	return nil
+}
+
 func TestConfigSaveReloadsTheFleet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
