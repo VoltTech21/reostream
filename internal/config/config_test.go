@@ -80,6 +80,48 @@ func TestDuplicateNameIsRejected(t *testing.T) {
 	}
 }
 
+func TestTwoCamerasSharingAnAddressOnAnOverlappingStreamAreRejected(t *testing.T) {
+	// Different names, same physical camera, both asking for main: two
+	// runners would fight for the same connection, exactly the fault this
+	// daemon exists to prevent (a camera permits one connection per
+	// stream, and the loser sits locked out for minutes).
+	cfg := &Config{Cameras: []Camera{
+		{Name: "front", Address: "192.0.2.1", Streams: []string{"main", "sub"}},
+		{Name: "front-again", Address: "192.0.2.1", Streams: []string{"main"}},
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected two cameras sharing an address and a stream to be rejected")
+	}
+}
+
+func TestTwoCamerasSharingAnAddressOnDisjointStreamsAreAllowed(t *testing.T) {
+	// Safe on purpose: a real camera's main, sub and extern are already
+	// independent Baichuan connections (see the supervisor package), so
+	// splitting them across two config entries with different names is no
+	// different from one entry listing all three. There is nothing here to
+	// fight over.
+	cfg := &Config{Cameras: []Camera{
+		{Name: "front-main", Address: "192.0.2.1", Streams: []string{"main"}},
+		{Name: "front-sub", Address: "192.0.2.1", Streams: []string{"sub"}},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected disjoint streams on a shared address to be allowed, got: %v", err)
+	}
+}
+
+func TestSharedAddressCheckNormalisesThePort(t *testing.T) {
+	// "192.0.2.1" and "192.0.2.1:9000" name the same camera on the wire
+	// (see NormalizeAddr / baichuan.Dial's own default), so this must be
+	// caught the same as an exact string match would be.
+	cfg := &Config{Cameras: []Camera{
+		{Name: "front", Address: "192.0.2.1", Streams: []string{"main"}},
+		{Name: "front-again", Address: "192.0.2.1:9000", Streams: []string{"main"}},
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected the default-port form to be recognised as the same address")
+	}
+}
+
 func TestUnknownStreamNameIsRejected(t *testing.T) {
 	cfg := &Config{Cameras: []Camera{{Name: "a", Address: "192.0.2.1", Streams: []string{"hi-res"}}}}
 	if err := cfg.Validate(); err == nil {

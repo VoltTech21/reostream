@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -52,6 +53,21 @@ type Config struct {
 	RTSP    *RTSPConfig `toml:"rtsp"`
 	Control *ControlConfig `toml:"control"`
 	Cameras []Camera    `toml:"camera"`
+}
+
+// NormalizeAddr applies the same default-port rule baichuan.Dial does, so
+// "192.0.2.50" and "192.0.2.50:9000" compare equal as the same camera.
+//
+// Exported so a caller outside this package that also needs to recognise
+// "is this the same camera as one already configured" -- the setup page's
+// probe guard is the current one -- compares addresses the same way
+// Validate does below, rather than keeping a second implementation that can
+// quietly drift from this one.
+func NormalizeAddr(addr string) string {
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return net.JoinHostPort(addr, "9000")
+	}
+	return addr
 }
 
 // validStreamNames mirrors the three independent connections a Reolink
@@ -157,6 +173,17 @@ func (c *Config) Validate() error {
 	}
 
 	seenNames := make(map[string]bool, len(c.Cameras))
+	// seenAddrStreams tracks, per normalised address, which stream names
+	// are already claimed by which camera, so two differently named
+	// cameras that both point at one physical camera and both ask for its
+	// main stream are caught here. Two cameras sharing an address but
+	// asking for disjoint streams are deliberately NOT rejected: a real
+	// camera's main, sub and extern are already independent Baichuan
+	// connections (see the supervisor package's doc comment), so splitting
+	// them across two config entries is no different from one entry
+	// listing all three, and forbidding it would only punish an unusual
+	// but harmless way of writing the file.
+	seenAddrStreams := make(map[string]map[string]string)
 	for _, cam := range c.Cameras {
 		if cam.Name == "" {
 			return fmt.Errorf("camera has no name")
@@ -181,6 +208,22 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("camera %q: stream %q is listed more than once", cam.Name, s)
 			}
 			seenStreams[s] = true
+		}
+
+		naddr := NormalizeAddr(cam.Address)
+		for _, s := range cam.Streams {
+			if owner, taken := seenAddrStreams[naddr][s]; taken {
+				return fmt.Errorf("camera %q and camera %q share address %q on stream %q: "+
+					"a camera allows only one connection per stream, and a second runner "+
+					"against the same one gets a session the camera refuses",
+					owner, cam.Name, cam.Address, s)
+			}
+		}
+		if seenAddrStreams[naddr] == nil {
+			seenAddrStreams[naddr] = make(map[string]string, len(cam.Streams))
+		}
+		for _, s := range cam.Streams {
+			seenAddrStreams[naddr][s] = cam.Name
 		}
 
 		for _, want := range cam.RTSP {

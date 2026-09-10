@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -156,10 +155,10 @@ func (s *Server) alreadyStreaming(addr string) (msg string, blocked bool) {
 		return "", false
 	}
 
-	want := normalizeAddr(addr)
+	want := config.NormalizeAddr(addr)
 	var cam *config.Camera
 	for i := range cfg.Cameras {
-		if normalizeAddr(cfg.Cameras[i].Address) == want {
+		if config.NormalizeAddr(cfg.Cameras[i].Address) == want {
 			cam = &cfg.Cameras[i]
 			break
 		}
@@ -198,16 +197,6 @@ func streamKnowledge(status StatusSource, cam *config.Camera) string {
 		return "no streams configured"
 	}
 	return strings.Join(parts, ", ")
-}
-
-// normalizeAddr applies the same default-port rule baichuan.Dial does, so a
-// config entry written as "192.0.2.50" and an operator typing
-// "192.0.2.50:9000" compare equal.
-func normalizeAddr(addr string) string {
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		return net.JoinHostPort(addr, "9000")
-	}
-	return addr
 }
 
 // probeCamera asks a camera what it is, for the setup flow.
