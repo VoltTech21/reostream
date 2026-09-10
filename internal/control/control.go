@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sync"
 )
 
 //go:embed templates/*.html
@@ -24,6 +25,7 @@ type Options struct {
 	Password        string
 	AllowNoPassword bool
 	Status          StatusSource
+	Logs            *LogBuffer
 }
 
 type Server struct {
@@ -31,6 +33,14 @@ type Server struct {
 	tmpl *template.Template
 
 	sessions *sessionStore
+
+	// done is closed by Close to release any handler blocked on a
+	// long-lived connection, such as the log stream. http.Server.Shutdown
+	// waits for active connections to finish and does not cancel their
+	// request contexts, so without this signal a single open logs tab
+	// would hold shutdown open for its full timeout.
+	done     chan struct{}
+	closeOne sync.Once
 }
 
 func New(opts Options) *Server {
@@ -38,7 +48,16 @@ func New(opts Options) *Server {
 		opts:     opts,
 		tmpl:     template.Must(template.ParseFS(templateFS, "templates/*.html")),
 		sessions: newSessionStore(),
+		done:     make(chan struct{}),
 	}
+}
+
+// Close releases any handler waiting on the server's done channel. Safe to
+// call more than once.
+func (s *Server) Close() {
+	s.closeOne.Do(func() {
+		close(s.done)
+	})
 }
 
 func (s *Server) Handler() http.Handler {
@@ -46,6 +65,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.serveLoginForm)
 	mux.HandleFunc("POST /login", s.serveLogin)
 	mux.Handle("GET /{$}", s.authed(http.HandlerFunc(s.serveDashboard)))
+	mux.Handle("GET /logs", s.authed(http.HandlerFunc(s.serveLogsPage)))
+	mux.Handle("GET /logs/history", s.authed(http.HandlerFunc(s.serveLogHistory)))
+	mux.Handle("GET /logs/stream", s.authed(http.HandlerFunc(s.serveLogStream)))
 	return mux
 }
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -51,6 +52,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Tee, not redirect: stderr keeps everything it had, so docker logs and
+	// journald are unaffected, and the page reads the same lines from
+	// memory.
+	logs := control.NewLogBuffer(2000)
+	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+
 	listen := cfg.Listen
 	if *listenOverride != "" {
 		listen = *listenOverride
@@ -87,8 +94,15 @@ func main() {
 			Password:        cfg.Control.Password,
 			AllowNoPassword: cfg.Control.AllowNoPassword,
 			Status:          srv,
+			Logs:            logs,
 		})
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
+		// RegisterOnShutdown runs at the start of Shutdown, before it waits
+		// on active connections, which is exactly when a live log stream
+		// needs to be released: Shutdown blocks on active connections
+		// without cancelling their request contexts, so a long-lived
+		// stream needs its own signal to know to stop.
+		controlSrv.RegisterOnShutdown(ctl.Close)
 		go func() {
 			log.Printf("reostream: control listening on %s", cfg.Control.Listen)
 			if err := controlSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
