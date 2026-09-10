@@ -1,6 +1,13 @@
 {{define "body"}}
 <h1>Point your recorder at these</h1>
 
+{{if .Error}}
+<p style="color:#c00;border:1px solid #c00;padding:.5rem">
+Could not read the config: {{.Error}}. Fix it on the
+<a href="/config">config page</a> before trusting anything below.
+</p>
+{{end}}
+
 <h2>Frigate</h2>
 <p>Paste into your Frigate config. The sub stream does detection and the main stream records.</p>
 <pre style="border:1px solid #8883;padding:.5rem;overflow:auto">{{.URLs.Frigate}}</pre>
