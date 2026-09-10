@@ -263,6 +263,16 @@ type ReloadResult struct {
 // until Run would make a reload that appeared to succeed do nothing.
 var ErrNotRunning = errors.New("supervisor: not running")
 
+// ErrShuttingDown is returned by Reload once Run's context has been
+// cancelled. Run's final wait (see Run) only waits for entries still in the
+// map at the moment it checks; a Reload allowed to start after ctx is
+// already done could still be mid-diff or mid-stop when Run returns and the
+// process exits out from under it, which is exactly what leaves a
+// stream-stop message unwaited. Refusing outright, rather than racing it to
+// completion, closes that window for any Reload that has not already
+// begun; see Run's own reloadMu wait for the one that has.
+var ErrShuttingDown = errors.New("supervisor: shutting down")
+
 // Validate reports whether cams would be accepted by Reload, without
 // applying anything or requiring Run to have started.
 //
@@ -322,6 +332,11 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 	}
 
 	s.mu.Lock()
+
+	if s.runCtx != nil && s.runCtx.Err() != nil {
+		s.mu.Unlock()
+		return ReloadResult{}, ErrShuttingDown
+	}
 
 	var res ReloadResult
 	var stop []*entry
@@ -435,6 +450,21 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	s.mu.Unlock()
 
 	<-ctx.Done()
+
+	// Wait for a Reload call already in flight to finish its own stop
+	// phase before deciding what is still live. Reload holds reloadMu for
+	// its entire call, including that stop phase (see Reload's own
+	// comment on why the stop happens outside mu), and it removes an
+	// entry from s.entries before stopping it; without this, a Reload that
+	// began just before ctx was cancelled can have already removed an
+	// entry this snapshot would otherwise miss, and Run would return while
+	// that entry's stream-stop message is still in flight on another
+	// goroutine the process is about to kill. A Reload that has not yet
+	// acquired reloadMu at this point instead finds runCtx already done
+	// once it does (see the check at the top of Reload) and refuses
+	// outright, so it never reaches the stop phase at all.
+	s.reloadMu.Lock()
+	s.reloadMu.Unlock()
 
 	// Wait for every stream to finish, including any added by Reload after
 	// Run started. Run must not return before every stream-stop message has

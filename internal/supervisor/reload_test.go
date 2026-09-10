@@ -2,9 +2,12 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/hub"
@@ -169,6 +172,112 @@ func TestValidateCatchesWhatConfigLoadCannotAboutRTSPWiring(t *testing.T) {
 	}
 	if _, err := s.Reload(cams); err == nil {
 		t.Fatal("Reload accepted the same camera list Validate should have rejected")
+	}
+}
+
+// TestReloadRefusedOnceShuttingDown is Finding 5 from the 2026-09-10
+// review: a Reload racing shutdown can leave a stream-stop unwaited when
+// the process exits right after Run returns. Refusing any Reload that
+// starts once ctx is already done closes the window for a Reload that has
+// not yet begun; TestReloadRacingShutdownIsFullyAwaited below covers the
+// other half, a Reload already in flight when ctx is cancelled.
+func TestReloadRefusedOnceShuttingDown(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+	waitFor(t, func() bool { return c.count("a/main") == 1 })
+
+	cancel()
+	<-runDone
+
+	_, err := s.Reload([]config.Camera{
+		{Name: "b", Address: "2.2.2.2", Streams: []string{"main"}},
+	})
+	if !errors.Is(err, ErrShuttingDown) {
+		t.Fatalf("got err %v, want ErrShuttingDown", err)
+	}
+}
+
+// TestReloadRacingShutdownIsFullyAwaited reproduces the 2026-09-08 failure
+// mode directly: a Reload already past Reload's own shutdown check, mid
+// stop-phase, when ctx is cancelled. Run must not return until that stop
+// phase (and therefore that stream's stream-stop message) has actually
+// completed, not merely until the entry disappears from the map.
+func TestReloadRacingShutdownIsFullyAwaited(t *testing.T) {
+	stopStarted := make(chan struct{})
+	releaseStop := make(chan struct{})
+	var stopped atomic.Bool
+
+	run := func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		<-ctx.Done()
+		if cfg.Name == "a" {
+			// Simulate a slow stream-stop round trip: this is the work
+			// that must finish before the process is allowed to exit.
+			close(stopStarted)
+			<-releaseStop
+			stopped.Store(true)
+		}
+		return ctx.Err()
+	}
+
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, run)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+	waitFor(t, func() bool {
+		for _, st := range s.Stats() {
+			if st.Camera == "a" && st.Running {
+				return true
+			}
+		}
+		return false
+	})
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		// Removing "a" drives it through Reload's stop phase, which is
+		// where stopEntry blocks on run's ctx.Done() branch above.
+		_, err := s.Reload(nil)
+		reloadDone <- err
+	}()
+
+	select {
+	case <-stopStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reload's stop phase never reached the runner")
+	}
+
+	// Cancel while Reload is blocked mid-stop: this is the exact race.
+	cancel()
+
+	select {
+	case <-runDone:
+		t.Fatal("Run returned before the in-flight Reload's stop phase finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if stopped.Load() {
+		t.Fatal("the runner's stop path completed before Run was even given the chance to wait for it, test is not exercising the race")
+	}
+	close(releaseStop)
+
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after the in-flight Reload's stop phase finished")
+	}
+	if !stopped.Load() {
+		t.Fatal("Run returned without the stream-stop path having completed")
 	}
 }
 
