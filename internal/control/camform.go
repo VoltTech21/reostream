@@ -2,7 +2,6 @@ package control
 
 import (
 	"bytes"
-	"fmt"
 	"net/http"
 	"net/url"
 
@@ -36,23 +35,17 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 			cam.Password = existing.Password
 		}
 		cfg.Cameras[i] = cam
-		return validateOne(cfg)
+		// cfg.Validate: the daemon's own validation runs over the whole
+		// config, so a form submission is held to exactly the rules
+		// startup enforces.
+		return cfg.Validate()
 	}
 
 	if cam.Password == passwordUnchanged {
 		cam.Password = ""
 	}
 	cfg.Cameras = append(cfg.Cameras, cam)
-	return validateOne(cfg)
-}
-
-// validateOne runs the daemon's own validation over the whole config, so a
-// form submission is held to exactly the rules startup enforces.
-func validateOne(cfg *config.Config) error {
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("%w", err)
-	}
-	return nil
+	return cfg.Validate()
 }
 
 // formCamera is a config.Camera with the helpers the template needs.

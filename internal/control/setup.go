@@ -28,13 +28,17 @@ func portOf(listen string) string {
 }
 
 func recorderURLs(cfg *config.Config, host string) RecorderURLs {
-	httpPort := portOf(cfg.Listen)
+	// net.JoinHostPort, not a bare "%s:%s": host can be a literal IPv6
+	// address, and a raw "host:port" interpolation of one produces a URL
+	// with an unbracketed colon-separated address, which nothing parses as
+	// the host and port they are meant to be.
+	httpBase := net.JoinHostPort(host, portOf(cfg.Listen))
 	var out RecorderURLs
 	var frigate strings.Builder
 	frigate.WriteString("cameras:\n")
 
 	for _, cam := range cfg.Cameras {
-		main := fmt.Sprintf("http://%s:%s/%s.ts", host, httpPort, cam.Name)
+		main := fmt.Sprintf("http://%s/%s.ts", httpBase, cam.Name)
 		out.HTTP = append(out.HTTP, main)
 
 		// Detect uses the sub stream when the camera has one; falling back
@@ -43,7 +47,7 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 		detect := main
 		for _, s := range cam.Streams {
 			if s == "sub" {
-				detect = fmt.Sprintf("http://%s:%s/%s_sub.ts", host, httpPort, cam.Name)
+				detect = fmt.Sprintf("http://%s/%s_sub.ts", httpBase, cam.Name)
 			}
 		}
 		fmt.Fprintf(&frigate, "  %s:\n    ffmpeg:\n      inputs:\n", cam.Name)
@@ -51,14 +55,14 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 		fmt.Fprintf(&frigate, "        - path: %s\n          roles: [record, audio]\n", main)
 
 		if cfg.RTSP != nil {
-			rtspPort := portOf(cfg.RTSP.Listen)
+			rtspBase := net.JoinHostPort(host, portOf(cfg.RTSP.Listen))
 			for _, s := range cam.RTSP {
 				suffix := ""
 				if s != "main" {
 					suffix = "_" + s
 				}
 				out.RTSP = append(out.RTSP,
-					fmt.Sprintf("rtsp://%s:%s/%s%s", host, rtspPort, cam.Name, suffix))
+					fmt.Sprintf("rtsp://%s/%s%s", rtspBase, cam.Name, suffix))
 			}
 		}
 	}

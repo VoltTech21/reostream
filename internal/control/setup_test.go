@@ -29,6 +29,25 @@ func TestRecorderURLsCoverBothOutputs(t *testing.T) {
 	}
 }
 
+func TestRecorderURLsBracketALiteralIPv6Host(t *testing.T) {
+	// A bare "%s:%s" interpolation of a literal IPv6 host produces
+	// "http://fe80::1:8560/...", which nothing parses as that host and
+	// that port: the extra colons all look like part of the address.
+	// net.JoinHostPort is what actually brackets it.
+	cfg := &config.Config{
+		Listen:  "[::]:8560",
+		RTSP:    &config.RTSPConfig{Listen: "[::]:8561"},
+		Cameras: []config.Camera{{Name: "a", Address: "x", Streams: []string{"main"}, RTSP: []string{"main"}}},
+	}
+	got := recorderURLs(cfg, "fe80::1")
+	if !strings.Contains(got.Frigate, "http://[fe80::1]:8560/a.ts") {
+		t.Fatalf("frigate block does not bracket the IPv6 host:\n%s", got.Frigate)
+	}
+	if len(got.RTSP) != 1 || got.RTSP[0] != "rtsp://[fe80::1]:8561/a" {
+		t.Fatalf("rtsp urls are %v, want the IPv6 host bracketed", got.RTSP)
+	}
+}
+
 func TestRecorderURLsOmitRTSPWhenItIsOff(t *testing.T) {
 	cfg := &config.Config{
 		Listen:  "0.0.0.0:8560",
