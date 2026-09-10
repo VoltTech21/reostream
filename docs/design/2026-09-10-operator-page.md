@@ -72,7 +72,7 @@ is, and a newcomer will not infer it:
 | state | meaning |
 |---|---|
 | Streaming | connected, frames arriving |
-| No video | connected, nothing received recently |
+| No video | connected, no frame for longer than the media watchdog's interval |
 | Reconnecting | with backoff and restart count |
 | Down | with `LastError` shown verbatim |
 
