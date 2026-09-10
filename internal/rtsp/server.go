@@ -35,6 +35,17 @@ func New(listen string) *Server {
 		RTSPAddress:    listen,
 		UDPRTPAddress:  ":8000",
 		UDPRTCPAddress: ":8001",
+		// The per-session write ring is drop-on-full, not block-on-full:
+		// when it overflows, gortsplib silently discards the packet. A single
+		// fisheye keyframe is a ~1 MB single-slice IDR, which FU-A fragments
+		// into ~708 RTP packets pushed in one tight burst. The default queue
+		// of 256 overflows mid-keyframe whenever the TCP writer lags the
+		// burst, punching holes in the slice that decode as "error while
+		// decoding MB 0" on the client. go2rtc hides this by draining fast
+		// enough that the ring never fills; a direct player over the network
+		// does not. 2048 absorbs a full keyframe with headroom for the
+		// P-frames queued behind it. Must be a power of two.
+		WriteQueueSize: 2048,
 	}
 	return s
 }
