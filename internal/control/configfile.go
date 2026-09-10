@@ -178,46 +178,53 @@ func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "config.html", page)
 }
 
-func (s *Server) saveConfigPage(w http.ResponseWriter, r *http.Request) {
-	text := r.FormValue("toml")
-
+// writeAndApply validates and writes text, applies the new camera list to
+// the running fleet, and returns a sentence describing what happened. The
+// one caller of this, whether the raw TOML editor or the camera form, is
+// what keeps the backup, the validation and the reload from drifting out
+// of agreement across two separate write paths.
+func (s *Server) writeAndApply(text string) (string, error) {
 	before, _ := config.Load(s.opts.ConfigPath)
 
 	if err := saveConfig(s.opts.ConfigPath, text); err != nil {
-		s.render(w, "config.html", configPage{
-			Title: "Config", Text: text, Error: err.Error(),
-		})
-		return
+		return "", err
 	}
 
 	after, err := config.Load(s.opts.ConfigPath)
 	if err != nil {
 		// saveConfig already loaded this file successfully, so reaching here
 		// means something changed underneath us.
+		return "", err
+	}
+
+	var note string
+	if s.opts.Supervisor != nil {
+		res, err := s.opts.Supervisor.Reload(after.Cameras)
+		if err != nil {
+			return "", fmt.Errorf("saved, but not applied: %w", err)
+		}
+		note = fmt.Sprintf("%d added, %d removed, %d restarted, %d left alone.",
+			res.Added, res.Removed, res.Restarted, res.Unchanged)
+	}
+
+	if before != nil {
+		if moved := listenersChanged(before, after); len(moved) > 0 {
+			note += " Restart required for: " + strings.Join(moved, ", ") + "."
+		}
+	}
+	return note, nil
+}
+
+func (s *Server) saveConfigPage(w http.ResponseWriter, r *http.Request) {
+	text := r.FormValue("toml")
+	note, err := s.writeAndApply(text)
+	if err != nil {
 		s.render(w, "config.html", configPage{
 			Title: "Config", Text: text, Error: err.Error(),
 		})
 		return
 	}
-
-	page := configPage{Title: "Config", Text: text, Saved: true}
-
-	if s.opts.Supervisor != nil {
-		res, err := s.opts.Supervisor.Reload(after.Cameras)
-		if err != nil {
-			page.Error = "saved, but not applied: " + err.Error()
-		} else {
-			page.ReloadNote = fmt.Sprintf(
-				"%d added, %d removed, %d restarted, %d left alone.",
-				res.Added, res.Removed, res.Restarted, res.Unchanged)
-		}
-	}
-
-	if before != nil {
-		if moved := listenersChanged(before, after); len(moved) > 0 {
-			page.ReloadNote += " Restart required for: " + strings.Join(moved, ", ") + "."
-		}
-	}
-
-	s.render(w, "config.html", page)
+	s.render(w, "config.html", configPage{
+		Title: "Config", Text: text, Saved: true, ReloadNote: note,
+	})
 }
