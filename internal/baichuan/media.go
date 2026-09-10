@@ -37,6 +37,32 @@ func indexStartCode(b []byte) int {
 	return -1
 }
 
+// hevcNALHeaderValid reports whether the two bytes after a start code are a
+// well-formed HEVC NAL header for these single-layer cameras: a defined NAL
+// type, nuh_layer_id 0, and nuh_temporal_id_plus1 >= 1. The proprietary
+// prefix metadata occasionally contains a stray 00 00 00 01, and the bytes
+// after it fail this check (bad layer id or temporal id), which is how a
+// false start code in the metadata is told apart from the real first NAL.
+func hevcNALHeaderValid(b0, b1 byte) bool {
+	t := (b0 >> 1) & 0x3f
+	validType := t <= 9 || (t >= 16 && t <= 21) || (t >= 32 && t <= 40)
+	layerID := (uint16(b0&0x01) << 5) | uint16(b1>>3)
+	tidPlus1 := b1 & 0x07
+	return validType && layerID == 0 && tidPlus1 >= 1
+}
+
+// hevcFirstNAL returns the offset of the first start code that begins a
+// structurally valid HEVC NAL, skipping false start codes embedded in the
+// camera prefix metadata. Returns -1 if none is found.
+func hevcFirstNAL(b []byte) int {
+	for i := 0; i+6 <= len(b); i++ {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 && hevcNALHeaderValid(b[i+4], b[i+5]) {
+			return i
+		}
+	}
+	return -1
+}
+
 func (k FrameKind) String() string {
 	switch k {
 	case FrameInfo:
@@ -167,7 +193,18 @@ func (d *Depacketiser) Next() (Frame, bool) {
 			// only the last macroblock rows were missing, which is why this
 			// showed up as "error while decoding MB x 141..159" rather than
 			// as a stream that failed outright.
-			prefix := indexStartCode(d.buf[hdr:min(hdr+maxFramePrefix, len(d.buf))])
+			codec := string(trimNul(d.buf[4:8]))
+			region := d.buf[hdr:min(hdr+maxFramePrefix, len(d.buf))]
+			// HEVC needs a NAL-header-aware search: these cameras put a
+			// proprietary prefix before the picture that can contain a false
+			// 00 00 00 01, and stopping there leaks a garbage reserved-type
+			// NAL into the frame and truncates its tail.
+			var prefix int
+			if codec == "H265" || codec == "h265" {
+				prefix = hevcFirstNAL(region)
+			} else {
+				prefix = indexStartCode(region)
+			}
 			if prefix < 0 {
 				prefix = 0
 			}
@@ -176,7 +213,7 @@ func (d *Depacketiser) Next() (Frame, bool) {
 			}
 			f := Frame{
 				Kind:   kind,
-				Codec:  string(trimNul(d.buf[4:8])),
+				Codec:  codec,
 				Micros: binary.LittleEndian.Uint32(d.buf[16:]),
 				Data:   append([]byte(nil), d.buf[hdr+prefix:hdr+prefix+size]...),
 			}
