@@ -31,6 +31,27 @@ more-minified build; it is jsdelivr's own passthrough wrapper around the
 already-minified `dist/mpegts.js`, so `dist/mpegts.js` is the file vendored
 here.
 
+That `mpegts.js.LICENSE.txt` is itself vendored, as
+`internal/control/assets/mpegts.js.LICENSE.txt`:
+
+- Fetched from: `https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.js.LICENSE.txt`
+- SHA-256 as committed:
+  `dc4d5273f129801a2575dcb2649d5ad2ca06be1334c9be2a8f7929118e0e8668`
+- Covers: es6-promise (MIT), Copyright (c) 2014 Yehuda Katz, Tom Dale,
+  Stefan Penner and contributors. It is webpack's own generated notice
+  comment, four lines long, and just names the bundled dependency and
+  points at its upstream LICENSE
+  (`https://raw.githubusercontent.com/stefanpenner/es6-promise/master/LICENSE`);
+  it is not the full MIT text itself, and nothing longer exists upstream to
+  vendor in its place -- this is the actual third party notice this bundle
+  ships.
+
+To verify it has not drifted:
+
+```
+sha256sum internal/control/assets/mpegts.js.LICENSE.txt
+```
+
 To verify the file has not drifted:
 
 ```
@@ -39,4 +60,6 @@ sha256sum internal/control/assets/mpegts.js
 
 To pick up a newer version, fetch a specific pinned version from jsdelivr or
 cdnjs, never a "latest" URL, and update this file's version, source URL and
-checksum together with the new file.
+checksum together with the new file -- and re-fetch mpegts.js.LICENSE.txt
+alongside it, since a version bump can change what third party code is
+bundled.
