@@ -39,6 +39,7 @@ const runStopGrace = 5 * time.Second
 func main() {
 	configPath := flag.String("config", "", "path to the TOML config file")
 	listenOverride := flag.String("listen", "", "HTTP listen address, overriding the config file's")
+	streamBase := flag.String("stream-base", "", "browser reachable base URL of the streaming listener, for example http://10.0.0.2:8560 (empty means same host)")
 	flag.Parse()
 
 	if *configPath == "" {
@@ -95,6 +96,8 @@ func main() {
 			AllowNoPassword: cfg.Control.AllowNoPassword,
 			Status:          srv,
 			Logs:            logs,
+			Hubs:            sup,
+			StreamBase:      *streamBase,
 		})
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits

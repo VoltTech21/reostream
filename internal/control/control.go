@@ -10,13 +10,22 @@ package control
 import (
 	"embed"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"sync"
+
+	"github.com/VoltTech21/reostream/internal/server"
 )
 
 //go:embed templates/*.html
 var templateFS embed.FS
+
+//go:embed assets
+var assetFS embed.FS
+
+// assetSub drops the "assets" prefix so the URL and the file path match.
+var assetSub, _ = fs.Sub(assetFS, "assets")
 
 // Options is everything the control server needs from the rest of the
 // daemon. Later tasks add fields; nothing here reaches back into streaming
@@ -26,6 +35,8 @@ type Options struct {
 	AllowNoPassword bool
 	Status          StatusSource
 	Logs            *LogBuffer
+	Hubs            server.HubSource
+	StreamBase      string
 }
 
 type Server struct {
@@ -68,6 +79,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /logs", s.authed(http.HandlerFunc(s.serveLogsPage)))
 	mux.Handle("GET /logs/history", s.authed(http.HandlerFunc(s.serveLogHistory)))
 	mux.Handle("GET /logs/stream", s.authed(http.HandlerFunc(s.serveLogStream)))
+	mux.Handle("GET /assets/", s.authed(http.StripPrefix("/assets/",
+		http.FileServer(http.FS(assetSub)))))
 	return mux
 }
 
@@ -95,5 +108,6 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "dashboard.html", struct {
 		Title string
 		Rows  []row
-	}{Title: "Status", Rows: s.rows()})
+		Tiles []tile
+	}{Title: "Status", Rows: s.rows(), Tiles: s.tiles()})
 }

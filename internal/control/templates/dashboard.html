@@ -14,4 +14,27 @@
 </tr>
 {{end}}
 </table>
+
+<h2>Live</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(20rem,1fr));gap:.75rem">
+{{range .Tiles}}
+<figure style="margin:0">
+<figcaption>{{.Camera}}</figcaption>
+{{if .Playable}}
+<video data-src="{{.URL}}" muted playsinline controls style="width:100%"></video>
+{{else}}
+<p>No browser playable stream on this camera. Its streams are HEVC, which browsers here do not decode.</p>
+{{end}}
+</figure>
+{{end}}
+</div>
+<script src="/assets/mpegts.js"></script>
+<script>
+for (const el of document.querySelectorAll('video[data-src]')) {
+  if (!window.mpegts || !mpegts.isSupported()) break;
+  const player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: el.dataset.src});
+  player.attachMediaElement(el);
+  player.load();
+}
+</script>
 {{end}}
