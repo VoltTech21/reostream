@@ -36,9 +36,11 @@ password = ""
 streams = ["main", "sub"]
 `
 
-// The whole point of the guard: a camera the daemon is actively streaming
+// The whole point of the guard: an address already in the daemon's config
 // must never be dialled again by a probe, because this protocol permits
-// exactly one connection per stream.
+// exactly one connection per stream and a second one risks contending with,
+// or triggering the same lockout as, whatever the daemon is already doing
+// with that camera.
 func TestAlreadyStreamingBlocksAConfiguredLiveCamera(t *testing.T) {
 	path := writeTestConfig(t, guardTestConfig)
 	s := New(Options{
@@ -50,7 +52,7 @@ func TestAlreadyStreamingBlocksAConfiguredLiveCamera(t *testing.T) {
 
 	msg, blocked := s.alreadyStreaming("192.0.2.50")
 	if !blocked {
-		t.Fatal("want blocked = true for a camera the daemon reports connected")
+		t.Fatal("want blocked = true for a camera already in config")
 	}
 	for _, want := range []string{"front", "main"} {
 		if !strings.Contains(msg, want) {
@@ -59,38 +61,41 @@ func TestAlreadyStreamingBlocksAConfiguredLiveCamera(t *testing.T) {
 	}
 }
 
+// This is the case the guard exists for most: a camera sitting
+// reconnecting or down is not safer to probe than one streaming cleanly.
+// It is very often *more* dangerous, since a held session the camera has
+// not released is one of the more common reasons a stream never comes up,
+// and the supervisor is mid-backoff, about to dial again at an
+// unpredictable moment a probe would race rather than avoid. Blocking is a
+// config-membership decision now, specifically so this case is refused too.
+func TestAlreadyStreamingBlocksAConfiguredButDisconnectedCamera(t *testing.T) {
+	path := writeTestConfig(t, guardTestConfig)
+	s := New(Options{
+		ConfigPath: path,
+		Status: stubStatus{
+			"front/main": server.StreamStatus{Connected: false, Restarts: 4},
+			"front/sub":  server.StreamStatus{Connected: false, Restarts: 4},
+		},
+	})
+
+	msg, blocked := s.alreadyStreaming("192.0.2.50")
+	if !blocked {
+		t.Fatal("want blocked = true for a configured camera even though no stream is currently connected")
+	}
+	if !strings.Contains(msg, "front") {
+		t.Errorf("message %q does not name the camera", msg)
+	}
+}
+
 // The default port rule (":9000") must not let a typed address slip past
 // the match against a config entry written without a port, or the guard is
 // trivially bypassed by typing the address slightly differently.
 func TestAlreadyStreamingMatchesOnNormalizedAddress(t *testing.T) {
 	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{
-		ConfigPath: path,
-		Status: stubStatus{
-			"front/main": server.StreamStatus{Connected: true},
-		},
-	})
+	s := New(Options{ConfigPath: path})
 
 	if _, blocked := s.alreadyStreaming("192.0.2.50:9000"); !blocked {
 		t.Error("want the guard to match an explicit :9000 against a config entry with no port")
-	}
-}
-
-// A camera that is configured but currently down (no live connection to
-// contend with) must not block a probe: the guard exists to prevent
-// overlapping connections, not to forbid re-probing an offline camera.
-func TestAlreadyStreamingAllowsAConfiguredButDownCamera(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{
-		ConfigPath: path,
-		Status: stubStatus{
-			"front/main": server.StreamStatus{Connected: false},
-			"front/sub":  server.StreamStatus{Connected: false},
-		},
-	})
-
-	if _, blocked := s.alreadyStreaming("192.0.2.50"); blocked {
-		t.Error("want blocked = false for a camera that is configured but not connected")
 	}
 }
 
@@ -109,20 +114,22 @@ func TestAlreadyStreamingAllowsAnUnconfiguredAddress(t *testing.T) {
 	}
 }
 
-// Without both a config path and a StatusSource, the question genuinely
-// cannot be answered here, and the guard must say so by never blocking
-// rather than silently pretending nothing is live.
-func TestAlreadyStreamingCannotAnswerWithoutConfigOrStatus(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-
-	noStatus := New(Options{ConfigPath: path})
-	if _, blocked := noStatus.alreadyStreaming("192.0.2.50"); blocked {
-		t.Error("want blocked = false with no StatusSource wired")
-	}
-
-	noConfig := New(Options{Status: stubStatus{"front/main": server.StreamStatus{Connected: true}}})
+// Without a config path, the question genuinely cannot be answered here,
+// and the guard must say so by never blocking rather than refusing every
+// probe just because it cannot check. A StatusSource is no longer required
+// to decide whether to block at all -- it only affects what the blocked
+// message says -- so a missing one alone must not block anything either.
+func TestAlreadyStreamingCannotAnswerWithoutConfig(t *testing.T) {
+	noConfig := New(Options{})
 	if _, blocked := noConfig.alreadyStreaming("192.0.2.50"); blocked {
 		t.Error("want blocked = false with no ConfigPath wired")
+	}
+
+	path := writeTestConfig(t, guardTestConfig)
+	noStatus := New(Options{ConfigPath: path})
+	if _, blocked := noStatus.alreadyStreaming("192.0.2.50"); !blocked {
+		t.Error("want blocked = true for a configured camera even with no StatusSource wired; " +
+			"blocking is a config-membership decision, Status only affects the message")
 	}
 }
 
@@ -130,11 +137,16 @@ func TestAlreadyStreamingCannotAnswerWithoutConfigOrStatus(t *testing.T) {
 // (which would dial) when the guard blocks. Proven here by pointing at a
 // closed local port: if the guard failed to block, this would attempt a
 // real dial and fail differently (a dial error, not the guard's message).
+// The camera's streams are deliberately reported disconnected, since that
+// is now the case that most needs the guard to hold.
 func TestProbeGuardedNeverDialsWhenBlocked(t *testing.T) {
 	path := writeTestConfig(t, guardTestConfig)
 	s := New(Options{
 		ConfigPath: path,
-		Status:     stubStatus{"front/main": server.StreamStatus{Connected: true}},
+		Status: stubStatus{
+			"front/main": server.StreamStatus{Connected: false},
+			"front/sub":  server.StreamStatus{Connected: false},
+		},
 	})
 
 	rep := s.probeGuarded(context.Background(), "192.0.2.50", "admin", "")
@@ -142,7 +154,7 @@ func TestProbeGuardedNeverDialsWhenBlocked(t *testing.T) {
 		t.Fatalf("got a report with a model or streams, want only a blocked message: %+v", rep)
 	}
 	if !strings.Contains(rep.Err, "front") {
-		t.Errorf("Err = %q, does not name the camera already streaming", rep.Err)
+		t.Errorf("Err = %q, does not name the camera already configured", rep.Err)
 	}
 }
 

@@ -96,8 +96,8 @@ var streamKinds = map[string]string{
 	"extern": baichuan.StreamExtern,
 }
 
-// probeGuarded is the real Probe: it refuses to dial a camera the daemon
-// already holds a live session with, then delegates to probeCamera.
+// probeGuarded is the real Probe: it refuses to dial an address already
+// present in the daemon's own config, then delegates to probeCamera.
 //
 // This exists because probeCamera dials up to four real connections to
 // whatever address an operator types (see GetStreamInfo's own doc comment
@@ -106,7 +106,7 @@ var streamKinds = map[string]string{
 // already in the fleet is an expected use of this page, not a mistake. A
 // camera permits one connection per stream, and this daemon's whole
 // discipline is that an overlapping connection is the fault to prevent, not
-// tolerate and recover from. Checking the daemon's own status before
+// tolerate and recover from. Checking the daemon's own config before
 // dialing is cheap; finding out the hard way, by contending with the
 // supervisor's own connection and disturbing a live stream, is not.
 func (s *Server) probeGuarded(ctx context.Context, addr, user, pass string) CameraReport {
@@ -116,18 +116,39 @@ func (s *Server) probeGuarded(ctx context.Context, addr, user, pass string) Came
 	return probeCamera(ctx, addr, user, pass)
 }
 
-// alreadyStreaming reports whether addr belongs to a camera this daemon is
-// currently streaming, and if so, a message naming what it already knows
-// about it, for the setup page to show in place of a fresh probe.
+// alreadyStreaming reports whether addr belongs to a camera already present
+// in the daemon's config, and if so, a message naming it and, where
+// available, what the daemon currently thinks of its streams.
+//
+// The decision to block is config membership alone, deliberately not
+// whether the supervisor currently reports that camera connected. It was
+// briefly the latter, and that was wrong: a camera the supervisor reports
+// disconnected is not a camera safe to probe, it is often the *most*
+// dangerous one to. A held session the camera itself has not released is
+// one of the more common reasons a stream sits reconnecting rather than
+// connected, and the supervisor is between dials on a backoff timer that
+// will fire again at a moment this handler cannot predict; a probe landing
+// in that window does not avoid the supervisor's own connection attempt, it
+// races it, and can just as easily be the second connection that trips the
+// camera's own multi-minute lockout. Config membership carries no such
+// timing hazard: it cannot change on a backoff clock, so blocking on it
+// also closes down most of the window between this check and the dial in
+// probeCamera, which live-state blocking left open.
+//
+// The known cost of this, taken deliberately: an operator can no longer use
+// this page to probe a camera that is configured but currently down, which
+// may be exactly when they want a diagnosis. A probe that can wedge a
+// camera already in trouble is worse than a probe that declines to run
+// against one.
 //
 // This can only answer as well as the daemon's own wiring allows: it needs
-// both a config file to map addr to a camera name and a StatusSource to ask
-// whether that camera is live. Either missing means the question genuinely
-// cannot be answered here, so this reports "not blocked" rather than
-// guessing; see the task-12 report for why that is not the same as the
-// guard being pointless; every real deployment (cmd/reostream) wires both.
+// a config file to map addr to a camera at all. Missing means the question
+// genuinely cannot be answered here, so this reports "not blocked" rather
+// than guessing; see the task-12 report for why that is not the same as the
+// guard being pointless. Every real deployment (cmd/reostream) wires
+// ConfigPath.
 func (s *Server) alreadyStreaming(addr string) (msg string, blocked bool) {
-	if s.opts.ConfigPath == "" || s.opts.Status == nil {
+	if s.opts.ConfigPath == "" {
 		return "", false
 	}
 	cfg, err := config.LoadRaw(s.opts.ConfigPath)
@@ -147,23 +168,36 @@ func (s *Server) alreadyStreaming(addr string) (msg string, blocked bool) {
 		return "", false
 	}
 
-	stats := s.opts.Status.StreamStats()
-	var live []string
+	return fmt.Sprintf("%q at this address is already configured. Not connecting again: "+
+		"this camera allows only one session per stream, and a second connection risks "+
+		"contending with, or triggering the same lockout as, whatever the daemon is already "+
+		"doing with it (%s)",
+		cam.Name, streamKnowledge(s.opts.Status, cam)), true
+}
+
+// streamKnowledge describes what the daemon currently believes about cam's
+// streams, for the blocked message. This is informational only: unlike the
+// block decision above, it plays no part in deciding whether to dial, so a
+// nil StatusSource or an unrecognised stream just narrows what can be said,
+// never what gets blocked.
+func streamKnowledge(status StatusSource, cam *config.Camera) string {
+	if status == nil {
+		return "current status unknown: no status source is wired up"
+	}
+	stats := status.StreamStats()
+	parts := make([]string, 0, len(cam.Streams))
 	for _, stream := range cam.Streams {
 		st, ok := stats[cam.Name+"/"+stream]
-		if ok && st.Connected {
-			live = append(live, fmt.Sprintf("%s (%s)", stream, streamState(st)))
+		if !ok {
+			parts = append(parts, stream+": unknown")
+			continue
 		}
+		parts = append(parts, stream+": "+streamState(st))
 	}
-	if len(live) == 0 {
-		return "", false
+	if len(parts) == 0 {
+		return "no streams configured"
 	}
-	return fmt.Sprintf(
-		"%q at this address is already configured and streaming: %s. Not connecting again: "+
-			"this camera allows only one session per stream, and a second connection would "+
-			"contend with the one already running.",
-		cam.Name, strings.Join(live, ", "),
-	), true
+	return strings.Join(parts, ", ")
 }
 
 // normalizeAddr applies the same default-port rule baichuan.Dial does, so a
