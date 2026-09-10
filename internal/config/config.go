@@ -111,6 +111,39 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadRaw decodes the TOML file at path with the same unknown-key
+// rejection Load applies, but performs no environment resolution: a
+// camera's Password field comes back exactly as written, including an
+// unresolved "$NAME" reference, and no environment variable needs to be
+// set for this to succeed.
+//
+// This exists for callers that read a config only to write it back, such
+// as the control page's camera form. Editing the file's text should not
+// require the file's secrets to pass through the process first, and
+// resolving them here would mean writing a real password back to disk in
+// place of the "$NAME" reference that was deliberately keeping it out of
+// the file.
+//
+// Never use the Config this returns to actually connect to a camera; its
+// passwords may not be passwords at all.
+func LoadRaw(path string) (*Config, error) {
+	var cfg Config
+	meta, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
+		return nil, fmt.Errorf("config: %s: %w", path, err)
+	}
+
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, len(undecoded))
+		for i, k := range undecoded {
+			keys[i] = k.String()
+		}
+		return nil, fmt.Errorf("config: %s: unknown key(s): %s", path, strings.Join(keys, ", "))
+	}
+
+	return &cfg, nil
+}
+
 // Validate checks the constraints Load cannot express through decoding
 // alone: names and addresses present, streams recognised, and no two
 // cameras or streams that would fight over the same connection. A camera

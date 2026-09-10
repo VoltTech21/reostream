@@ -37,6 +37,29 @@ func TestMissingEnvironmentPasswordIsAnError(t *testing.T) {
 	}
 }
 
+func TestLoadRawLeavesAnEnvironmentReferenceUnresolved(t *testing.T) {
+	// LoadRaw must not need the referenced variable set at all, and must
+	// not resolve it even when it is.
+	t.Setenv("TEST_CAM_PASSWORD", "s3cret")
+	c, err := LoadRaw("testdata/valid.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Cameras[0].Password; got != "$TEST_CAM_PASSWORD" {
+		t.Fatalf("password = %q, want the raw \"$TEST_CAM_PASSWORD\" reference untouched", got)
+	}
+}
+
+func TestLoadRawStillRejectsUnknownKeys(t *testing.T) {
+	_, err := LoadRaw("testdata/unknown_key.toml")
+	if err == nil {
+		t.Fatal("expected an error for an unknown key")
+	}
+	if !strings.Contains(err.Error(), "adress") {
+		t.Fatalf("error should name the offending key, got: %v", err)
+	}
+}
+
 func TestDuplicateStreamIsRejected(t *testing.T) {
 	// A camera permits one connection per stream. Two entries for the same
 	// camera and stream would have them fight, and the loser blocks the winner
