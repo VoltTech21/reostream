@@ -66,8 +66,17 @@ func (s *Server) Handler() http.Handler {
 	// segments have to occupy a whole path segment, so a pattern like
 	// "/{name}.keyframe" is not expressible and this is simpler than a
 	// second mux layered on top.
-	mux.HandleFunc("/", s.serveStreamOrKeyframe)
+	mux.Handle("/", s.StreamHandler())
 	return mux
+}
+
+// StreamHandler returns only the per-camera video and keyframe routes,
+// without /api/status or /metrics. It exists so a second listener can offer
+// the same hub subscriptions without also exposing the status endpoints a
+// second time; see internal/control's mount of this under /stream/, which
+// is what makes the operator page's live tiles same-origin.
+func (s *Server) StreamHandler() http.Handler {
+	return http.HandlerFunc(s.serveStreamOrKeyframe)
 }
 
 // lookup resolves a request path stem, meaning the path with its leading

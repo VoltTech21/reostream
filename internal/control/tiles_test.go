@@ -2,6 +2,23 @@ package control
 
 import "testing"
 
+func TestTileURLDefaultsToTheSameOriginMount(t *testing.T) {
+	// An empty StreamBase must resolve against this page's own /stream/
+	// mount, not the browser's current origin left blank: the streaming
+	// listener is on a different port and cannot grow CORS headers, so
+	// same-origin is the only default that actually plays. See Finding 1
+	// in the 2026-09-10 review.
+	if got := tileURL("", "/gate_sub.ts"); got != "/stream/gate_sub.ts" {
+		t.Fatalf("tileURL(\"\", ...) = %q, want the same-origin /stream/ mount", got)
+	}
+}
+
+func TestTileURLHonoursAnExplicitBase(t *testing.T) {
+	if got := tileURL("http://10.0.0.2:8560", "/gate_sub.ts"); got != "http://10.0.0.2:8560/gate_sub.ts" {
+		t.Fatalf("tileURL with an explicit base = %q, want it used verbatim", got)
+	}
+}
+
 func TestPlayableStreamPrefersSubThenExtern(t *testing.T) {
 	cases := []struct {
 		name    string

@@ -97,6 +97,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /setup/probe", s.authed(http.HandlerFunc(s.serveProbe)))
 	mux.Handle("GET /assets/", s.authed(http.StripPrefix("/assets/",
 		http.FileServer(http.FS(assetSub)))))
+	// The live tiles need to fetch MPEG-TS from the same origin as this
+	// page: mpegts.js pulls the stream over XHR, the streaming listener is
+	// a different port and therefore a different origin, and that listener
+	// must not gain CORS headers (it must not change at all -- a recorder
+	// depends on it staying exactly as it is). Mounting the streaming
+	// handler's own routes here, behind the same auth as everything else on
+	// this page, gives tiles a same-origin URL without touching the
+	// streaming listener or duplicating how it serves a hub. See
+	// internal/control/tiles.go for the URLs this produces.
+	if s.opts.Hubs != nil {
+		streamSrv := server.New(s.opts.Hubs)
+		mux.Handle("GET /stream/", s.authed(http.StripPrefix("/stream", streamSrv.StreamHandler())))
+	}
 	return mux
 }
 

@@ -39,7 +39,7 @@ const runStopGrace = 5 * time.Second
 func main() {
 	configPath := flag.String("config", "", "path to the TOML config file")
 	listenOverride := flag.String("listen", "", "HTTP listen address, overriding the config file's")
-	streamBase := flag.String("stream-base", "", "browser reachable base URL of the streaming listener, for example http://10.0.0.2:8560 (empty means same host)")
+	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://10.0.0.2:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
 	flag.Parse()
 
 	if *configPath == "" {

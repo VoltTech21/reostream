@@ -67,6 +67,24 @@ type tile struct {
 	Playable bool
 }
 
+// streamPrefix is where control.go mounts the streaming handler on this
+// listener. It is the tile URL default: same origin, no CORS needed. See
+// control.go's Handler for why that mount exists at all.
+const streamPrefix = "/stream"
+
+// tileURL builds the URL a tile plays. An empty StreamBase means "use this
+// page's own same-origin mount" (see streamPrefix), not "same host as the
+// browser": the streaming listener is on a different port, which is a
+// different origin, and that listener is not allowed to grow CORS headers.
+// A caller who sets StreamBase deliberately, to point tiles at some other
+// reachable base, is trusted to have a reason and gets that base verbatim.
+func tileURL(base, path string) string {
+	if base == "" {
+		return streamPrefix + path
+	}
+	return base + path
+}
+
 func (s *Server) tiles() []tile {
 	byCam := s.codecsByCamera()
 	names := make([]string, 0, len(byCam))
@@ -79,7 +97,7 @@ func (s *Server) tiles() []tile {
 		path, ok := playableStream(cam, byCam[cam])
 		out = append(out, tile{
 			Camera:   cam,
-			URL:      s.opts.StreamBase + path,
+			URL:      tileURL(s.opts.StreamBase, path),
 			Playable: ok,
 		})
 	}
