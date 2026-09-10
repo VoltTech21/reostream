@@ -1,16 +1,25 @@
 {{define "probe"}}
-{{if .Err}}
+{{if and .Err (not .Streams)}}
 <p class="state-down">{{.Err}}</p>
 {{else}}
 <p>Found <strong>{{.Model}}</strong>.</p>
+{{if .Err}}
+<p class="state-down">{{.Err}}</p>
+{{end}}
 <table>
 <tr><th>Stream</th><th>Codec</th><th>Resolution</th><th>Serve it</th></tr>
 {{range .Streams}}
 <tr>
 <td>{{.Name}}</td>
+{{if .Absent}}
+<td colspan="3">not offered by this camera{{if .Reason}} ({{.Reason}}){{end}}</td>
+{{else if .Undetermined}}
+<td colspan="3" class="state-down">could not determine: {{.Reason}}</td>
+{{else}}
 <td>{{.Codec}}</td>
 <td>{{.Width}}x{{.Height}}</td>
 <td><input form="add-camera" type="checkbox" name="streams" value="{{.Name}}" checked></td>
+{{end}}
 </tr>
 {{end}}
 </table>
