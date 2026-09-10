@@ -1,0 +1,10 @@
+listen = "0.0.0.0:8560"
+
+[control]
+listen = "0.0.0.0:8562"
+password = "$TEST_CONTROL_PW"
+
+[[camera]]
+name = "one"
+address = "192.0.2.50"
+streams = ["main"]

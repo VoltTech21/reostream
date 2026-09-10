@@ -135,3 +135,41 @@ func TestRTSPUnknownStreamName(t *testing.T) {
 		t.Fatal("expected an error for an unknown rtsp stream name")
 	}
 }
+
+func TestControlPasswordComesFromTheEnvironment(t *testing.T) {
+	t.Setenv("TEST_CONTROL_PW", "hunter2")
+	cfg, err := Load("testdata/control.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Control == nil {
+		t.Fatal("no [control] section decoded")
+	}
+	if cfg.Control.Password != "hunter2" {
+		t.Fatalf("password is %q, want the resolved environment value", cfg.Control.Password)
+	}
+}
+
+func TestControlWithoutAPasswordIsRefused(t *testing.T) {
+	cfg := Config{
+		Control: &ControlConfig{Listen: "0.0.0.0:8562"},
+		Cameras: []Camera{{Name: "a", Address: "x", Streams: []string{"main"}}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a control listener with no password was accepted")
+	}
+	if !strings.Contains(err.Error(), "allow_no_password") {
+		t.Fatalf("error %q does not say how to proceed deliberately", err)
+	}
+}
+
+func TestControlWithoutAPasswordIsAllowedWhenSaidExplicitly(t *testing.T) {
+	cfg := Config{
+		Control: &ControlConfig{Listen: "0.0.0.0:8562", AllowNoPassword: true},
+		Cameras: []Camera{{Name: "a", Address: "x", Streams: []string{"main"}}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

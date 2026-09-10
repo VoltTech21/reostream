@@ -32,10 +32,25 @@ type RTSPConfig struct {
 	Listen string
 }
 
+// ControlConfig configures the operator page's listener. Its absence turns
+// the page off entirely, which is the default: a daemon that serves video
+// should not start serving a credential store because it was upgraded.
+type ControlConfig struct {
+	Listen   string
+	Password string
+
+	// AllowNoPassword runs the page with no authentication at all. It is a
+	// separate opt-in rather than the meaning of an empty password because
+	// an empty password is much more often a mistake, and this page can
+	// read and write camera credentials.
+	AllowNoPassword bool `toml:"allow_no_password"`
+}
+
 // Config is the top level shape of the TOML file.
 type Config struct {
 	Listen  string
 	RTSP    *RTSPConfig `toml:"rtsp"`
+	Control *ControlConfig `toml:"control"`
 	Cameras []Camera    `toml:"camera"`
 }
 
@@ -80,6 +95,15 @@ func Load(path string) (*Config, error) {
 		cfg.Cameras[i].Password = val
 	}
 
+	if cfg.Control != nil && strings.HasPrefix(cfg.Control.Password, "$") {
+		name := strings.TrimPrefix(cfg.Control.Password, "$")
+		val, ok := os.LookupEnv(name)
+		if !ok {
+			return nil, fmt.Errorf("config: %s: control: environment variable %s is not set", path, name)
+		}
+		cfg.Control.Password = val
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
@@ -94,6 +118,11 @@ func Load(path string) (*Config, error) {
 // harmless redundancy, it is two runners that will fight for one session
 // and the loser blocks the winner until the camera times the session out.
 func (c *Config) Validate() error {
+	if c.Control != nil && c.Control.Listen != "" &&
+		c.Control.Password == "" && !c.Control.AllowNoPassword {
+		return fmt.Errorf("control: listen is set with no password; set one or set allow_no_password = true")
+	}
+
 	seenNames := make(map[string]bool, len(c.Cameras))
 	for _, cam := range c.Cameras {
 		if cam.Name == "" {
