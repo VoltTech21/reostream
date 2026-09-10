@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"testing"
 
@@ -145,5 +146,83 @@ func TestReloadBeforeRunIsRefused(t *testing.T) {
 	s := New(nil, c.runner())
 	if _, err := s.Reload(nil); err == nil {
 		t.Fatal("Reload before Run was accepted; there is no context to start streams under")
+	}
+}
+
+// TestReloadSerialisesConcurrentCalls fires two Reload calls at once with
+// different target camera lists, the way two browser tabs saving the camera
+// list at the same time would. Without reloadMu, both calls read the fleet
+// before either has written its changes back, compute their diffs against
+// that same stale view, and interleave their writes: the result can end up
+// with pieces of both configs, or with a stream neither config names. This
+// asserts the final fleet is exactly one config or exactly the other, never
+// a mixture, and that every stream in it is actually running.
+func TestReloadSerialisesConcurrentCalls(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, func() bool { return c.count("a/main") == 1 })
+
+	configX := []config.Camera{
+		{Name: "a", Address: "9.9.9.9", Streams: []string{"main"}},
+		{Name: "b", Address: "2.2.2.2", Streams: []string{"main"}},
+	}
+	configY := []config.Camera{
+		{Name: "a", Address: "8.8.8.8", Streams: []string{"main"}},
+		{Name: "c", Address: "3.3.3.3", Streams: []string{"main"}},
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errs[0] = s.Reload(configX)
+	}()
+	go func() {
+		defer wg.Done()
+		_, errs[1] = s.Reload(configY)
+	}()
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	names := s.HubNames()
+	sort.Strings(names)
+	matchesX := len(names) == 2 && names[0] == "a/main" && names[1] == "b/main"
+	matchesY := len(names) == 2 && names[0] == "a/main" && names[1] == "c/main"
+	if !matchesX && !matchesY {
+		t.Fatalf("fleet after concurrent reloads is %v, want exactly configX's streams or exactly configY's, not a mixture", names)
+	}
+
+	var wantAddr string
+	if matchesX {
+		wantAddr = "9.9.9.9"
+	} else {
+		wantAddr = "8.8.8.8"
+	}
+	s.mu.Lock()
+	gotAddr := s.entries["a/main"].cfg.Address
+	s.mu.Unlock()
+	if gotAddr != wantAddr {
+		t.Fatalf("a/main has address %q, want %q: the fleet matches one config's names but another's data", gotAddr, wantAddr)
+	}
+
+	for _, name := range names {
+		waitFor(t, func() bool {
+			for _, stat := range s.Stats() {
+				if hubName(stat.Camera, stat.Stream) == name {
+					return stat.Running
+				}
+			}
+			return false
+		})
 	}
 }

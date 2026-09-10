@@ -114,6 +114,21 @@ type Supervisor struct {
 
 	mu      sync.Mutex
 	entries map[string]*entry
+
+	// reloadMu serialises whole Reload calls, separately from mu. mu guards
+	// the maps for short critical sections, including HTTP status reads, and
+	// must never be held across the blocking stop phase; reloadMu is held
+	// across exactly that phase, because two interleaved Reload calls would
+	// otherwise each compute their diff against a different view of the
+	// fleet and leave it matching neither config, with neither caller told
+	// anything went wrong. Two browser tabs saving the camera list at once
+	// is an ordinary occurrence once Reload is wired to an HTTP handler, not
+	// an exotic one.
+	//
+	// Lock order: reloadMu is always acquired before mu, never the reverse.
+	// Taking mu for the whole call instead of a dedicated lock would
+	// deadlock the status endpoint behind a camera round trip.
+	reloadMu sync.Mutex
 }
 
 // New builds a Supervisor for cams, using run to drive each stream. Nothing
@@ -261,6 +276,11 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 	if !s.started.Load() {
 		return ReloadResult{}, ErrNotRunning
 	}
+
+	// Held for the whole call, including across the stop phase below where
+	// mu is deliberately released: see reloadMu's doc comment.
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 
 	// Validate before touching anything. A reload that half applies leaves
 	// a fleet in a state no config file describes.
