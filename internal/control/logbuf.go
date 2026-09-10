@@ -32,6 +32,7 @@ func NewLogBuffer(n int) *LogBuffer {
 
 func (b *LogBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	text := b.partial + string(p)
 	parts := strings.Split(text, "\n")
 	b.partial = parts[len(parts)-1]
@@ -43,17 +44,15 @@ func (b *LogBuffer) Write(p []byte) (int, error) {
 	if len(b.lines) > b.max {
 		b.lines = append([]string(nil), b.lines[len(b.lines)-b.max:]...)
 	}
-	subs := make([]chan string, 0, len(b.subs))
-	for ch := range b.subs {
-		subs = append(subs, ch)
-	}
-	b.mu.Unlock()
 
-	// Non-blocking, and a full subscriber loses lines rather than stalling
-	// the writer. Every stream goroutine logs through here, so a browser tab
-	// that stopped reading must never be able to hold one up.
+	// Sends happen under the same lock that guards b.subs and that
+	// Subscribe's cancel uses to delete and close a channel, so Write can
+	// never observe a channel mid-close and send on it. Every send keeps
+	// its default case, so it cannot block, which is what makes holding
+	// the mutex across a bounded number of these sends safe: it does not
+	// reintroduce the stall a slow subscriber must never cause.
 	for _, line := range fresh {
-		for _, ch := range subs {
+		for ch := range b.subs {
 			select {
 			case ch <- line:
 			default:
@@ -79,10 +78,13 @@ func (b *LogBuffer) Subscribe() (<-chan string, func()) {
 	var once sync.Once
 	return ch, func() {
 		once.Do(func() {
+			// delete and close happen under the same lock Write sends
+			// under, so Write can never see this channel after it starts
+			// closing.
 			b.mu.Lock()
 			delete(b.subs, ch)
-			b.mu.Unlock()
 			close(ch)
+			b.mu.Unlock()
 		})
 	}
 }

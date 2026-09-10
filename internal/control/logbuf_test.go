@@ -2,6 +2,7 @@ package control
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -60,5 +61,51 @@ func TestLogBufferNeverBlocksOnASlowSubscriber(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Write blocked on a subscriber that is not reading")
+	}
+}
+
+func TestLogBufferSubscribeCancelDoesNotRaceASendToClosed(t *testing.T) {
+	// A cancel deleting and closing a subscriber channel must never happen
+	// while Write is sending to that same channel, or Write panics with
+	// "send on closed channel". A select with a default case does not
+	// protect against this: a closed channel is always ready, so the send
+	// case is chosen and it panics anyway. This drives concurrent Writes
+	// against a tight Subscribe/cancel loop, which is exactly the shape of
+	// a browser tab opening and closing the logs page while the fleet logs.
+	const iterations = 5000
+	b := NewLogBuffer(10)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	panics := make(chan any, 1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				select {
+				case panics <- r:
+				default:
+				}
+			}
+		}()
+		for i := 0; i < iterations; i++ {
+			b.Write([]byte("line\n"))
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_, cancel := b.Subscribe()
+			cancel()
+		}
+	}()
+
+	wg.Wait()
+	select {
+	case r := <-panics:
+		t.Fatalf("Write panicked: %v", r)
+	default:
 	}
 }
