@@ -204,7 +204,7 @@ func TestNoSinkWithoutRTSPConfig(t *testing.T) {
 		t.Errorf("factory called for %s/%s, which has no rtsp entry", camera, st)
 		return nil
 	})
-	if s.entries[0].cfg.Sink != nil {
+	if s.entries["a/main"].cfg.Sink != nil {
 		t.Error("a camera without rtsp config got a sink")
 	}
 }
@@ -231,3 +231,46 @@ func TestSinkOnlyForNamedStreams(t *testing.T) {
 type stubSink struct{}
 
 func (stubSink) Frame(baichuan.Frame) {}
+
+func TestStopEntryWaitsForTheStreamToReturn(t *testing.T) {
+	released := make(chan struct{})
+	run := func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		<-ctx.Done()
+		// Stands in for the stream-stop message: a camera whose session is
+		// not released refuses its next connection for minutes, so stopEntry
+		// must not return before this has happened.
+		close(released)
+		return ctx.Err()
+	}
+	s := New([]config.Camera{{Name: "a", Address: "x", Streams: []string{"main"}}}, run)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	waitFor(t, func() bool { return s.Stats()[0].Running })
+
+	s.mu.Lock()
+	e := s.entries["a/main"]
+	s.mu.Unlock()
+	s.stopEntry(e)
+
+	select {
+	case <-released:
+	default:
+		t.Fatal("stopEntry returned before the stream released its session")
+	}
+}
+
+// waitFor polls cond for up to a second, which is long enough for a
+// goroutine to be scheduled and short enough to fail a hung test quickly.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("condition not met within 1s")
+}

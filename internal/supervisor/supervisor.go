@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,6 +71,12 @@ type entry struct {
 	// which of a camera's streams an output was asked for.
 	rtsp []string
 	stat StreamStat
+
+	// cancel stops just this stream, and done closes once its goroutine has
+	// fully returned. Both exist so one stream can be replaced without
+	// disturbing the rest of the fleet.
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // Supervisor runs every stream from a camera list and restarts failed ones.
@@ -94,8 +101,12 @@ type Supervisor struct {
 
 	hubs map[string]*hub.Hub
 
+	// runCtx is Run's context, the parent of every per-entry context, so a
+	// stream started after Run still stops when the process shuts down.
+	runCtx context.Context
+
 	mu      sync.Mutex
-	entries []*entry
+	entries map[string]*entry
 }
 
 // New builds a Supervisor for cams, using run to drive each stream. Nothing
@@ -107,6 +118,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 		backoffMax:   defaultBackoffMax,
 		backoffReset: defaultBackoffReset,
 		hubs:         make(map[string]*hub.Hub),
+		entries:      make(map[string]*entry),
 	}
 	for _, cam := range cams {
 		for _, st := range cam.Streams {
@@ -114,8 +126,9 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 			// feed; "driveway/main" and "driveway/sub" are unrelated feeds
 			// even though they share a camera.
 			h := hub.New(64)
-			s.hubs[hubName(cam.Name, st)] = h
-			s.entries = append(s.entries, &entry{
+			name := hubName(cam.Name, st)
+			s.hubs[name] = h
+			s.entries[name] = &entry{
 				rtsp: cam.RTSP,
 				cfg: stream.Config{
 					Name:     cam.Name,
@@ -126,7 +139,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 				},
 				h:    h,
 				stat: StreamStat{Camera: cam.Name, Stream: st},
-			})
+			}
 		}
 	}
 	return s
@@ -181,20 +194,28 @@ func hubName(camera, stream string) string {
 	return camera + "/" + stream
 }
 
-// Hubs returns every stream's hub, keyed by "<camera>/<stream>". Safe to
-// call at any time; the map itself is never mutated after New.
-func (s *Supervisor) Hubs() map[string]*hub.Hub {
-	return s.hubs
+// Hub returns one stream's hub by its "<camera>/<stream>" key. Locked
+// because Reload adds and removes entries while the HTTP server is serving.
+func (s *Supervisor) Hub(name string) (*hub.Hub, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, ok := s.hubs[name]
+	return h, ok
+}
+
+// HubNames lists every stream currently configured.
+func (s *Supervisor) HubNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.hubs))
+	for name := range s.hubs {
+		out = append(out, name)
+	}
+	return out
 }
 
 // Run starts one goroutine per configured stream and blocks until ctx is
 // cancelled and every one of them has finished closing.
-//
-// Run must not return before every stream has stopped: sending the
-// stream-stop message is what releases the camera's session, and an exit
-// that races that close leaves the camera refusing connections on that
-// stream for minutes. That is why this is a plain WaitGroup rather than
-// returning as soon as ctx is done.
 //
 // Run may only be called once. A second concurrent call would spawn a
 // second goroutine per entry, which is a second connection to every stream
@@ -205,16 +226,54 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return ErrAlreadyRunning
 	}
 
-	var wg sync.WaitGroup
+	s.mu.Lock()
+	s.runCtx = ctx
 	for _, e := range s.entries {
-		wg.Add(1)
-		go func(e *entry) {
-			defer wg.Done()
-			s.runStream(ctx, e)
-		}(e)
+		s.startLocked(e)
 	}
-	wg.Wait()
+	s.mu.Unlock()
+
+	<-ctx.Done()
+
+	// Wait for every stream to finish, including any added by Reload after
+	// Run started. Run must not return before every stream-stop message has
+	// gone out: that is what releases each camera's session, and an exit
+	// that races it leaves the whole fleet refusing connections for minutes.
+	s.mu.Lock()
+	live := make([]*entry, 0, len(s.entries))
+	for _, e := range s.entries {
+		live = append(live, e)
+	}
+	s.mu.Unlock()
+	for _, e := range live {
+		<-e.done
+	}
 	return ctx.Err()
+}
+
+// startLocked spawns the goroutine that owns e for its life. Caller holds
+// s.mu.
+func (s *Supervisor) startLocked(e *entry) {
+	ctx, cancel := context.WithCancel(s.runCtx)
+	e.cancel = cancel
+	e.done = make(chan struct{})
+	go func() {
+		defer close(e.done)
+		s.runStream(ctx, e)
+	}()
+}
+
+// stopEntry cancels one stream and blocks until its goroutine has returned,
+// which is after its stream-stop message has gone out. The wait is the
+// point: restarting a camera before its previous session is released gets a
+// connection that delivers nothing and blocks its own replacement until the
+// camera times the dead session out.
+func (s *Supervisor) stopEntry(e *entry) {
+	if e.cancel == nil {
+		return
+	}
+	e.cancel()
+	<-e.done
 }
 
 // runStream is the one goroutine that owns a single camera stream for its
@@ -287,10 +346,16 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 func (s *Supervisor) Stats() []StreamStat {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]StreamStat, len(s.entries))
-	for i, e := range s.entries {
-		out[i] = e.stat
+	out := make([]StreamStat, 0, len(s.entries))
+	for _, e := range s.entries {
+		out = append(out, e.stat)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Camera != out[j].Camera {
+			return out[i].Camera < out[j].Camera
+		}
+		return out[i].Stream < out[j].Stream
+	})
 	return out
 }
 
