@@ -1,0 +1,149 @@
+package supervisor
+
+import (
+	"context"
+	"sync"
+	"testing"
+
+	"github.com/VoltTech21/reostream/internal/config"
+	"github.com/VoltTech21/reostream/internal/hub"
+	"github.com/VoltTech21/reostream/internal/stream"
+)
+
+// runCounter records how many times each stream has been started, which is
+// what "untouched" has to mean: not merely still running, but never
+// restarted.
+type runCounter struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (c *runCounter) runner() Runner {
+	return func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		c.mu.Lock()
+		c.calls[cfg.Name+"/"+cfg.Stream]++
+		c.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+}
+
+func (c *runCounter) count(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls[key]
+}
+
+func TestReloadLeavesUnchangedStreamsAlone(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	cams := []config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+		{Name: "b", Address: "2.2.2.2", Streams: []string{"main"}},
+	}
+	s := New(cams, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, func() bool { return c.count("a/main") == 1 && c.count("b/main") == 1 })
+
+	res, err := s.Reload(append(cams, config.Camera{
+		Name: "c", Address: "3.3.3.3", Streams: []string{"main"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Added != 1 || res.Removed != 0 || res.Restarted != 0 || res.Unchanged != 2 {
+		t.Fatalf("got %+v, want 1 added, 0 removed, 0 restarted, 2 unchanged", res)
+	}
+	waitFor(t, func() bool { return c.count("c/main") == 1 })
+	if got := c.count("a/main"); got != 1 {
+		t.Fatalf("a/main was started %d times, want 1: adding a camera disturbed an unrelated one", got)
+	}
+	if got := c.count("b/main"); got != 1 {
+		t.Fatalf("b/main was started %d times, want 1", got)
+	}
+}
+
+func TestReloadRemovesAStreamAndItsHub(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	cams := []config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main", "sub"}},
+	}
+	s := New(cams, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, func() bool { return c.count("a/sub") == 1 })
+
+	res, err := s.Reload([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Removed != 1 {
+		t.Fatalf("got %+v, want 1 removed", res)
+	}
+	if _, ok := s.Hub("a/sub"); ok {
+		t.Fatal("a/sub still has a hub after being removed")
+	}
+	if _, ok := s.Hub("a/main"); !ok {
+		t.Fatal("a/main lost its hub")
+	}
+}
+
+func TestReloadRestartsAStreamWhoseAddressChanged(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, func() bool { return c.count("a/main") == 1 })
+
+	res, err := s.Reload([]config.Camera{
+		{Name: "a", Address: "9.9.9.9", Streams: []string{"main"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Restarted != 1 {
+		t.Fatalf("got %+v, want 1 restarted", res)
+	}
+	if res.Added != 0 {
+		t.Fatalf("got %+v: a replaced stream was counted as an addition too", res)
+	}
+	waitFor(t, func() bool { return c.count("a/main") == 2 })
+}
+
+func TestReloadRejectsAnInvalidCameraListWithoutTouchingAnything(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, c.runner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	waitFor(t, func() bool { return c.count("a/main") == 1 })
+
+	if _, err := s.Reload([]config.Camera{
+		{Name: "a", Address: "", Streams: []string{"main"}},
+	}); err == nil {
+		t.Fatal("Reload accepted a camera with no address")
+	}
+	if _, ok := s.Hub("a/main"); !ok {
+		t.Fatal("a rejected reload tore down the running fleet")
+	}
+	if got := c.count("a/main"); got != 1 {
+		t.Fatalf("a/main restarted %d times on a rejected reload", got)
+	}
+}
+
+func TestReloadBeforeRunIsRefused(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New(nil, c.runner())
+	if _, err := s.Reload(nil); err == nil {
+		t.Fatal("Reload before Run was accepted; there is no context to start streams under")
+	}
+}

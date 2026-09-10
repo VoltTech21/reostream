@@ -11,7 +11,9 @@ import (
 	"context"
 	"errors"
 	"log"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,6 +103,11 @@ type Supervisor struct {
 
 	hubs map[string]*hub.Hub
 
+	// sinkFor is kept from AttachSinks, not merely applied once: Reload
+	// builds sinks for cameras added after Run, and this is its only way to
+	// reach the output that wants them.
+	sinkFor func(camera, stream string) stream.FrameSink
+
 	// runCtx is Run's context, the parent of every per-entry context, so a
 	// stream started after Run still stops when the process shuts down.
 	runCtx context.Context
@@ -159,13 +166,26 @@ func (s *Supervisor) AttachSinks(sinkFor func(camera, stream string) stream.Fram
 	if s.started.Load() {
 		panic("supervisor: AttachSinks called after Run")
 	}
+	s.mu.Lock()
+	// Kept, not just applied: Reload builds sinks for cameras added after
+	// Run, and it has no other way to reach the output that wants them.
+	s.sinkFor = sinkFor
 	for _, e := range s.entries {
-		for _, want := range e.rtsp {
-			if want != e.cfg.Stream {
-				continue
-			}
-			e.cfg.Sink = sinkFor(e.cfg.Name, e.cfg.Stream)
-			break
+		s.applySinkLocked(e)
+	}
+	s.mu.Unlock()
+}
+
+// applySinkLocked gives e a frame sink if its camera asked for this stream
+// over RTSP. Caller holds s.mu.
+func (s *Supervisor) applySinkLocked(e *entry) {
+	if s.sinkFor == nil {
+		return
+	}
+	for _, want := range e.rtsp {
+		if want == e.cfg.Stream {
+			e.cfg.Sink = s.sinkFor(e.cfg.Name, e.cfg.Stream)
+			return
 		}
 	}
 }
@@ -212,6 +232,147 @@ func (s *Supervisor) HubNames() []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// ReloadResult reports what a Reload did, for the operator page to show and
+// for a test to assert on.
+type ReloadResult struct {
+	Added     int
+	Removed   int
+	Restarted int
+	Unchanged int
+}
+
+// ErrNotRunning is returned by Reload before Run has started. There is no
+// context to start a stream under yet, and silently deferring the change
+// until Run would make a reload that appeared to succeed do nothing.
+var ErrNotRunning = errors.New("supervisor: not running")
+
+// Reload brings the running fleet in line with cams, touching only what
+// changed. A stream whose camera is unchanged keeps its connection, its hub
+// and its subscribers: adding a ninth camera must not interrupt the other
+// eight, which is the entire reason this exists rather than a process
+// restart.
+//
+// A stream that is being replaced is stopped to completion before its
+// replacement starts. Overlapping them gets the replacement a session the
+// camera refuses, because the old one has not been released yet.
+func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
+	if !s.started.Load() {
+		return ReloadResult{}, ErrNotRunning
+	}
+
+	// Validate before touching anything. A reload that half applies leaves
+	// a fleet in a state no config file describes.
+	cfg := config.Config{Cameras: cams}
+	if s.sinkFor != nil {
+		// Validate treats rtsp entries as an error without an [rtsp]
+		// section, and by this point the RTSP server exists.
+		cfg.RTSP = &config.RTSPConfig{}
+	}
+	if err := cfg.Validate(); err != nil {
+		return ReloadResult{}, err
+	}
+
+	want := make(map[string]config.Camera)
+	for _, cam := range cams {
+		for _, st := range cam.Streams {
+			want[hubName(cam.Name, st)] = cam
+		}
+	}
+
+	s.mu.Lock()
+
+	var res ReloadResult
+	var stop []*entry
+
+	for key, e := range s.entries {
+		cam, keep := want[key]
+		if !keep {
+			stop = append(stop, e)
+			delete(s.entries, key)
+			delete(s.hubs, key)
+			res.Removed++
+			continue
+		}
+		if sameStream(e, cam) {
+			res.Unchanged++
+			continue
+		}
+		stop = append(stop, e)
+		delete(s.entries, key)
+		delete(s.hubs, key)
+		res.Restarted++
+	}
+
+	// Replacing names the keys that are being restarted rather than newly
+	// added, so the two counts below do not both claim the same stream.
+	replacing := make(map[string]bool, len(stop))
+	for _, e := range stop {
+		if _, stillWanted := want[hubName(e.cfg.Name, e.cfg.Stream)]; stillWanted {
+			replacing[hubName(e.cfg.Name, e.cfg.Stream)] = true
+		}
+	}
+
+	add := make([]string, 0, len(want))
+	for key := range want {
+		if _, exists := s.entries[key]; exists {
+			continue
+		}
+		add = append(add, key)
+	}
+	s.mu.Unlock()
+
+	// Stop outside the lock: stopEntry blocks until the stream-stop message
+	// has gone out, and holding the lock through that would stall every
+	// status request and every other reload for as long as a camera takes
+	// to answer.
+	for _, e := range stop {
+		s.stopEntry(e)
+	}
+
+	s.mu.Lock()
+	for _, key := range add {
+		cam := want[key]
+		st := strings.TrimPrefix(key, cam.Name+"/")
+		h := hub.New(64)
+		e := &entry{
+			rtsp: cam.RTSP,
+			cfg: stream.Config{
+				Name:     cam.Name,
+				Address:  cam.Address,
+				Username: cam.Username,
+				Password: cam.Password,
+				Stream:   st,
+			},
+			h:    h,
+			stat: StreamStat{Camera: cam.Name, Stream: st},
+		}
+		s.applySinkLocked(e)
+		s.entries[key] = e
+		s.hubs[key] = h
+		s.startLocked(e)
+		if !replacing[key] {
+			res.Added++
+		}
+	}
+	s.mu.Unlock()
+
+	return res, nil
+}
+
+// sameStream reports whether a running entry already matches cam, meaning
+// nothing about its connection would change. The stream name is part of the
+// key, so it is not compared here.
+//
+// The RTSP comparison is membership for this stream only, not the whole
+// list: a camera gaining an RTSP entry for its sub stream is no reason to
+// drop and rebuild its main stream's camera connection.
+func sameStream(e *entry, cam config.Camera) bool {
+	return e.cfg.Address == cam.Address &&
+		e.cfg.Username == cam.Username &&
+		e.cfg.Password == cam.Password &&
+		slices.Contains(cam.RTSP, e.cfg.Stream) == slices.Contains(e.rtsp, e.cfg.Stream)
 }
 
 // Run starts one goroutine per configured stream and blocks until ctx is
