@@ -8,6 +8,7 @@
 package control
 
 import (
+	"context"
 	"embed"
 	"html/template"
 	"io/fs"
@@ -39,6 +40,11 @@ type Options struct {
 	StreamBase      string
 	ConfigPath      string
 	Supervisor      Reloader
+
+	// Probe asks a camera what it is, for the setup flow. Nil means
+	// probeCamera; tests substitute their own so they never dial a real
+	// camera.
+	Probe func(ctx context.Context, addr, user, pass string) CameraReport
 }
 
 type Server struct {
@@ -85,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /config", s.authed(http.HandlerFunc(s.saveConfigPage)))
 	mux.Handle("GET /cameras", s.authed(http.HandlerFunc(s.serveCameras)))
 	mux.Handle("POST /cameras", s.authed(http.HandlerFunc(s.saveCamera)))
+	mux.Handle("POST /setup/probe", s.authed(http.HandlerFunc(s.serveProbe)))
 	mux.Handle("GET /assets/", s.authed(http.StripPrefix("/assets/",
 		http.FileServer(http.FS(assetSub)))))
 	return mux

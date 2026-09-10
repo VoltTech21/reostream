@@ -52,6 +52,13 @@ type Conn struct {
 	stream string
 	handle int
 
+	// deviceInfo is the raw <DeviceInfo> document the camera sends as its
+	// login reply on success (docs/protocol.md's handshake table, message
+	// 4). login() populates it before Dial returns; every other read in
+	// this package costs a further round trip, and this one does not,
+	// because it arrives whether or not anything asks for it.
+	deviceInfo []byte
+
 	counter byte
 	mu      sync.Mutex
 
@@ -155,6 +162,18 @@ func (c *Conn) nextCounter() byte {
 	return c.counter
 }
 
+// ErrUnauthorised is what Dial returns when a camera's login reply carries
+// no XML body.
+//
+// The wire gives no separate "wrong password" document: a rejected
+// credential and an accepted one differ only in whether the login reply's
+// body is empty. Read on its own, that symptom is indistinguishable from a
+// camera holding a dead session (see DefaultIdleTimeout), which is exactly
+// the confusion a first time user hits when a typed password is wrong. This
+// sentinel is what lets a caller tell the two apart and say "authentication
+// failed" instead of "something is wrong with the network".
+var ErrUnauthorised = errors.New("baichuan: authentication rejected (empty login reply)")
+
 // login performs the handshake observed on the wire: a zero-length
 // negotiation probe, the camera's nonce, a hashed login, then DeviceInfo.
 // Encryption switches to AES once login completes.
@@ -190,9 +209,10 @@ func (c *Conn) login() error {
 		return fmt.Errorf("baichuan: read login reply: %w", err)
 	}
 	if len(reply.XML) == 0 {
-		return fmt.Errorf("baichuan: empty login reply (status %d, msgid %d, class 0x%04x, %d body bytes)",
-			reply.Header.Status(), reply.Header.MsgID, reply.Header.Class, len(reply.Payload))
+		return fmt.Errorf("%w (status %d, msgid %d, class 0x%04x, %d body bytes)",
+			ErrUnauthorised, reply.Header.Status(), reply.Header.MsgID, reply.Header.Class, len(reply.Payload))
 	}
+	c.deviceInfo = reply.XML
 
 	key := AESKey(nonce, c.opts.Password)
 	c.r.SetAESKey(key)
@@ -202,6 +222,10 @@ func (c *Conn) login() error {
 
 // Nonce reports the login nonce.
 func (c *Conn) Nonce() string { return c.nonce }
+
+// DeviceInfo returns the raw <DeviceInfo> document the camera sent as its
+// login reply. Parse it with ParseDeviceInfo.
+func (c *Conn) DeviceInfo() []byte { return c.deviceInfo }
 
 // readLoop reads messages off the socket and hands them to Messages until
 // the socket errors or Close closes done.

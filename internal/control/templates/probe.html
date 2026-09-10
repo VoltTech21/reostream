@@ -1,0 +1,18 @@
+{{define "probe"}}
+{{if .Err}}
+<p class="state-down">{{.Err}}</p>
+{{else}}
+<p>Found <strong>{{.Model}}</strong>.</p>
+<table>
+<tr><th>Stream</th><th>Codec</th><th>Resolution</th><th>Serve it</th></tr>
+{{range .Streams}}
+<tr>
+<td>{{.Name}}</td>
+<td>{{.Codec}}</td>
+<td>{{.Width}}x{{.Height}}</td>
+<td><input form="add-camera" type="checkbox" name="streams" value="{{.Name}}" checked></td>
+</tr>
+{{end}}
+</table>
+{{end}}
+{{end}}

@@ -295,41 +295,26 @@ func waitForAck(conn *baichuan.Conn, msgID uint32) error {
 
 // abilities prints what the camera says it can do.
 func abilities(conn *baichuan.Conn) error {
-	if err := conn.Abilities(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	list, err := baichuan.GetAbilities(ctx, conn)
+	if err != nil {
 		return err
 	}
-	deadline := time.After(8 * time.Second)
-	for {
-		select {
-		case m, ok := <-conn.Messages():
-			if !ok {
-				return fmt.Errorf("connection closed before an ability reply")
-			}
-			if m.Header.MsgID != baichuan.MsgIDAbilityInfo || len(m.XML) == 0 {
-				continue
-			}
-			list, err := baichuan.ParseAbilities(m.XML)
-			if err != nil {
-				return err
-			}
-			module := ""
-			for _, a := range list {
-				if a.Module != module {
-					module = a.Module
-					fmt.Printf("\n%s\n", module)
-				}
-				access := "read"
-				if a.Writable {
-					access = "read/write"
-				}
-				fmt.Printf("  %-18s %s\n", a.Name, access)
-			}
-			fmt.Printf("\n%d abilities\n", len(list))
-			return nil
-		case <-deadline:
-			return fmt.Errorf("no ability reply")
+	module := ""
+	for _, a := range list {
+		if a.Module != module {
+			module = a.Module
+			fmt.Printf("\n%s\n", module)
 		}
+		access := "read"
+		if a.Writable {
+			access = "read/write"
+		}
+		fmt.Printf("  %-18s %s\n", a.Name, access)
 	}
+	fmt.Printf("\n%d abilities\n", len(list))
+	return nil
 }
 
 // get prints a configuration block, or sweeps every known one.
@@ -410,14 +395,9 @@ func fetch(conn *baichuan.Conn, id uint32) (xml []byte, status int16, err error)
 
 // fetchSupport reads the camera's hardware description.
 func fetchSupport(conn *baichuan.Conn) (baichuan.Support, error) {
-	x, status, err := fetch(conn, baichuan.ConfigMessages["support"])
-	if err != nil {
-		return baichuan.Support{}, err
-	}
-	if len(x) == 0 {
-		return baichuan.Support{}, fmt.Errorf("camera answered status %d", status)
-	}
-	return baichuan.ParseSupport(x)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	return baichuan.GetSupport(ctx, conn)
 }
 
 // support prints what the camera says its hardware is.

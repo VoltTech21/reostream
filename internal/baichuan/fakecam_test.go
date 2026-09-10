@@ -83,3 +83,45 @@ func synthesizeLoginFailureFixture(nonce string) []byte {
 
 	return append(nonceReply, loginFailure...)
 }
+
+// fakeReply is one AES-encrypted post-login message to append after a
+// synthesized successful login.
+type fakeReply struct {
+	id   uint32
+	body string
+}
+
+// synthesizeSessionFixture builds a successful login handshake, a
+// DeviceInfo login reply carrying deviceInfoXML, and then replies, each
+// AES-encrypted the way every message past login is (see login_s2c.bin,
+// where the DeviceInfo login reply is itself the last BC-encrypted message
+// and everything after it, AbilityInfo included, is AES).
+//
+// It exists because no committed capture asks a camera anything beyond what
+// login gets for free: read helpers built on top of GetConfig need a
+// fixture that answers a request this package chose to send, which a static
+// capture cannot do.
+func synthesizeSessionFixture(t *testing.T, nonce, password, deviceInfoXML string, replies ...fakeReply) []byte {
+	t.Helper()
+	plainNonce := xmlHeader + `<body><Encryption version="1.1"><type>md5</type><nonce>` + nonce + `</nonce></Encryption></body>`
+	nonceReply := buildMessage(Header{
+		MsgID:   MsgIDLogin,
+		Class:   ClassModern20,
+		EncByte: NegotiateByte,
+		DirByte: DirReply,
+	}, BCCrypt(0, []byte(plainNonce)))
+
+	loginReply := buildMessage(Header{MsgID: MsgIDLogin, Class: ClassZero},
+		BCCrypt(0, []byte(deviceInfoXML)))
+
+	out := append(nonceReply, loginReply...)
+	key := AESKey(nonce, password)
+	for _, r := range replies {
+		enc, err := AESEncrypt(key, []byte(r.body))
+		if err != nil {
+			t.Fatalf("encrypt reply %d: %v", r.id, err)
+		}
+		out = append(out, buildMessage(Header{MsgID: r.id, Class: ClassZero}, enc)...)
+	}
+	return out
+}
