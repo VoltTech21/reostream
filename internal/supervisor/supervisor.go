@@ -333,7 +333,22 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 
 	s.mu.Lock()
 
-	if s.runCtx != nil && s.runCtx.Err() != nil {
+	// The authoritative "is this Supervisor running" check, not the
+	// started.Load() above. That check is only a cheap early-out for the
+	// common case of Reload arriving before Run at all; started flips true
+	// inside Run before runCtx is assigned, so a Reload that read it
+	// concurrently with Run's own startup could otherwise pass it and reach
+	// startLocked below with s.runCtx still nil, and context.WithCancel(nil)
+	// panics. Rechecking runCtx itself, under the same mutex Run assigns it
+	// under, is what actually closes that window: Run's mu-protected section
+	// now sets started and runCtx together (see Run), so by the time this
+	// goroutine holds mu, either runCtx is already set or Run has not
+	// started at all.
+	if s.runCtx == nil {
+		s.mu.Unlock()
+		return ReloadResult{}, ErrNotRunning
+	}
+	if s.runCtx.Err() != nil {
 		s.mu.Unlock()
 		return ReloadResult{}, ErrShuttingDown
 	}
@@ -438,11 +453,19 @@ func sameStream(e *entry, cam config.Camera) bool {
 // this Supervisor owns, the exact fault this package exists to prevent, so
 // it returns ErrAlreadyRunning instead.
 func (s *Supervisor) Run(ctx context.Context) error {
+	s.mu.Lock()
 	if !s.started.CompareAndSwap(false, true) {
+		s.mu.Unlock()
 		return ErrAlreadyRunning
 	}
-
-	s.mu.Lock()
+	// runCtx is assigned inside the same critical section as the CAS above,
+	// not after it. Reload's authoritative gate is runCtx being non-nil,
+	// read under this same mutex (see Reload); if the CAS and this
+	// assignment were separate critical sections, a Reload landing between
+	// them could observe started already true while runCtx was still nil.
+	// Locking them together means any goroutine that acquires mu after
+	// observing started==true is guaranteed to see runCtx already set,
+	// because this Unlock happens-after both.
 	s.runCtx = ctx
 	for _, e := range s.entries {
 		s.startLocked(e)

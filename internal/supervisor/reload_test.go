@@ -289,6 +289,34 @@ func TestReloadBeforeRunIsRefused(t *testing.T) {
 	}
 }
 
+// TestReloadCannotObserveStartedWithoutRunCtx drives, deterministically and
+// without any goroutine timing, the exact window that used to let Reload
+// reach startLocked with a nil runCtx: started flipping true before runCtx
+// is assigned. Run sets both together under s.mu now, so this state is no
+// longer reachable through Run itself; this test forces it directly to
+// prove Reload's own gate, not just Run's ordering, refuses to proceed
+// without a runCtx. Before the fix, Reload trusted started.Load() alone,
+// which is true here, and panicked inside startLocked's
+// context.WithCancel(nil).
+func TestReloadCannotObserveStartedWithoutRunCtx(t *testing.T) {
+	c := &runCounter{calls: map[string]int{}}
+	s := New([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+	}, c.runner())
+
+	// Simulates the instant after Run's CAS succeeds but before it has
+	// assigned runCtx: started is true, runCtx is still nil.
+	s.started.Store(true)
+
+	_, err := s.Reload([]config.Camera{
+		{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}},
+		{Name: "b", Address: "2.2.2.2", Streams: []string{"main"}},
+	})
+	if !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Reload with started=true and runCtx=nil returned %v, want ErrNotRunning", err)
+	}
+}
+
 // TestReloadSerialisesConcurrentCalls fires two Reload calls at once with
 // different target camera lists, the way two browser tabs saving the camera
 // list at the same time would. Without reloadMu, both calls read the fleet
