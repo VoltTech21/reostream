@@ -16,29 +16,10 @@ const StatusNotImplemented = 405
 // This is cmd/reocam's fetch, lifted here so the CLI and anything else in
 // this module share one wait loop instead of each keeping its own copy that
 // can drift: cmd/reocam's own get, support and probe commands all called an
-// identical unexported fetch before this existed.
+// identical unexported fetch before this existed. It now delegates to
+// ReadConfig (rw.go) rather than keeping its own copy of the same loop.
 func requestConfig(ctx context.Context, conn *Conn, id uint32) ([]byte, int16, error) {
-	if err := conn.GetConfig(id); err != nil {
-		return nil, 0, err
-	}
-	for {
-		select {
-		case m, ok := <-conn.Messages():
-			if !ok {
-				if err := conn.Err(); err != nil {
-					return nil, 0, fmt.Errorf("baichuan: connection closed waiting for message %d: %w", id, err)
-				}
-				return nil, 0, fmt.Errorf("baichuan: connection closed waiting for message %d", id)
-			}
-			// A ping reply, or anything else in flight, is not the answer.
-			if m.Header.MsgID != id {
-				continue
-			}
-			return m.XML, m.Header.Status(), nil
-		case <-ctx.Done():
-			return nil, 0, ctx.Err()
-		}
-	}
+	return ReadConfig(ctx, conn, id)
 }
 
 // GetSupport reads the camera's own hardware description, message 199 ("get
