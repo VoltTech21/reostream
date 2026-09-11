@@ -39,17 +39,21 @@ func waitForCloses(t *testing.T, cam *fakecam.Camera, want int) {
 func TestProbeSortsRepliesIntoSupportedWantsParamsAndAbsent(t *testing.T) {
 	// A message a camera does not implement answers 405 rather than failing
 	// the connection, which is what makes sending every known read safe and
-	// is the only honest way to find out what a model has.
+	// is the only honest way to find out what a model has. This is
+	// baichuan.ClassifyRead, which cmd/reocam's own probe command now
+	// shares, rather than a copy kept here: the two disagreeing on a real
+	// camera (usercfg, dns, syscpuload) is exactly what having two
+	// implementations of the same question cost.
 	cases := []struct {
 		status int16
-		want   string
+		want   baichuan.ReadOutcome
 	}{
-		{200, "supported"},
-		{400, "wants params"},
-		{405, "absent"},
+		{200, baichuan.ReadSupported},
+		{400, baichuan.ReadWantsParams},
+		{405, baichuan.ReadAbsent},
 	}
 	for _, tc := range cases {
-		got := classify(tc.status)
+		got := baichuan.ClassifyRead(tc.status)
 		if got != tc.want {
 			t.Fatalf("status %d classified %q, want %q", tc.status, got, tc.want)
 		}

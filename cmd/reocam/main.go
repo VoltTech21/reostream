@@ -794,8 +794,7 @@ func probe(conn *baichuan.Conn, dial func() (*baichuan.Conn, error)) error {
 	for _, name := range names {
 		id := baichuan.ConfigMessages[name]
 		xml, status, err := fetch(conn, id)
-		switch {
-		case err != nil:
+		if err != nil {
 			// Some messages make a camera hang up rather than answer.
 			// That is a fact about the model worth reporting, so record
 			// it, reconnect, and keep going.
@@ -804,11 +803,22 @@ func probe(conn *baichuan.Conn, dial func() (*baichuan.Conn, error)) error {
 			if conn, err = dial(); err != nil {
 				return fmt.Errorf("could not reconnect after %s: %w", name, err)
 			}
-		case len(xml) > 0:
+			continue
+		}
+		// baichuan.ClassifyRead, not "did a body come back": this used to
+		// check len(xml) > 0 before status, which misread usercfg (answers
+		// 400 with a non-empty error body, not an empty one) as supported.
+		// It also lumped everything else into "absent" and printed that
+		// bucket under a hardcoded "(405)" regardless of the real status,
+		// which hid that dns and syscpuload actually answer 200 with an
+		// empty body, not 405. Against a real RLC-810A this command
+		// disagreed with camctl's page on exactly those three reads; both
+		// now classify by status alone, which is what StatusNotImplemented
+		// and StatusBadRequest actually mean.
+		switch baichuan.ClassifyRead(status) {
+		case baichuan.ReadSupported:
 			ok = append(ok, fmt.Sprintf("%s (%d, %d bytes)", name, id, len(xml)))
-		case status == 400:
-			// Understood, but it wants parameters this generic read does
-			// not send. Supported, not readable this way.
+		case baichuan.ReadWantsParams:
 			needsArgs = append(needsArgs, fmt.Sprintf("%s (%d)", name, id))
 		default:
 			absent = append(absent, fmt.Sprintf("%s (%d)", name, id))

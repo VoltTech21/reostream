@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<body>
+<OsdDatetime version="1.1">
+<channelId>0</channelId>
+<enable>1</enable>
+<topLeftX>1</topLeftX>
+<topLeftY>1</topLeftY>
+<width>0</width>
+<height>0</height>
+<language>English</language>
+</OsdDatetime>
+<OsdChannelName version="1.1">
+<channelId>0</channelId>
+<name>Rear Bay</name>
+<enable>0</enable>
+<topLeftX>65536</topLeftX>
+<topLeftY>65536</topLeftY>
+<enWatermark>0</enWatermark>
+<enBgcolor>0</enBgcolor>
+</OsdChannelName>
+</body>
+

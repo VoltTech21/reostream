@@ -10,6 +10,44 @@ import (
 // establishes this is what makes probing every known read safe.
 const StatusNotImplemented = 405
 
+// ReadOutcome is what a config read's answer says about whether a camera
+// implements that message.
+type ReadOutcome string
+
+const (
+	ReadSupported   ReadOutcome = "supported"
+	ReadWantsParams ReadOutcome = "wants parameters"
+	ReadAbsent      ReadOutcome = "not implemented"
+)
+
+// ClassifyRead sorts a config read's reply into the three answers a camera
+// can give about a message it was asked for, by status alone.
+//
+// Status alone, not a non-empty body, is what a camera says about a
+// message it does not implement (StatusNotImplemented) versus one it
+// understood but refused for lacking arguments (StatusBadRequest): a
+// camera answering a refusal is free to send an error document rather than
+// an empty one, and a caller that treats "got some bytes back" as "this is
+// supported" gets it backwards on exactly that reply. That is not
+// hypothetical: cmd/reocam's own probe command checked body length before
+// status, and camctl's page checked status alone, and against a real
+// RLC-810A they disagreed on three of 103 reads. usercfg answers 400 with
+// a body, which the body-first check misread as supported; dns and
+// syscpuload answer 200 with an empty body, which it misread as absent
+// (and mislabeled "not implemented (405)" without the status ever being
+// 405). The status-only rule is correct on both counts, so both callers
+// now share it.
+func ClassifyRead(status int16) ReadOutcome {
+	switch status {
+	case StatusNotImplemented:
+		return ReadAbsent
+	case StatusBadRequest:
+		return ReadWantsParams
+	default:
+		return ReadSupported
+	}
+}
+
 // requestConfig sends a config read that takes only a channel and waits for
 // its reply, or for ctx to end.
 //

@@ -1,0 +1,103 @@
+aicfg	supported: 39
+audiocfg	supported: 39
+audiofileinfo	supported: 39
+audiofileinfolist	supported: 39
+audiotask	supported: 39
+crop	supported: 39
+deviceability	supported: 39
+dst	supported: 39
+emailcfg	supported: 39
+emailtask	supported: 39
+enc	supported: 39
+enc2	supported: 39
+floodlighttask	supported: 39
+ftpcfg	supported: 39
+ftptask	supported: 39
+general	supported: 39
+isp	supported: 39
+isp2	supported: 39
+led	supported: 39
+locallink	supported: 39
+md	supported: 39
+md2	supported: 39
+osd2	supported: 39
+osd3	supported: 39
+performanceinfo	supported: 39
+pushtask	supported: 39
+reccfg	supported: 39
+rectask	supported: 39
+rfcfg	supported: 39
+sdcard	supported: 39
+shelter	supported: 39
+shelter2	supported: 39
+support	supported: 39
+talkability	supported: 39
+threshold	supported: 39
+timelapsecfg	supported: 39
+uidcfg	supported: 39
+usercfg	supported: 39
+versioninfo	supported: 39
+4gmoduleinfo	needs parameters (400): 10
+aidefaultdetectcfg	needs parameters (400): 10
+aidetectcfg	needs parameters (400): 10
+autofocuscfg	needs parameters (400): 10
+batteryinfo	needs parameters (400): 10
+findfileinfo	needs parameters (400): 10
+findfileinfonext	needs parameters (400): 10
+presets	needs parameters (400): 10
+wifiinfo	needs parameters (400): 10
+zoomfocus	needs parameters (400): 10
+accessusercfg	not implemented (405): 54
+afalgcfg	not implemented (405): 54
+aidenoisecfg	not implemented (405): 54
+aitracklimitcfg	not implemented (405): 54
+aitracktaskcfg	not implemented (405): 54
+alarmreport	not implemented (405): 54
+aovinforeport	not implemented (405): 54
+autoreply	not implemented (405): 54
+batflagreport	not implemented (405): 54
+batteryinforeport	not implemented (405): 54
+batterymode	not implemented (405): 54
+binosttichcfg	not implemented (405): 54
+cfgmodifyreport	not implemented (405): 54
+coordinatepointreport	not implemented (405): 54
+crosslinedetectcfg	not implemented (405): 54
+delayrecstatreport	not implemented (405): 54
+dingdongcfg	not implemented (405): 54
+dingdongscanlistreport	not implemented (405): 54
+dns	not implemented (405): 54
+encbitrate	not implemented (405): 54
+eventproperties	not implemented (405): 54
+fisheyecfg	not implemented (405): 54
+floodlightreport	not implemented (405): 54
+fskrfpairreport	not implemented (405): 54
+ftyircutinfo	not implemented (405): 54
+ftyperipheralstat	not implemented (405): 54
+ftyrange	not implemented (405): 54
+ftyrange2	not implemented (405): 54
+ftyresult	not implemented (405): 54
+homebasewakeuptask	not implemented (405): 54
+intrusiondetectcfg	not implemented (405): 54
+ispbase	not implemented (405): 54
+largebattery	not implemented (405): 54
+legacydetectcfg	not implemented (405): 54
+linewidth	not implemented (405): 54
+loiteringdetectcfg	not implemented (405): 54
+longruncfg	not implemented (405): 54
+lossdetectcfg	not implemented (405): 54
+osd	not implemented (405): 54
+pirmotiondetectcfg	not implemented (405): 54
+powermode	not implemented (405): 54
+prisign	not implemented (405): 54
+ptzcurpos	not implemented (405): 54
+ptzparam	not implemented (405): 54
+rptstationlist	not implemented (405): 54
+silentmode	not implemented (405): 54
+sirenstatusreport	not implemented (405): 54
+syscpuload	not implemented (405): 54
+sysdatatime	not implemented (405): 54
+sysversion	not implemented (405): 54
+tamperalarmcfg	not implemented (405): 54
+wifiretcode	not implemented (405): 54
+wifisdbinfo	not implemented (405): 54
+zfbacklash	not implemented (405): 54

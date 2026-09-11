@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<body>
+<OsdDatetime version="1.1">
+<channelId>0</channelId>
+<enable>1</enable>
+<topLeftX>65537</topLeftX>
+<topLeftY>1</topLeftY>
+<width>0</width>
+<height>0</height>
+<language>Chinese</language>
+</OsdDatetime>
+<OsdChannelName version="1.1">
+<channelId>0</channelId>
+<name>Camera1</name>
+<enable>1</enable>
+<topLeftX>65536</topLeftX>
+<topLeftY>65536</topLeftY>
+<enWatermark>1</enWatermark>
+<enBgcolor>0</enBgcolor>
+</OsdChannelName>
+</body>
+
