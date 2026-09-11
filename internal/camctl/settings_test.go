@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -195,5 +196,198 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	}
 	if !strings.Contains(html, `value="120"`) {
 		t.Errorf("page does not show the brightness read from the camera:\n%s", html)
+	}
+}
+
+// TestSetFieldRefusesASelfClosingElementRatherThanSplicingAfterIt pins the
+// self-closing edge case: <enable/> gives the decoder no separate open and
+// close tags, so the offset where a normal element's text would sit is
+// actually the offset right after the whole element, i.e. where a sibling
+// would start. Splicing there would not set enable's content, it would
+// invent a text node after it, silently producing a document nobody asked
+// for. Every fixture elsewhere in this file uses explicit open/close pairs,
+// so nothing else exercises this path.
+func TestSetFieldRefusesASelfClosingElementRatherThanSplicingAfterIt(t *testing.T) {
+	doc := []byte("<Osd><osdChannel><enable/></osdChannel></Osd>")
+	before := append([]byte(nil), doc...)
+
+	_, err := setField(doc, "Osd/osdChannel/enable", "1")
+	if err == nil {
+		t.Fatal("setField spliced text after a self-closing element instead of refusing it")
+	}
+	if !bytes.Equal(doc, before) {
+		t.Fatal("setField must not touch its input even when it refuses")
+	}
+}
+
+// buildApplySettingFixtures builds the two connections' worth of replies
+// serveApplySetting's write needs: writeCam answers the manual pre-read
+// (the handler's own step 2) and, on a second connection, writeBlock's own
+// Before read plus the Set acknowledgement; verifyCam answers writeBlock's
+// fresh verification read with the document as it stands after the write.
+func buildApplySettingFixtures(t *testing.T, pair baichuan.ConfigPair, before, after string, setStatus int16) (writeCam, verifyCam *fakecam.Camera) {
+	t.Helper()
+	key := baichuan.AESKey(testProbeNonce, "")
+
+	writeFixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	writeFixture = append(writeFixture, statusReply(t, key, pair.Get, 200, testXMLHeader+before)...)
+	writeFixture = append(writeFixture, statusReply(t, key, pair.Set, setStatus, "")...)
+	writeCam = fakecam.New(t, writeFixture)
+
+	verifyFixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	verifyFixture = append(verifyFixture, statusReply(t, key, pair.Get, 200, testXMLHeader+after)...)
+	verifyCam = fakecam.New(t, verifyFixture)
+	return writeCam, verifyCam
+}
+
+// decodedSetConfigBody finds the last SetConfig message for id in received
+// and decrypts its second section (the document itself; the first is the
+// channel extension), so a test can check what actually went out on the
+// wire rather than trusting that a 200 or a "confirmed" outcome implies it.
+func decodedSetConfigBody(t *testing.T, received []byte, id uint32, key []byte) string {
+	t.Helper()
+	var found []byte
+	off := 0
+	for off+20 <= len(received) {
+		h, n, err := baichuan.DecodeHeader(received[off:])
+		if err != nil {
+			break
+		}
+		end := off + n + int(h.MsgLen)
+		if end > len(received) {
+			break
+		}
+		if h.MsgID == id && h.MsgLen > h.PayloadOff {
+			sealedBody := received[off+n+int(h.PayloadOff) : end]
+			if dec, err := baichuan.AESDecrypt(key, sealedBody); err == nil {
+				found = dec
+			}
+		}
+		off = end
+	}
+	if found == nil {
+		t.Fatalf("no two-section SetConfig message %d reached the camera", id)
+	}
+	return string(found)
+}
+
+// TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera is the
+// end-to-end proof for the whole POST handler: a form submission for one
+// curated field must result in the camera actually receiving a SetConfig
+// document carrying the new value, not merely a 200 from the handler.
+func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.T) {
+	pair, ok := pairForName("osd get")
+	if !ok {
+		t.Fatal("osd get pair not found")
+	}
+	before := `<body><Osd><channelId>0</channelId><osdChannel><enable>1</enable><name>front</name></osdChannel></Osd></body>`
+	after := `<body><Osd><channelId>0</channelId><osdChannel><enable>1</enable><name>lounge</name></osdChannel></Osd></body>`
+
+	writeCam, verifyCam := buildApplySettingFixtures(t, pair, before, after, 200)
+
+	calls := 0
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		calls++
+		addr := writeCam.Addr()
+		if calls == 3 {
+			addr = verifyCam.Addr()
+		}
+		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.PostForm(ts.URL+"/camera/cam1/settings", url.Values{
+		"block": {"osd get"},
+		"xpath": {"Osd/osdChannel/name"},
+		"value": {"lounge"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), `"confirmed"`) {
+		t.Fatalf("response does not report confirmed: %s", raw)
+	}
+
+	// The actual proof: what reached the camera, not what the handler
+	// claims. writeBlock sends the Set request on its own connection
+	// (calls == 2 above), so it is writeCam that received it.
+	key := baichuan.AESKey(testProbeNonce, "")
+	sent := decodedSetConfigBody(t, writeCam.Received(), pair.Set, key)
+	if !strings.Contains(sent, "<name>lounge</name>") {
+		t.Fatalf("the document actually sent to the camera does not carry the edit: %s", sent)
+	}
+	if !strings.Contains(sent, "<channelId>0</channelId>") {
+		t.Fatalf("the document actually sent to the camera lost an unrelated field: %s", sent)
+	}
+}
+
+// TestServeApplySettingRefusesWhenTheFieldDoesNotResolve is the case the
+// inferred image XPaths make realistic on real hardware: a curated field
+// whose path does not match this camera's actual document. Nothing must be
+// sent to the camera, and the operator must see a refusal, never a silent
+// success.
+func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
+	pair, ok := pairForName("isp get")
+	if !ok {
+		t.Fatal("isp get pair not found")
+	}
+	// A document this model actually returned, but with no dayNight element
+	// at all: the curated field names a path this camera does not carry.
+	before := `<body><Isp><channelId>0</channelId><Isp><bright>120</bright></Isp></Isp></body>`
+
+	key := baichuan.AESKey(testProbeNonce, "")
+	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	fixture = append(fixture, statusReply(t, key, pair.Get, 200, testXMLHeader+before)...)
+	cam := fakecam.New(t, fixture)
+
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.PostForm(ts.URL+"/camera/cam1/settings", url.Values{
+		"block": {"isp get"},
+		"xpath": {"Isp/Isp/dayNight"},
+		"value": {"Auto"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"refused"`) {
+		t.Fatalf("an unresolved field must be reported as refused, got: %s", raw)
+	}
+	if strings.Contains(string(raw), `"confirmed"`) || strings.Contains(string(raw), `"accepted"`) {
+		t.Fatalf("an unresolved field must never read as any kind of success: %s", raw)
+	}
+	// Nothing to write was ever composed, so nothing should have reached
+	// the camera beyond the read this handler itself took.
+	off := 0
+	received := cam.Received()
+	for off+20 <= len(received) {
+		h, n, err := baichuan.DecodeHeader(received[off:])
+		if err != nil {
+			break
+		}
+		if h.MsgID == pair.Set {
+			t.Fatal("a SetConfig message reached the camera for a field that never resolved")
+		}
+		off += n + int(h.MsgLen)
 	}
 }

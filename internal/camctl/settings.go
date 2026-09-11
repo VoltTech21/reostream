@@ -7,6 +7,7 @@ package camctl
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -192,6 +193,19 @@ func locateLeaf(doc []byte, path []string) (start, end int, err error) {
 			}
 		case xml.EndElement:
 			if matchDepth == len(stack) {
+				// A self-closing element such as <enable/> gives the
+				// decoder no separate open and close tags: the synthetic
+				// EndElement it emits lands at the same offset as the end
+				// of the StartElement token, which is indistinguishable by
+				// offset alone from a genuinely empty "<a></a>". The bytes
+				// tell them apart: only a self-closing tag ends in "/>".
+				// Splicing at that offset would not insert text inside the
+				// element at all, it would insert it after the element, as
+				// a sibling, which is exactly the kind of invented content
+				// this function exists to refuse rather than produce.
+				if bytes.HasSuffix(doc[:curStart], []byte("/>")) {
+					return 0, 0, fmt.Errorf("element is self-closing and has no text span to replace")
+				}
 				matches = append(matches, span{curStart, off})
 				matchDepth = -1
 			}
@@ -301,4 +315,122 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "settings.html", page)
+}
+
+// curatedField reports whether block/xpath together name one of the fields
+// groups() actually declares, and returns it.
+//
+// The settings form posts both as plain form values, and nothing about an
+// HTTP request stops it from naming any block and any path. This is the
+// check that a write from this form can only ever land on a field this
+// page itself curated, never on whatever a request happens to claim.
+func curatedField(block, xpath string) (Field, bool) {
+	for _, g := range groups() {
+		if g.Block != block {
+			continue
+		}
+		for _, f := range g.Fields {
+			if f.XPath == xpath {
+				return f, true
+			}
+		}
+	}
+	return Field{}, false
+}
+
+// serveApplySetting is the settings form's POST: read the field's block
+// fresh, replace only the one field being changed with setField, and write
+// the result through writeBlock, the same path serveWrite already uses for
+// the raw view.
+//
+// This is not a second write path. Nothing here calls baichuan.WriteConfig
+// itself; writeBlock does, which is what makes a curated edit inherit
+// verification, the confirmed/accepted/refused vocabulary, the
+// pre-write document capture a caller can restore from, and the
+// unsafe-to-rewrite warning, all for free and all exactly as a raw edit
+// already gets them.
+//
+// The field seeded on the page and the field a write targets are found by
+// the identical rule on purpose: fieldValue and setField both resolve
+// XPath through locateLeaf, so what an operator sees is what gets changed.
+func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cam, err := s.byName(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	block := r.FormValue("block")
+	xpath := r.FormValue("xpath")
+	value := r.FormValue("value")
+
+	if _, ok := curatedField(block, xpath); !ok {
+		http.Error(w, fmt.Sprintf("%s %s is not a curated field", block, xpath), http.StatusBadRequest)
+		return
+	}
+	pair, ok := pairForName(block)
+	if !ok {
+		http.Error(w, fmt.Sprintf("%q is not a known block", block), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	defer cancel()
+
+	// Read the block fresh, on its own connection, so setField starts from
+	// what the camera holds right now rather than from whatever the page
+	// happened to render it with a request or two ago. writeBlock reads
+	// this same block again for its own Before capture; that second read
+	// is not wasted work, it is what lets writeBlock report Before/After
+	// without this handler having to hand it anything but a finished body.
+	conn, err := s.dial(ctx, cam)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("reading %s before writing: %v", pair.Name, err), http.StatusBadGateway)
+		return
+	}
+	readCtx, readCancel := context.WithTimeout(ctx, readTimeout)
+	doc, status, err := baichuan.ReadConfig(readCtx, conn, pair.Get)
+	readCancel()
+	conn.Close()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("reading %s before writing: %v", pair.Name, err), http.StatusBadGateway)
+		return
+	}
+	if status != 200 {
+		http.Error(w, fmt.Sprintf("reading %s before writing: camera answered status %d", pair.Name, status), http.StatusBadGateway)
+		return
+	}
+
+	body, err := setField(doc, xpath, value)
+	if err != nil {
+		// The inferred image XPaths in particular may not match this
+		// model's actual schema. That must read as a refusal, the same
+		// vocabulary a rejected write already uses, never as a silent
+		// success: nothing was sent to the camera at all.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(writeResponse{
+			Outcome: "refused",
+			Detail:  fmt.Sprintf("could not apply %s to the current document: %v", xpath, err),
+		})
+		return
+	}
+
+	result, err := s.writeBlock(ctx, cam, pair.Set, body, true)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(writeResponse{
+		Outcome: result.Outcome,
+		Detail:  result.Detail,
+		Before:  string(result.Before),
+		After:   string(result.After),
+	})
 }
