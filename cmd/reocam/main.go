@@ -478,7 +478,7 @@ func fisheye(addr, user, pass string, args []string) error {
 		return err
 	}
 	if len(args) == 0 {
-		f, err := c.GetFishEye(0)
+		f, err := c.GetFishEye(context.Background(), 0)
 		if err != nil {
 			return err
 		}
@@ -495,12 +495,12 @@ func fisheye(addr, user, pass string, args []string) error {
 		return fmt.Errorf("mode must be 0, 1, 2 or 3")
 	}
 
-	f, err := c.GetFishEye(0)
+	f, err := c.GetFishEye(context.Background(), 0)
 	if err != nil {
 		return err
 	}
 	f.ImageType = cgi.FishEyeMode(mode)
-	if err := c.SetFishEye(0, f); err != nil {
+	if err := c.SetFishEye(context.Background(), 0, f); err != nil {
 		return err
 	}
 	fmt.Printf("set to %s; the camera is rebooting, which takes 15 to 20 seconds\n", f.ImageType)
@@ -513,7 +513,7 @@ func stitch(addr, user, pass string, args []string) error {
 	if err != nil {
 		return err
 	}
-	cur, factory, lim, err := c.GetStitch(0)
+	cur, factory, lim, err := c.GetStitch(context.Background(), 0)
 	if err != nil {
 		return err
 	}
@@ -570,7 +570,7 @@ func stitch(addr, user, pass string, args []string) error {
 		}
 	}
 
-	if err := c.SetStitch(0, want); err != nil {
+	if err := c.SetStitch(context.Background(), 0, want); err != nil {
 		return err
 	}
 	fmt.Printf("distance %.1f, x %d, y %d\n", want.Distance, want.XMove, want.YMove)
@@ -709,7 +709,7 @@ func floodlight(addr, user, pass string, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, _, rng, err := c.Get("GetWhiteLed", 0)
+	value, _, rng, err := c.Get(context.Background(), "GetWhiteLed", 0)
 	if err != nil {
 		return err
 	}
@@ -766,10 +766,10 @@ func floodlight(addr, user, pass string, args []string) error {
 		}
 		cur.WhiteLed["bright"] = b
 	}
-	if err := c.Set("SetWhiteLed", map[string]any{"WhiteLed": cur.WhiteLed}); err != nil {
+	if err := c.Set(context.Background(), "SetWhiteLed", map[string]any{"WhiteLed": cur.WhiteLed}); err != nil {
 		return err
 	}
-	after, _, _, err := c.Get("GetWhiteLed", 0)
+	after, _, _, err := c.Get(context.Background(), "GetWhiteLed", 0)
 	if err != nil {
 		return err
 	}

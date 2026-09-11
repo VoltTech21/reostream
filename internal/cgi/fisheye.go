@@ -1,6 +1,7 @@
 package cgi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -40,8 +41,8 @@ type FishEye struct {
 }
 
 // GetFishEye reads the fisheye view configuration.
-func (c *Client) GetFishEye(channel int) (FishEye, error) {
-	value, _, _, err := c.Get("GetFishEye", channel)
+func (c *Client) GetFishEye(ctx context.Context, channel int) (FishEye, error) {
+	value, _, _, err := c.Get(ctx, "GetFishEye", channel)
 	if err != nil {
 		return FishEye{}, err
 	}
@@ -67,8 +68,8 @@ func (c *Client) GetFishEye(channel int) (FishEye, error) {
 // previous geometry, because those coordinates are normalised to the frame.
 // A fisheye with zones drawn on the circular view will have them pointing at
 // the wrong places after a switch to quad or dual.
-func (c *Client) SetFishEye(channel int, f FishEye) error {
-	return c.Set("SetFishEye", map[string]any{
+func (c *Client) SetFishEye(ctx context.Context, channel int, f FishEye) error {
+	return c.Set(ctx, "SetFishEye", map[string]any{
 		"FishEye": map[string]any{
 			"channel":       channel,
 			"imageType":     int(f.ImageType),

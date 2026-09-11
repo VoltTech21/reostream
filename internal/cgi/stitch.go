@@ -1,6 +1,7 @@
 package cgi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -42,8 +43,8 @@ type StitchLimits struct {
 
 // GetStitch reads the stitch settings along with the factory defaults and the
 // valid range, which is everything needed to adjust it without guessing.
-func (c *Client) GetStitch(channel int) (current, factory Stitch, limits StitchLimits, err error) {
-	value, initial, rng, err := c.Get("GetStitch", channel)
+func (c *Client) GetStitch(ctx context.Context, channel int) (current, factory Stitch, limits StitchLimits, err error) {
+	value, initial, rng, err := c.Get(ctx, "GetStitch", channel)
 	if err != nil {
 		return Stitch{}, Stitch{}, StitchLimits{}, err
 	}
@@ -73,8 +74,8 @@ func (c *Client) GetStitch(channel int) (current, factory Stitch, limits StitchL
 
 // SetStitch writes the stitch settings. Unlike a fisheye mode change this is
 // a numeric adjustment and does not reboot the camera.
-func (c *Client) SetStitch(channel int, s Stitch) error {
-	return c.Set("SetStitch", map[string]any{
+func (c *Client) SetStitch(ctx context.Context, channel int, s Stitch) error {
+	return c.Set(ctx, "SetStitch", map[string]any{
 		"stitch": map[string]any{
 			"channel":     channel,
 			"distance":    s.Distance,
