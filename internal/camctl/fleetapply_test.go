@@ -86,39 +86,37 @@ func TestApplyAllDoesNotStopAtTheFirstFailure(t *testing.T) {
 // Checking only that each call's ctx.Deadline() reports ok is not enough:
 // a buggy implementation that hoists one context.WithTimeout above the
 // loop and shares it across every camera would pass that check too, since
-// every call would still see a deadline, just the same shrinking one. This
-// spends real time inside the first camera's apply and asserts the second
-// camera's remaining budget is still close to the full timeout rather than
-// the first camera's leftovers: under a shared context, the first
-// camera's sleep eats directly into what the second camera sees; under a
-// fresh timeout per camera, the second camera gets back nearly the whole
-// budget regardless of what the first spent.
+// every call would still see a deadline, just the same shared one. The
+// deterministic tell is the deadline VALUE, not a wall-clock margin: with
+// the bug, every camera is handed the identical instant, because it is the
+// same context.WithTimeout call. With the fix, each camera's context is
+// created at its own moment in the loop, so its deadline differs from the
+// one before it by however long the previous iteration took, which is
+// never exactly zero even at the monotonic clock's own resolution. Asserting
+// the deadlines are unequal proves each camera got its own context; it
+// needs no sleep and no timing margin to do it, so it cannot go flaky on a
+// loaded machine the way a wall-clock comparison could.
 func TestApplyAllBoundsEachCameraSeparately(t *testing.T) {
 	s := newTestServer(t, Options{
 		AllowNoPassword: true,
 		ConfigPath:      writeTestConfig(t, "first", "second"),
 	})
-	const sleep = 200 * time.Millisecond
-	var remaining []time.Duration
+	var deadlines []time.Time
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
-		if cam.Name == "first" {
-			time.Sleep(sleep)
-		}
 		dl, ok := ctx.Deadline()
 		if !ok {
 			t.Fatalf("camera %q ran with no deadline: each camera must be bounded on its own", cam.Name)
 		}
-		remaining = append(remaining, time.Until(dl))
+		deadlines = append(deadlines, dl)
 		return WriteResult{Outcome: "confirmed"}, nil
 	}
 
 	s.applyAll(context.Background(), apply)
-	if len(remaining) != 2 {
-		t.Fatalf("got %d calls, want 2", len(remaining))
+	if len(deadlines) != 2 {
+		t.Fatalf("got %d calls, want 2", len(deadlines))
 	}
-	margin := sleep / 2
-	if remaining[1] < remaining[0]+margin {
-		t.Fatalf("second camera's remaining budget (%v) is not clearly more than the first's (%v) after it slept %v: timeouts are not independent per camera", remaining[1], remaining[0], sleep)
+	if deadlines[0].Equal(deadlines[1]) {
+		t.Fatalf("both cameras were handed the same deadline (%v): the timeout is shared across the fleet rather than given fresh per camera", deadlines[0])
 	}
 }
 
