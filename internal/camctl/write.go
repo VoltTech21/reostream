@@ -85,6 +85,13 @@ func pairForSet(id uint32) (baichuan.ConfigPair, bool) {
 // as proven was confirmed on a connection opened after the write, not the
 // one that carried it.
 func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []byte, verify bool) (result WriteResult, err error) {
+	// refused is checked before anything else here, not only in the UI
+	// that builds the write form, so it holds even for a route added
+	// later by someone who has not read why these ids are refused.
+	if yes, why := refused(id); yes {
+		return WriteResult{Outcome: "refused", Detail: why}, nil
+	}
+
 	pair, ok := pairForSet(id)
 	if !ok {
 		return WriteResult{}, fmt.Errorf("camctl: %d is not a known writable pair for %q", id, cam.Name)
