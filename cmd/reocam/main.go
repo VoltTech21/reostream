@@ -40,7 +40,8 @@ Commands:
   fisheye                show the fisheye view mode
   fisheye set N          change it (0 raw, 1 panorama, 2 quad, 3 dual) REBOOTS THE CAMERA
   stitch                 show the dual lens alignment, with its range
-  stitch set K=V ...     adjust it (distance, x, y); does not reboot`)
+  stitch set K=V ...     adjust it (distance, x, y); does not reboot
+  serve                  run the camera control web page`)
 }
 
 func main() {
@@ -52,6 +53,16 @@ func main() {
 	hb2 := flag.Bool("hb-twopart", false, "send the heartbeat as an extension plus a body")
 	flag.Usage = usage
 	flag.Parse()
+
+	// serve runs a fleet, not one camera, and must not dial anything at
+	// startup just to stand up a web server. Every other command needs a
+	// connection, which is why the dial below happens unconditionally for
+	// them; serve has to be pulled out ahead of it rather than handled
+	// inside the switch that follows.
+	if flag.NArg() > 0 && flag.Arg(0) == "serve" {
+		runServe(flag.Args()[1:])
+		return
+	}
 
 	if *addr == "" || flag.NArg() == 0 {
 		usage()

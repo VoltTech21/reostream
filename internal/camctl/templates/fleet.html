@@ -1,0 +1,13 @@
+{{define "body"}}
+<h1>Cameras</h1>
+{{if not .Cameras}}
+<p>No cameras are configured.</p>
+{{else}}
+<table>
+<tr><th>Name</th><th>Address</th><th>Username</th></tr>
+{{range .Cameras}}
+<tr><td>{{.Name}}</td><td>{{.Address}}</td><td>{{.Username}}</td></tr>
+{{end}}
+</table>
+{{end}}
+{{end}}
