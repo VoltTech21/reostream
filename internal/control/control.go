@@ -12,12 +12,12 @@ import (
 	"embed"
 	"html/template"
 	"io/fs"
-	"log"
 	"net/http"
 	"sync"
 
 	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/server"
+	"github.com/VoltTech21/reostream/internal/webui"
 )
 
 //go:embed templates/*.html
@@ -50,9 +50,16 @@ type Options struct {
 
 type Server struct {
 	opts Options
+	rend *webui.Renderer
+
+	// tmpl is the same template set as rend, kept separately for
+	// serveProbe, which renders a fragment for an HTMX-style swap and
+	// deliberately bypasses the "layout" template rend.Render always
+	// executes.
 	tmpl *template.Template
 
-	sessions *sessionStore
+	auth     webui.Auth
+	sessions *webui.SessionStore
 
 	// configMu serialises writeAndApply end to end: reading the previous
 	// config, validating, writing the file, and reloading the fleet all
@@ -92,10 +99,25 @@ type Server struct {
 }
 
 func New(opts Options) *Server {
+	rend, err := webui.NewRenderer(templateFS, "templates/*.html")
+	if err != nil {
+		// The template set is embedded at build time, so a parse failure
+		// here is a bug in the binary itself, not something a caller can
+		// recover from.
+		panic(err)
+	}
+	sessions := webui.NewSessionStore()
 	return &Server{
-		opts:           opts,
-		tmpl:           template.Must(template.ParseFS(templateFS, "templates/*.html")),
-		sessions:       newSessionStore(),
+		opts: opts,
+		rend: rend,
+		tmpl: template.Must(template.ParseFS(templateFS, "templates/*.html")),
+		auth: webui.Auth{
+			Store:           sessions,
+			Password:        opts.Password,
+			AllowNoPassword: opts.AllowNoPassword,
+			LoginPath:       "/login",
+		},
+		sessions:       sessions,
 		done:           make(chan struct{}),
 		inFlightProbes: make(map[string]bool),
 	}
@@ -144,22 +166,7 @@ func (s *Server) Handler() http.Handler {
 
 // render writes one page. data must carry a Title, which layout.html uses.
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
-	t, err := s.tmpl.Clone()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := t.ParseFS(templateFS, "templates/"+name); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
-		// The response is already partly written by here, so there is
-		// nothing useful to send the client; the log is the only place this
-		// can go.
-		log.Printf("reostream: control: render %s: %v", name, err)
-	}
+	s.rend.Render(w, "templates/"+name, data)
 }
 
 func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
