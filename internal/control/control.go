@@ -54,6 +54,24 @@ type Server struct {
 
 	sessions *sessionStore
 
+	// configMu serialises writeAndApply end to end: reading the previous
+	// config, validating, writing the file, and reloading the fleet all
+	// happen while it is held. The write and the apply must be atomic
+	// together, not just each internally consistent, or two concurrent
+	// POST /config requests can both pass validation, both write the file,
+	// and then apply in the opposite order, leaving the file on disk and
+	// the running fleet describing two different fleets with neither
+	// operator told anything went wrong. Supervisor.Reload already
+	// serialises itself with its own reloadMu, but that only protects the
+	// apply step in isolation; it does nothing to stop the write from
+	// happening out of order with it.
+	//
+	// Lock order: configMu is always acquired before any lock inside
+	// Reloader.Reload (the supervisor's reloadMu, then its mu). Nothing
+	// reachable from inside Reload ever tries to acquire configMu, so
+	// there is no cycle.
+	configMu sync.Mutex
+
 	// done is closed by Close to release any handler blocked on a
 	// long-lived connection, such as the log stream. http.Server.Shutdown
 	// waits for active connections to finish and does not cancel their

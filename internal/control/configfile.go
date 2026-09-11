@@ -204,6 +204,14 @@ func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 // what keeps the backup, the validation and the reload from drifting out
 // of agreement across two separate write paths.
 func (s *Server) writeAndApply(text string) (string, error) {
+	// Held across the whole read-validate-write-apply sequence, not just
+	// the write: two concurrent saves must not interleave their writes and
+	// their applies, or the file on disk and the running fleet can end up
+	// describing different configs with neither caller told anything went
+	// wrong. See configMu's doc comment on lock ordering.
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
 	before, _ := config.Load(s.opts.ConfigPath)
 
 	var checkFleet func([]config.Camera) error
