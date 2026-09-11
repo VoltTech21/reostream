@@ -115,10 +115,12 @@ Known gaps, honestly:
 - **Absence of a stream is not positively detectable.** Only `extern` has a real wire
   signal for not being there. Every other stream that fails to read reports "could not
   determine" with a reason, rather than the page claiming the camera lacks it.
-- **The RTSP server logs "write queue is full" continuously**, roughly 135 times a
-  minute, even with zero RTSP readers connected. Observed on the live fleet on
-  2026-09-10. This comes from the RTSP output work, not the operator page, and it floods
-  the log. Needs investigating on that branch.
+- **The RTSP write queue overflow was observed again on the live fleet**, roughly 135
+  log lines a minute on 2026-09-10. It came from a build predating the
+  `WriteQueueSize` fix, which raised the per-session ring from 256 to 2048 so a
+  fisheye keyframe cannot overflow it mid-burst. Nothing further is owed here, but
+  the deployed image must actually carry that fix: the operator page was first
+  deployed from a branch that did not, which is how the noise reappeared.
 
 ## Wanted, not started
 
