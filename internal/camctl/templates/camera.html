@@ -1,0 +1,49 @@
+{{define "body"}}
+<h1>{{.Camera.Name}}</h1>
+<p>{{.Camera.Address}}</p>
+{{if .Err}}<p>{{.Err}}</p>{{end}}
+
+{{if .Support}}
+<h2>What it says it is</h2>
+<table>
+<tr><td>Channels</td><td>{{.Support.Support.ChannelNum}}</td></tr>
+<tr><td>PTZ</td><td>{{if .Support.HasPTZ}}{{.Support.Support.PTZMode}}{{else}}none{{end}}</td></tr>
+<tr><td>Talk</td><td>{{if .Support.CanTalk}}yes{{else}}no{{end}}</td></tr>
+<tr><td>Extern stream</td><td>{{if .Support.HasExternStream}}yes{{else}}no{{end}}</td></tr>
+<tr><td>WiFi</td><td>{{if .Support.Support.WiFi}}yes{{else}}no{{end}}</td></tr>
+<tr><td>ONVIF</td><td>{{if .Support.Support.ONVIF}}yes{{else}}no{{end}}</td></tr>
+</table>
+{{end}}
+
+{{if .Abilities}}
+<h2>What this user may do</h2>
+<table>
+<tr><th>Module</th><th>Name</th><th>Access</th></tr>
+{{range .Abilities}}
+<tr><td>{{.Module}}</td><td>{{.Name}}</td><td>{{if .Writable}}read/write{{else}}read{{end}}</td></tr>
+{{end}}
+</table>
+{{end}}
+
+{{if .Probes}}
+<h2>What it answers</h2>
+<p>A message this model does not implement answers 405 rather than dropping the connection,
+which is what makes asking about every known message safe, and is the only honest way to
+find out what a model has: no table can say it in advance.</p>
+<table>
+<tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>Hung up</th></tr>
+<tr><td>{{.SupportedCount}}</td><td>{{.WantsParamsCount}}</td><td>{{.AbsentCount}}</td><td>{{.HungUpCount}}</td></tr>
+</table>
+<table>
+<tr><th>Message</th><th>ID</th><th>Status</th><th>Result</th></tr>
+{{range .Probes}}
+<tr>
+<td>{{.Name}}</td>
+<td>{{.ID}}</td>
+<td>{{.Status}}</td>
+<td>{{if .Supported}}supported{{else if .WantsParams}}wants parameters (400){{else if .Absent}}absent (405){{else if .HungUp}}hung up{{end}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}
+{{end}}

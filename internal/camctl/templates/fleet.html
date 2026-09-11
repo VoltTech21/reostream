@@ -6,7 +6,7 @@
 <table>
 <tr><th>Name</th><th>Address</th><th>Username</th></tr>
 {{range .Cameras}}
-<tr><td>{{.Name}}</td><td>{{.Address}}</td><td>{{.Username}}</td></tr>
+<tr><td><a href="/camera/{{.Name}}">{{.Name}}</a></td><td>{{.Address}}</td><td>{{.Username}}</td></tr>
 {{end}}
 </table>
 {{end}}

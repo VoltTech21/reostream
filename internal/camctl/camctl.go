@@ -9,9 +9,11 @@
 package camctl
 
 import (
+	"context"
 	"embed"
 	"net/http"
 
+	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
@@ -24,6 +26,12 @@ type Options struct {
 	AllowNoPassword bool
 	ConfigPath      string
 	Listen          string
+
+	// Dial opens one connection to cam. Nil means baichuan.Dial against
+	// cam's own address and credentials, which is what every real
+	// deployment wants; a test supplies its own so it can probe a fake
+	// camera instead of reaching for a real one.
+	Dial func(ctx context.Context, cam Camera) (*baichuan.Conn, error)
 }
 
 // Server serves the camera control page.
@@ -64,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.serveLoginForm)
 	mux.HandleFunc("POST /login", s.serveLogin)
 	mux.Handle("GET /{$}", s.auth.Wrap(http.HandlerFunc(s.serveFleet)))
+	mux.Handle("GET /camera/{name}", s.auth.Wrap(http.HandlerFunc(s.serveCamera)))
 	return mux
 }
 
