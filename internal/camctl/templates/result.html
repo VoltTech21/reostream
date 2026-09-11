@@ -1,0 +1,33 @@
+{{/*
+  result.html: what any write on this page lands on. One template for the
+  raw block editor, a curated setting, the floodlight, and the NTP form, so
+  an operator reads the same outcome/detail/before/after shape everywhere a
+  write can happen, and lands on a page rather than a raw JSON body.
+*/}}
+{{define "body"}}
+<h1>{{.Title}}</h1>
+<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
+
+<p>Outcome: <strong>{{.Outcome}}</strong></p>
+<p>{{.Detail}}</p>
+
+{{if .Before}}
+<h2>Before</h2>
+<pre>{{.Before}}</pre>
+{{end}}
+{{if .After}}
+<h2>After</h2>
+<pre>{{.After}}</pre>
+{{end}}
+
+{{if .RestoreAction}}
+<h2>Restore</h2>
+<p>Send the "Before" value back through the same verified write path.</p>
+<form method="post" action="{{.RestoreAction}}" onsubmit="return confirm('Restore the previous value?')">
+{{range $k, $v := .RestoreHidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
+{{end}}
+<input type="hidden" name="{{.RestoreParam}}" value="{{.RestoreValue}}">
+<button type="submit">restore previous</button>
+</form>
+{{end}}
+{{end}}

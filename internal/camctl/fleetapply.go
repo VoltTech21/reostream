@@ -60,9 +60,22 @@ type FleetResult struct {
 // worst-case four-call chain with headroom without multiplying into
 // something an operator would give up on and kill.
 //
-// This is a ceiling, not a guarantee that a hung CGI call gets cancelled
-// mid-flight: cgi.Client.Get and Set take no context, so what this actually
-// bounds is the gap between calls, the same property setNTP already has.
+// cgi.Client.Get and Set both take ctx and hand it to the underlying
+// *http.Request, so a camCtx that expires mid-call actually aborts that
+// call rather than only being checked between calls: this is a real
+// ceiling on the read/write/read-back chain, not merely a number
+// multiplied out in a comment. See cgi.Client.do and
+// TestGetHonoursContextCancellation in internal/cgi for the mechanism and
+// its regression test.
+//
+// The one call this ceiling still does not reach into is the initial
+// login s.cgiDial's cgi.Dial branch performs: that dial carries only its
+// own 20 second http.Client timeout, not camCtx, because Options.CGIDial's
+// test-double signature has no ctx parameter for a real dial to thread it
+// through. In practice this does not widen the worst case recorded above,
+// since 20 seconds is already inside the budget the four-call chain
+// assumes, but it means camCtx's cancellation specifically is not what
+// bounds that one call.
 const fleetApplyTimeout = 90 * time.Second
 
 // applyAll runs apply against every configured camera and returns one
@@ -183,8 +196,8 @@ func (s *Server) serveFleetApplyTimezone(w http.ResponseWriter, r *http.Request)
 // timeZone would send zeros for every field this code has never modelled,
 // exactly the mistake setField's own comment in settings.go warns against
 // for XML, and setNTP already avoids for Port and Interval.
-func readFullTime(c *cgi.Client) (map[string]any, error) {
-	value, _, _, err := c.Get("GetTime", 0)
+func readFullTime(ctx context.Context, c *cgi.Client) (map[string]any, error) {
+	value, _, _, err := c.Get(ctx, "GetTime", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +221,7 @@ func (s *Server) setTimeZone(ctx context.Context, cam Camera, tz int) (WriteResu
 		return WriteResult{}, fmt.Errorf("camctl: connecting to %q for the timezone: %w", cam.Name, err)
 	}
 
-	cur, err := readFullTime(c)
+	cur, err := readFullTime(ctx, c)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("camctl: reading the clock for %q before writing: %w", cam.Name, err)
 	}
@@ -221,13 +234,13 @@ func (s *Server) setTimeZone(ctx context.Context, cam Camera, tz int) (WriteResu
 	next["timeZone"] = tz
 
 	result := WriteResult{Before: []byte(before)}
-	if err := c.Set("SetTime", map[string]any{"Time": next}); err != nil {
+	if err := c.Set(ctx, "SetTime", map[string]any{"Time": next}); err != nil {
 		result.Outcome = "refused"
 		result.Detail = err.Error()
 		return result, nil
 	}
 
-	after, readErr := readFullTime(c)
+	after, readErr := readFullTime(ctx, c)
 	if readErr != nil {
 		result.Outcome = "accepted"
 		result.Detail = fmt.Sprintf("the camera took the command, but reading it back failed: %v. This is not proof the camera changed anything.", readErr)

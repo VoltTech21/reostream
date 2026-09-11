@@ -37,9 +37,14 @@ func TestThereIsNoRouteThatWritesCameraAccounts(t *testing.T) {
 }
 
 // fakeNTPCamera is a minimal CGI camera for the NTP path: it logs in,
-// answers GetNtp with whatever it currently holds, and records what
+// answers GetNtp with whatever it currently holds plus a fixed port and
+// interval this codebase never curates a control for, and records what
 // SetNtp actually receives so a test can check what reached the camera,
-// not just what the handler claims.
+// not just what the handler claims. The SetNtp handler fails the test
+// itself if port or interval arrive as anything but what GetNtp reported,
+// the same discipline fakeClockCamera's SetTime handler applies to "year"
+// below: an unmodelled field surviving the round trip is the thing under
+// test.
 type fakeNTPCamera struct {
 	srv      *httptest.Server
 	enable   int32
@@ -69,14 +74,20 @@ func newFakeNTPCamera(t *testing.T, enable int, server string, timeZone int) *fa
 			var req []struct {
 				Param struct {
 					Ntp struct {
-						Enable int    `json:"enable"`
-						Server string `json:"server"`
+						Enable   int    `json:"enable"`
+						Server   string `json:"server"`
+						Port     int    `json:"port"`
+						Interval int    `json:"interval"`
 					} `json:"Ntp"`
 				} `json:"param"`
 			}
 			if err := json.Unmarshal(body, &req); err != nil {
 				t.Errorf("bad SetNtp body: %v", err)
 			} else if len(req) == 1 {
+				if req[0].Param.Ntp.Port != 123 || req[0].Param.Ntp.Interval != 1440 {
+					t.Errorf("SetNtp dropped port/interval it was never asked to change: got port=%d interval=%d, want 123/1440",
+						req[0].Param.Ntp.Port, req[0].Param.Ntp.Interval)
+				}
 				atomic.StoreInt32(&f.enable, int32(req[0].Param.Ntp.Enable))
 				f.server.Store(req[0].Param.Ntp.Server)
 			}
@@ -155,7 +166,7 @@ func TestServeApplyTimeWritesThroughCGI(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
 	}
-	if !strings.Contains(string(raw), `"confirmed"`) {
+	if !strings.Contains(string(raw), "<strong>confirmed</strong>") {
 		t.Fatalf("response does not report confirmed: %s", raw)
 	}
 	if got := cam.server.Load().(string); got != "time.nist.gov" {
@@ -192,5 +203,34 @@ func TestServeTimeRendersNTPAndTimezoneReadOnly(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render %q:\n%s", want, html)
 		}
+	}
+}
+
+// TestSetNTPPreservesEveryOtherField is the regression for setNTP
+// round-tripping through a fixed four-field struct that dropped anything
+// GetNtp returned outside enable/server/port/interval. fakeNTPCamera's
+// SetNtp handler fails the test itself if port or interval arrive as
+// anything but what GetNtp reported, the same discipline
+// TestSetTimeZonePreservesEveryOtherField uses for "year", so this is
+// checked on the wire, not just against setNTP's return value.
+func TestSetNTPPreservesEveryOtherField(t *testing.T) {
+	cam := newFakeNTPCamera(t, 0, "pool.ntp.org", 0)
+	cgiDial := func(c Camera) (*cgi.Client, error) {
+		return cgi.Dial(cam.addr(), "admin", "")
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
+	camera, err := s.byName("cam1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.setNTP(context.Background(), camera, "time.nist.gov", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed: %s", result.Outcome, result.Detail)
+	}
+	if atomic.LoadInt32(&cam.sets) != 1 {
+		t.Fatalf("camera received %d SetNtp calls, want 1", cam.sets)
 	}
 }

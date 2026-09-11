@@ -44,15 +44,25 @@ func loginReply(token string) string {
 }
 
 // fakeCGICamera is a minimal CGI camera: it logs in and answers
-// GetWhiteLed with whatever mode/state getWhiteLed currently holds, and
+// GetWhiteLed with whatever mode/state getWhiteLed currently holds, plus a
+// fixed bright field this codebase never curates a control for, and
 // records every SetWhiteLed it receives so a test can check what actually
-// reached it, not just what the handler claims.
+// reached it, not just what the handler claims. The SetWhiteLed handler
+// fails the test itself if bright arrives as anything but the value
+// GetWhiteLed reported, the same discipline fakeClockCamera's SetTime
+// handler already applies to "year" in fleetapply_test.go: an unmodelled
+// field surviving the round trip is the thing under test, not a value this
+// test reads back afterward.
 type fakeCGICamera struct {
 	srv   *httptest.Server
 	mode  int32
 	state int32
 	sets  int32
 }
+
+// fakeCGICameraBright is the unmodelled field value newFakeCGICamera seeds
+// GetWhiteLed with, and every SetWhiteLed must echo back unchanged.
+const fakeCGICameraBright = 66
 
 func newFakeCGICamera(t *testing.T, mode, state int) *fakeCGICamera {
 	t.Helper()
@@ -65,20 +75,26 @@ func newFakeCGICamera(t *testing.T, mode, state int) *fakeCGICamera {
 			mode := atomic.LoadInt32(&f.mode)
 			state := atomic.LoadInt32(&f.state)
 			w.Write([]byte(`[{"cmd":"GetWhiteLed","code":0,"value":{"WhiteLed":{"mode":` +
-				strconv.Itoa(int(mode)) + `,"state":` + strconv.Itoa(int(state)) + `}}}]`))
+				strconv.Itoa(int(mode)) + `,"state":` + strconv.Itoa(int(state)) +
+				`,"bright":` + strconv.Itoa(fakeCGICameraBright) + `}}}]`))
 		case "SetWhiteLed":
 			body, _ := io.ReadAll(r.Body)
 			var req []struct {
 				Param struct {
 					WhiteLed struct {
-						Mode  int `json:"mode"`
-						State int `json:"state"`
+						Mode   int `json:"mode"`
+						State  int `json:"state"`
+						Bright int `json:"bright"`
 					} `json:"WhiteLed"`
 				} `json:"param"`
 			}
 			if err := json.Unmarshal(body, &req); err != nil {
 				t.Errorf("bad SetWhiteLed body: %v", err)
 			} else if len(req) == 1 {
+				if req[0].Param.WhiteLed.Bright != fakeCGICameraBright {
+					t.Errorf("SetWhiteLed dropped the bright field it was never asked to change: got %d, want %d",
+						req[0].Param.WhiteLed.Bright, fakeCGICameraBright)
+				}
 				atomic.StoreInt32(&f.mode, int32(req[0].Param.WhiteLed.Mode))
 				atomic.StoreInt32(&f.state, int32(req[0].Param.WhiteLed.State))
 			}
@@ -97,8 +113,11 @@ func (f *fakeCGICamera) addr() string { return strings.TrimPrefix(f.srv.URL, "ht
 // TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera is the
 // end-to-end proof for the floodlight's POST handler: choosing "on" must
 // result in the fake camera's SetWhiteLed actually receiving mode 1, state
-// 1, the pair docs/control.md's table maps to "on", and the response must
-// report confirmed once GetWhiteLed reads that back.
+// 1, the pair docs/control.md's table maps to "on". The outcome tops out
+// at accepted, never confirmed: the floodlight's read-back runs on the
+// same session the write went out on, which can answer from state the
+// camera has not committed, so this codebase has no right to claim more
+// than the camera accepted the command. See serveApplyFloodlight.
 func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	cam := newFakeCGICamera(t, 0, 0)
 	cgiDial := func(c Camera) (*cgi.Client, error) {
@@ -120,8 +139,11 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
 	}
-	if !strings.Contains(string(raw), `"confirmed"`) {
-		t.Fatalf("response does not report confirmed: %s", raw)
+	if !strings.Contains(string(raw), "<strong>accepted</strong>") {
+		t.Fatalf("response does not report accepted: %s", raw)
+	}
+	if strings.Contains(string(raw), "<strong>confirmed</strong>") {
+		t.Fatalf("the floodlight must never claim confirmed off a same-session read-back: %s", raw)
 	}
 
 	// The actual proof: what the fake camera now holds, not what the
@@ -232,5 +254,37 @@ func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
 func TestCuratedFieldFindsTheWhiteLedField(t *testing.T) {
 	if _, ok := curatedField("led get", "LedState/state"); !ok {
 		t.Fatal("curatedField does not know the White LED field")
+	}
+}
+
+// TestSetFloodlightPreservesEveryOtherField is the regression for the
+// floodlight write composing a three-field document from nothing: a real
+// WhiteLed object carries fields this codebase does not model, such as
+// bright, and setFloodlight must echo them back unchanged rather than drop
+// them. fakeCGICamera's SetWhiteLed handler fails the test itself if
+// bright arrives as anything but what GetWhiteLed reported, the same
+// discipline TestSetTimeZonePreservesEveryOtherField uses for "year" in
+// fleetapply_test.go, so this is checked on the wire, not just against
+// setFloodlight's return value.
+func TestSetFloodlightPreservesEveryOtherField(t *testing.T) {
+	cam := newFakeCGICamera(t, 0, 0)
+	cgiDial := func(c Camera) (*cgi.Client, error) {
+		return cgi.Dial(cam.addr(), "admin", "")
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
+	camera, err := s.byName("cam1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := s.cgiDial(camera)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setFloodlight(context.Background(), c, 1, 1); err != nil {
+		t.Fatalf("setFloodlight: %v", err)
+	}
+	if atomic.LoadInt32(&cam.sets) != 1 {
+		t.Fatalf("camera received %d SetWhiteLed calls, want 1", cam.sets)
 	}
 }

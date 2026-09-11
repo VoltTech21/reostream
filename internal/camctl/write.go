@@ -3,7 +3,6 @@ package camctl
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -186,15 +185,38 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 	return result, nil
 }
 
-// writeResponse is the JSON shape serveWrite answers with. WriteResult's
-// own Before/After are []byte, which encoding/json would base64 the field
-// text into; a caller reading this back into an editor wants the XML
-// itself.
-type writeResponse struct {
-	Outcome string `json:"outcome"`
-	Detail  string `json:"detail"`
-	Before  string `json:"before"`
-	After   string `json:"after"`
+// writeResultPage is what result.html renders after any write on this
+// page: the raw block editor, a curated setting, the floodlight, or the
+// NTP form. One template and one Go type for all four, so an operator
+// reads the same outcome/detail/before/after shape everywhere a write can
+// happen, rather than a different page (or a raw JSON body) depending on
+// which form was used.
+type writeResultPage struct {
+	Title  string
+	Camera Camera
+
+	Outcome string
+	Detail  string
+	Before  string
+	After   string
+
+	// RestoreAction, when non-empty, shows a form that resubmits
+	// RestoreValue as RestoreParam through the same verified write path a
+	// person used to get here: this is how "Before" stops being a value
+	// only the JSON carried and becomes a value an operator can actually
+	// put back.
+	//
+	// A blank RestoreAction is not a bug in every case: the floodlight and
+	// NTP forms do not always have a document to restore in the same
+	// shape a resubmission needs, and offering a button that cannot
+	// actually restore anything would be worse than offering none.
+	RestoreAction string
+	RestoreParam  string
+	RestoreValue  string
+	// RestoreHidden carries any other fixed field the restore POST needs
+	// beyond RestoreParam/RestoreValue, such as verify=true for a
+	// document write through /write/{id}.
+	RestoreHidden map[string]string
 }
 
 // serveWrite writes one config block on one camera and reports what
@@ -243,11 +265,19 @@ func (s *Server) serveWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(writeResponse{
+	page := writeResultPage{
+		Title:   fmt.Sprintf("%s: write %d", cam.Name, id),
+		Camera:  cam,
 		Outcome: result.Outcome,
 		Detail:  result.Detail,
 		Before:  string(result.Before),
 		After:   string(result.After),
-	})
+	}
+	if len(result.Before) > 0 {
+		page.RestoreAction = fmt.Sprintf("/camera/%s/write/%d", cam.Name, id)
+		page.RestoreParam = "body"
+		page.RestoreValue = string(result.Before)
+		page.RestoreHidden = map[string]string{"verify": "true"}
+	}
+	s.render(w, "result.html", page)
 }

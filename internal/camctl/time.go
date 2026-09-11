@@ -23,65 +23,79 @@ import (
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
 
-// ntp is the shape GetNtp and SetNtp carry over CGI, under the "Ntp" key
-// both the read and the write use.
+// readNTPDoc reads the camera's whole GetNtp document as a generic map
+// rather than a fixed four-field struct.
 //
-// Port and Interval exist on the wire and this code does not offer a
-// control for either. Sending SetNtp with them zeroed would be composing a
-// value nobody asked for and the camera never reported holding, the same
-// mistake setField's own comment warns against for XML; readNTP fills them
-// from the camera's own current document first, and setNTP changes only
-// Server and Enable on top of that, exactly as setField changes only the
-// one field named for a raw block.
-type ntp struct {
-	Enable   int    `json:"enable"`
-	Server   string `json:"server"`
-	Port     int    `json:"port"`
-	Interval int    `json:"interval"`
+// Port and Interval exist on the wire and this code offers no control for
+// either: composing a SetNtp body from a struct that only knows Server and
+// Enable would send zeros for every field this code has never modelled,
+// exactly the mistake setField's own comment in settings.go warns against
+// for XML. setNTP changes only server and enable on top of whatever this
+// returns, never the whole document.
+func readNTPDoc(ctx context.Context, c *cgi.Client) (map[string]any, error) {
+	value, _, _, err := c.Get(ctx, "GetNtp", 0)
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		Ntp map[string]any `json:"Ntp"`
+	}
+	if err := json.Unmarshal(value, &v); err != nil {
+		return nil, fmt.Errorf("camctl: parsing GetNtp: %w", err)
+	}
+	if v.Ntp == nil {
+		return nil, fmt.Errorf("camctl: GetNtp carried no Ntp document")
+	}
+	return v.Ntp, nil
 }
 
-// ntpParam wraps ntp the way SetNtp's own param needs it, and the way
-// GetNtp's reply carries it back: under an "Ntp" key, confirmed by the
-// live floodlight's identical WhiteLed wrapper in lights.go.
-type ntpParam struct {
-	Ntp ntp `json:"Ntp"`
+// ntpEnableServer reads the two fields this page actually curates off an
+// NTP document, defaulting to the zero value for a field the document does
+// not carry rather than failing outright: a document this code cannot
+// fully parse is still worth showing what could be read from it.
+func ntpEnableServer(doc map[string]any) (enabled bool, server string) {
+	if f, ok := doc["enable"].(float64); ok {
+		enabled = f != 0
+	}
+	if s, ok := doc["server"].(string); ok {
+		server = s
+	}
+	return enabled, server
 }
 
-// deviceTime is the small slice of GetTime this page actually renders: the
-// camera's own timezone setting. Nothing here writes it back; see
+// deviceTimeZone is the small slice of GetTime this page actually renders:
+// the camera's own timezone setting. Nothing here writes it back; see
 // accountsReadOnlyWarning's sibling comment on serveTime for why this page
 // only displays it.
-type deviceTime struct {
+type deviceTimeZone struct {
 	TimeZone int `json:"timeZone"`
 }
 
 type timeParam struct {
-	Time deviceTime `json:"Time"`
+	Time deviceTimeZone `json:"Time"`
 }
 
 // ntpState is how an NTP reading is shown on the page and compared after a
 // write: on/off, and the server it names either way, so a person can see
 // at a glance whether the field they are about to change already matches
 // what they are about to send.
-func ntpState(n ntp) string {
+func ntpState(enabled bool, server string) string {
 	state := "off"
-	if n.Enable != 0 {
+	if enabled {
 		state = "on"
 	}
-	return fmt.Sprintf("%s, server %q", state, n.Server)
+	return fmt.Sprintf("%s, server %q", state, server)
 }
 
-// readNTP reads the camera's current NTP configuration over CGI.
-func readNTP(c *cgi.Client) (ntp, error) {
-	value, _, _, err := c.Get("GetNtp", 0)
+// readNTP reads the camera's current enable/server pair over CGI, for
+// display.
+func readNTP(ctx context.Context, c *cgi.Client) (enabled bool, server string, err error) {
+	doc, err := readNTPDoc(ctx, c)
 	if err != nil {
-		return ntp{}, err
+		return false, "", err
 	}
-	var v ntpParam
-	if err := json.Unmarshal(value, &v); err != nil {
-		return ntp{}, fmt.Errorf("camctl: parsing GetNtp: %w", err)
-	}
-	return v.Ntp, nil
+	enabled, server = ntpEnableServer(doc)
+	return enabled, server, nil
 }
 
 // readTimeZone reads the camera's timezone over CGI.
@@ -92,8 +106,8 @@ func readNTP(c *cgi.Client) (ntp, error) {
 // wall clock and draw a conclusion this snapshot cannot support. The
 // timezone is the one field on this reply that is actually a setting rather
 // than a sample, so it is the one field read out here.
-func readTimeZone(c *cgi.Client) (int, error) {
-	value, _, _, err := c.Get("GetTime", 0)
+func readTimeZone(ctx context.Context, c *cgi.Client) (int, error) {
+	value, _, _, err := c.Get(ctx, "GetTime", 0)
 	if err != nil {
 		return 0, err
 	}
@@ -104,57 +118,62 @@ func readTimeZone(c *cgi.Client) (int, error) {
 	return v.Time.TimeZone, nil
 }
 
-// setNTP sends server and enabled to the camera over CGI SetNtp, and
+// setNTP sends server and enabled to the camera over CGI SetNtp, changing
+// only those two fields on top of the camera's current NTP document, and
 // reports what actually happened using the same confirmed/accepted/refused
 // vocabulary writeBlock uses for a Baichuan write, for the same reason
 // setFloodlight in lights.go already does: SetNtp answering 200 is not
 // evidence of effect any more than a Baichuan status 200 is, so this reads
 // GetNtp back rather than trusting the write's own reply.
 //
-// It reads the camera's current NTP document first and changes only Server
-// and Enable on top of it, never composing Port or Interval from nothing;
-// see the ntp type's own comment for why.
+// It reads the camera's current NTP document first through readNTPDoc and
+// changes only Server and Enable on top of it, never composing Port or
+// Interval from nothing; see readNTPDoc's own comment for why.
 func (s *Server) setNTP(ctx context.Context, cam Camera, server string, enabled bool) (WriteResult, error) {
 	c, err := s.cgiDial(cam)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("camctl: connecting to %q for NTP: %w", cam.Name, err)
 	}
 
-	cur, err := readNTP(c)
+	cur, err := readNTPDoc(ctx, c)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("camctl: reading NTP for %q before writing: %w", cam.Name, err)
 	}
-	before := ntpState(cur)
+	curEnabled, curServer := ntpEnableServer(cur)
+	before := ntpState(curEnabled, curServer)
 
-	next := cur
-	next.Server = server
+	next := make(map[string]any, len(cur))
+	for k, v := range cur {
+		next[k] = v
+	}
+	next["server"] = server
 	if enabled {
-		next.Enable = 1
+		next["enable"] = 1
 	} else {
-		next.Enable = 0
+		next["enable"] = 0
 	}
 
 	result := WriteResult{Before: []byte(before)}
-	if err := c.Set("SetNtp", ntpParam{Ntp: next}); err != nil {
+	if err := c.Set(ctx, "SetNtp", map[string]any{"Ntp": next}); err != nil {
 		result.Outcome = "refused"
 		result.Detail = err.Error()
 		return result, nil
 	}
 
-	after, readErr := readNTP(c)
+	afterEnabled, afterServer, readErr := readNTP(ctx, c)
 	if readErr != nil {
 		result.Outcome = "accepted"
 		result.Detail = fmt.Sprintf("the camera took the command, but reading it back failed: %v. This is not proof the camera changed anything.", readErr)
 		return result, nil
 	}
-	afterState := ntpState(after)
+	afterState := ntpState(afterEnabled, afterServer)
 	result.After = []byte(afterState)
-	if after.Server == next.Server && after.Enable == next.Enable {
+	if afterServer == server && afterEnabled == enabled {
 		result.Outcome = "confirmed"
 		result.Detail = "confirmed: read back after the write, and the camera reports " + afterState + "."
 	} else {
 		result.Outcome = "accepted"
-		result.Detail = fmt.Sprintf("the camera answered success, but reads back as %s rather than %s. Acceptance is not effect.", afterState, ntpState(next))
+		result.Detail = fmt.Sprintf("the camera answered success, but reads back as %s rather than %s. Acceptance is not effect.", afterState, ntpState(enabled, server))
 	}
 	return result, nil
 }
@@ -186,6 +205,9 @@ func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
 
 	page := timePage{Title: cam.Name + " time", Camera: cam}
 
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	defer cancel()
+
 	c, err := s.cgiDial(cam)
 	if err != nil {
 		page.NTPErr = fmt.Sprintf("could not connect: %v", err)
@@ -194,14 +216,14 @@ func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cur, readErr := readNTP(c); readErr != nil {
+	if enabled, server, readErr := readNTP(ctx, c); readErr != nil {
 		page.NTPErr = fmt.Sprintf("could not read NTP: %v", readErr)
 	} else {
-		page.NTPServer = cur.Server
-		page.NTPEnabled = cur.Enable != 0
+		page.NTPServer = server
+		page.NTPEnabled = enabled
 	}
 
-	if tz, readErr := readTimeZone(c); readErr != nil {
+	if tz, readErr := readTimeZone(ctx, c); readErr != nil {
 		page.TimeZoneErr = fmt.Sprintf("could not read the timezone: %v", readErr)
 	} else {
 		page.TimeZone = tz
@@ -236,8 +258,9 @@ func (s *Server) serveApplyTime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(writeResponse{
+	s.render(w, "result.html", writeResultPage{
+		Title:   cam.Name + " NTP",
+		Camera:  cam,
 		Outcome: result.Outcome,
 		Detail:  result.Detail,
 		Before:  string(result.Before),

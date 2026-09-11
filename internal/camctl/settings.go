@@ -7,7 +7,6 @@ package camctl
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -372,7 +371,7 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	// page.Err.
 	if c, cgiErr := s.cgiDial(cam); cgiErr != nil {
 		page.FloodlightErr = fmt.Sprintf("could not connect for the floodlight: %v", cgiErr)
-	} else if mode, state, readErr := readFloodlight(c); readErr != nil {
+	} else if mode, state, readErr := readFloodlight(ctx, c); readErr != nil {
 		page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
 	} else {
 		page.FloodlightCurrent = floodlightState(mode, state)
@@ -476,8 +475,9 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 		// model's actual schema. That must read as a refusal, the same
 		// vocabulary a rejected write already uses, never as a silent
 		// success: nothing was sent to the camera at all.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(writeResponse{
+		s.render(w, "result.html", writeResultPage{
+			Title:   fmt.Sprintf("%s: %s", cam.Name, block),
+			Camera:  cam,
 			Outcome: "refused",
 			Detail:  fmt.Sprintf("could not apply %s to the current document: %v", xpath, err),
 		})
@@ -490,11 +490,19 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(writeResponse{
+	page := writeResultPage{
+		Title:   fmt.Sprintf("%s: %s", cam.Name, block),
+		Camera:  cam,
 		Outcome: result.Outcome,
 		Detail:  result.Detail,
 		Before:  string(result.Before),
 		After:   string(result.After),
-	})
+	}
+	if len(result.Before) > 0 {
+		page.RestoreAction = fmt.Sprintf("/camera/%s/write/%d", cam.Name, pair.Set)
+		page.RestoreParam = "body"
+		page.RestoreValue = string(result.Before)
+		page.RestoreHidden = map[string]string{"verify": "true"}
+	}
+	s.render(w, "result.html", page)
 }

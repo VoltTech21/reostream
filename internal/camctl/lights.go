@@ -7,6 +7,7 @@
 package camctl
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,26 +22,17 @@ import (
 // happens, not discover it afterward in a log.
 const lightsConfirmReason = "This changes a physical light on the camera right now, not just a document. Are you sure?"
 
-// whiteLed is the shape GetWhiteLed and SetWhiteLed carry over CGI.
-//
 // mode and state are different things, and conflating them makes the light
 // look as though it only has an on switch. mode is what the light does;
 // state is whether it is lit right now. See docs/control.md, "The
 // floodlight, as a worked example": mode 1 with state 1 is "on", mode 1
 // with state 0 is "motion", which is how these cameras ship.
-type whiteLed struct {
-	Channel int `json:"channel"`
-	Mode    int `json:"mode"`
-	State   int `json:"state"`
-}
-
-// whiteLedParam wraps whiteLed the way SetWhiteLed's own param needs it:
-// the camera's CGI commands take their argument under a key matching the
-// command's own object name, confirmed by GetWhiteLed's reply carrying the
-// same "WhiteLed" wrapper.
-type whiteLedParam struct {
-	WhiteLed whiteLed `json:"WhiteLed"`
-}
+//
+// GetWhiteLed and SetWhiteLed carry a real WhiteLed document over CGI, and
+// this codebase does not model all of it: bright and LightingSchedule are
+// both real fields a camera sends that no struct here names. See
+// setFloodlight for why that means mode and state are read as a
+// map[string]any rather than a narrow struct.
 
 // floodlightOption is one choice the settings page offers for the
 // floodlight: a name, and the (mode, state) pair over CGI that produces it.
@@ -98,6 +90,15 @@ func floodlightState(mode, state int) string {
 // otherwise. This mirrors dial in camera.go, which does the same for
 // Baichuan: the floodlight is reachable only over CGI, never over Baichuan,
 // so it needs its own transport and its own substitution point.
+//
+// This does not take ctx, on purpose, even though every caller now has one
+// in hand: Options.CGIDial is the substitution point every test in this
+// package already builds against with the two-argument (cam Camera) shape,
+// and widening it to take ctx too would mean rewriting every one of those
+// test doubles for a dial that already carries its own 20 second timeout
+// and is not part of the repeated read/write/read-back chain the fleet
+// timeout actually needs to bound. See cgi.Client.Get and Set, which do
+// take ctx, for the calls that chain matters for.
 func (s *Server) cgiDial(cam Camera) (*cgi.Client, error) {
 	if s.opts.CGIDial != nil {
 		return s.opts.CGIDial(cam)
@@ -105,26 +106,59 @@ func (s *Server) cgiDial(cam Camera) (*cgi.Client, error) {
 	return cgi.Dial(cam.Address, cam.Username, cam.Password)
 }
 
-// readFloodlight reads the floodlight's current mode and state over CGI.
+// readFloodlightDoc reads the floodlight's whole GetWhiteLed document as a
+// generic map rather than a narrow struct, the same discipline
+// fleetapply.go's readFullTime already uses for GetTime: a real WhiteLed
+// object carries bright and LightingSchedule, fields this codebase does not
+// model, and setFloodlight changes only mode and state on top of whatever
+// this returns rather than composing a document that drops them.
 //
 // GetWhiteLed intermittently answers "please login first" on a connection
 // that logged in seconds earlier; c already logs in again and retries once,
 // so nothing here adds a second retry layer on top of it.
-func readFloodlight(c *cgi.Client) (mode, state int, err error) {
-	value, _, _, err := c.Get("GetWhiteLed", 0)
+func readFloodlightDoc(ctx context.Context, c *cgi.Client) (map[string]any, error) {
+	value, _, _, err := c.Get(ctx, "GetWhiteLed", 0)
+	if err != nil {
+		return nil, err
+	}
+	var v struct {
+		WhiteLed map[string]any `json:"WhiteLed"`
+	}
+	if err := json.Unmarshal(value, &v); err != nil {
+		return nil, fmt.Errorf("camctl: parsing GetWhiteLed: %w", err)
+	}
+	if v.WhiteLed == nil {
+		return nil, fmt.Errorf("camctl: GetWhiteLed carried no WhiteLed document")
+	}
+	return v.WhiteLed, nil
+}
+
+// floodlightModeState reads mode and state off a WhiteLed document, the
+// only two fields this page curates a control for.
+func floodlightModeState(doc map[string]any) (mode, state int) {
+	if f, ok := doc["mode"].(float64); ok {
+		mode = int(f)
+	}
+	if f, ok := doc["state"].(float64); ok {
+		state = int(f)
+	}
+	return mode, state
+}
+
+// readFloodlight reads the floodlight's current mode and state over CGI,
+// for display: serveSettings only ever shows floodlightState(mode, state),
+// never the raw document, so it keeps this narrow entry point.
+func readFloodlight(ctx context.Context, c *cgi.Client) (mode, state int, err error) {
+	doc, err := readFloodlightDoc(ctx, c)
 	if err != nil {
 		return 0, 0, err
 	}
-	var v struct {
-		WhiteLed whiteLed `json:"WhiteLed"`
-	}
-	if err := json.Unmarshal(value, &v); err != nil {
-		return 0, 0, fmt.Errorf("camctl: parsing GetWhiteLed: %w", err)
-	}
-	return v.WhiteLed.Mode, v.WhiteLed.State, nil
+	mode, state = floodlightModeState(doc)
+	return mode, state, nil
 }
 
-// setFloodlight sends mode and state over CGI.
+// setFloodlight sends mode and state over CGI, changed on top of the
+// camera's current WhiteLed document rather than composed from nothing.
 //
 // This is the floodlight's only working write path. Its Baichuan
 // equivalent, message 288, is known inert on this firmware: it takes a
@@ -134,15 +168,34 @@ func readFloodlight(c *cgi.Client) (mode, state int, err error) {
 // parsed and then discarded, not merely unsupported. Routing the floodlight
 // through writeBlock because it looks tidier next to the rest of this
 // codebase would not work.
-func setFloodlight(c *cgi.Client, mode, state int) error {
-	return c.Set("SetWhiteLed", whiteLedParam{WhiteLed: whiteLed{Channel: 0, Mode: mode, State: state}})
+//
+// The body posted here is readFloodlightDoc's own reply with mode and state
+// overwritten, never a three-field object built from scratch: the camera
+// supplies its own schema, including bright and LightingSchedule, and a
+// composed document drops both. That is what made the "schedule" option
+// (mode 3) send no schedule at all before this changed.
+func setFloodlight(ctx context.Context, c *cgi.Client, mode, state int) error {
+	cur, err := readFloodlightDoc(ctx, c)
+	if err != nil {
+		return err
+	}
+	cur["mode"] = mode
+	cur["state"] = state
+	cur["channel"] = 0
+	return c.Set(ctx, "SetWhiteLed", map[string]any{"WhiteLed": cur})
 }
 
 // serveApplyFloodlight is the floodlight's POST: set the requested option
 // over CGI, then read GetWhiteLed back on the same session to see whether
-// it actually took, the identical discipline writeBlock applies to a
-// Baichuan write, using the same three-word vocabulary so an operator reads
-// one meaning for "confirmed" everywhere on this page.
+// it actually took.
+//
+// The read-back this handler takes is on the write connection, not a fresh
+// one: writeBlock's fresh-connection discipline exists because a camera can
+// answer a same-session read from state it has not committed, and the
+// floodlight's CGI read-back has exactly that problem, with no fresh-session
+// equivalent available over CGI the way writeBlock has one over Baichuan.
+// So this can claim no more than "accepted": the camera reported the
+// change, but the effect is not verified from here. See docs/control.md.
 //
 // The confirmation dialog itself is not this handler's job. It runs
 // client-side, in the template, before the browser ever issues this
@@ -165,6 +218,9 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	defer cancel()
+
 	c, err := s.cgiDial(cam)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("connecting to %s: %v", cam.Name, err), http.StatusBadGateway)
@@ -174,29 +230,42 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 	// Best effort: a failed pre-read is not a reason to refuse the write
 	// itself, only to leave Before blank.
 	var before string
-	if beforeMode, beforeState, readErr := readFloodlight(c); readErr == nil {
+	if beforeMode, beforeState, readErr := readFloodlight(ctx, c); readErr == nil {
 		before = floodlightState(beforeMode, beforeState)
 	}
 
-	result := writeResponse{Before: before}
-	if err := setFloodlight(c, opt.Mode, opt.State); err != nil {
+	result := writeResultPage{
+		Title:  cam.Name + " floodlight",
+		Camera: cam,
+		Before: before,
+	}
+	if err := setFloodlight(ctx, c, opt.Mode, opt.State); err != nil {
 		result.Outcome = "refused"
 		result.Detail = err.Error()
-	} else if mode, state, readErr := readFloodlight(c); readErr != nil {
+	} else if mode, state, readErr := readFloodlight(ctx, c); readErr != nil {
 		result.Outcome = "accepted"
 		result.Detail = fmt.Sprintf("the camera took the command, but reading it back failed: %v. This is not proof the camera changed anything.", readErr)
 	} else {
 		after := floodlightState(mode, state)
 		result.After = after
 		if after == opt.Value {
-			result.Outcome = "confirmed"
-			result.Detail = "confirmed: read back after the write, and the light reports " + after + "."
+			result.Outcome = "accepted"
+			result.Detail = "the camera reports " + after + " on a read-back over the same session that carried the write, which can answer from state the camera has not committed. This is not confirmed: see docs/control.md."
 		} else {
 			result.Outcome = "accepted"
 			result.Detail = fmt.Sprintf("the camera answered success, but reads back as %q rather than %q. Acceptance is not effect: see message 288 in docs/control.md.", after, opt.Value)
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	// Restore resubmits the same form with the state read before this
+	// write: floodlightState's own output is exactly the option Value
+	// floodlightOptionByValue accepts, so a valid Before is always a
+	// resubmittable option.
+	if _, ok := floodlightOptionByValue(result.Before); ok {
+		result.RestoreAction = fmt.Sprintf("/camera/%s/floodlight", cam.Name)
+		result.RestoreParam = "option"
+		result.RestoreValue = result.Before
+	}
+
+	s.render(w, "result.html", result)
 }
