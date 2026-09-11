@@ -25,6 +25,16 @@
 {{range $group.Fields}}
 {{if eq .Kind "warning"}}
 <tr><td colspan="2"><p class="warning">{{.Label}}</p></td></tr>
+{{else if index $.Unavailable .XPath}}
+{{/*
+  Finding 3: a curated field whose read failed, or whose path this camera's
+  document does not carry, must say so where the control would be, never
+  render as a blank editable input that only fails once someone submits it.
+*/}}
+<tr>
+<td>{{.Label}}</td>
+<td><p class="warning">not available: {{index $.Unavailable .XPath}}</p></td>
+</tr>
 {{else}}
 {{$current := index $.Values .XPath}}
 <tr>
@@ -38,7 +48,7 @@
   morning, and that must never be a stray click.
 */}}
 <form method="post" action="/camera/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
-<input type="hidden" name="block" value="{{$group.Block}}">
+<input type="hidden" name="block" value="{{index $.ResolvedBlock $group.Title}}">
 <input type="hidden" name="xpath" value="{{.XPath}}">
 {{if eq .Kind "toggle"}}
 <select name="value">

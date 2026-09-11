@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -37,13 +38,26 @@ type Field struct {
 // Group is one curated section of the settings page, every field editing
 // the same raw block.
 //
-// Block is that block's name exactly as baichuan.ConfigPair.Name gives it
-// ("osd get", "isp get"): the same wording blocks.html's PairRow.Name
-// already renders, and the string pairForName resolves back to the Get and
-// Set ids a handler needs to seed and write the group's fields.
+// Blocks lists candidate blocks, by name exactly as baichuan.ConfigPair.Name
+// gives it ("osd get", "get osd"), most preferred first. More than one
+// candidate exists only for OSD: docs/control.md records "osd get" (44) and
+// "get osd" (29) as two independently recovered pairs for the same
+// settings, and normalising them onto one name is what pairs a write to the
+// wrong message id (see ConfigPairs' own comment). Which one a given camera
+// actually implements is not assumed; resolveGroupBlock discovers it by
+// trying each candidate and taking the first that reads back 200.
+//
+// A defaults-only read such as "osd def get" (110) can never end up in
+// Blocks by accident and do damage if it did: ConfigPairs only pairs a
+// "X get" with a "X set" that shares its exact name, and no "osd def set"
+// exists, so pairForName can never resolve a defaults read to a writable
+// pair at all. That is what makes it safe for this list to be no more
+// careful than "every writable candidate for this setting, most likely
+// first": the factory-defaults trap is closed by construction, not by
+// caution here.
 type Group struct {
 	Title  string
-	Block  string
+	Blocks []string
 	Fields []Field
 	// ConfirmReason, when non-empty, is shown next to the group's heading
 	// and used as the confirmation prompt every one of its forms asks
@@ -59,23 +73,32 @@ type Group struct {
 // describes a write that already went out.
 const unsafeToRewriteWarning = "unsafe to rewrite: writing this block, even with only one field changed, makes the camera reconfigure its pipeline and interrupts the stream."
 
-// noWritableIRWarning is shown in the Lights and IR group itself, not just
-// recorded in a comment, because an operator who opens that section looking
-// for an IR control and finds none has no way to tell, from the page alone,
-// whether that is a gap in this tool or a fact about the camera. It is the
-// latter: "fty ir_cut info" (371) reads, but nothing in the recovered
-// read/write table pairs a writable message to it.
-const noWritableIRWarning = "the infrared cut filter (fty ir_cut info) is readable but has no writable message in the recovered table, so it cannot be changed from here."
+// irLivesInImageWarning replaces an earlier, wrong claim that no writable
+// infrared message exists at all. It does: InputAdvanceCfg/DayNight/IrcutMode
+// is a real field in the same document isp get/isp set already carry (see
+// isp.xml in testdata/livefixtures), alongside DayNight/mode and
+// DayNight/Threshold. "fty ir_cut info" (371) is a different, read-only
+// message; it was the one this codebase checked, which is how the wrong
+// claim happened. The Infrared cut filter field below is that field,
+// carrying the same unsafe-to-rewrite caveat as the rest of Image, because
+// it shares Image's block.
+const irLivesInImageWarning = "the infrared cut filter is changed from the Image group above: it shares that block and its stream-interruption caveat, not a separate one."
 
 // groups declares the curated Picture and OSD surface plus Lights and IR:
 // what a person actually changes, so they do not have to edit raw XML.
 //
-// IR itself is not here yet: docs/control.md's read/write pairs carry no
-// writable IR message at all ("fty ir_cut info" reads only, and pairs on
-// nothing), so there is nothing yet to curate. The status LED (message
-// 209) is here because it is proven; the floodlight is not a Field at all,
-// because its write lives over CGI, not a Baichuan block, and settingsPage
-// carries it separately.
+// Every XPath here comes from testdata/livefixtures, a real RLC-810A's own
+// replies (osd2.xml, isp.xml, led.xml), not from guessing at Reolink's
+// schema: an earlier version of this file invented paths such as
+// "Osd/osdChannel/name" and "Isp/Isp/bright" that do not exist in any
+// document this camera actually sends (the real names are
+// "OsdChannelName/name" and "VideoInput/bright"), which is exactly the
+// kind of field this codebase's own honesty rule (Task 8 and Finding 3)
+// exists to catch rather than paper over with a blank input box.
+//
+// The status LED (message 209) is here because it is proven; the
+// floodlight is not a Field at all, because its write lives over CGI, not
+// a Baichuan block, and settingsPage carries it separately.
 //
 // Lights and IR sets ConfirmReason because everything in it is an emitter:
 // nothing in Picture and OSD switches anything a person or a camera can
@@ -84,40 +107,59 @@ func groups() []Group {
 	return []Group{
 		{
 			Title: "Camera name and overlay",
-			Block: "osd get",
+			// "osd get" (44) is the live document on the RLC-810A this was
+			// verified against; "get osd" (29) answered 405 there but is a
+			// second, independently recovered pair for the same settings
+			// on other firmware (see Group's own comment). Listed in this
+			// order because "osd get" is the one seen live; a camera that
+			// only implements "get osd" still gets a working group, just
+			// discovered rather than assumed.
+			Blocks: []string{"osd get", "get osd"},
 			Fields: []Field{
-				{Label: "Camera name", XPath: "Osd/osdChannel/name", Kind: "text"},
-				{Label: "Show camera name", XPath: "Osd/osdChannel/enable", Kind: "toggle"},
-				{Label: "Show timestamp", XPath: "Osd/osdTime/enable", Kind: "toggle"},
+				{Label: "Camera name", XPath: "OsdChannelName/name", Kind: "text"},
+				{Label: "Show camera name", XPath: "OsdChannelName/enable", Kind: "toggle"},
+				{Label: "Show timestamp", XPath: "OsdDatetime/enable", Kind: "toggle"},
 			},
 		},
 		{
-			Title: "Image",
-			Block: "isp get",
+			Title:  "Image",
+			Blocks: []string{"isp get"},
 			Fields: []Field{
-				{Label: "Brightness", XPath: "Isp/Isp/bright", Kind: "number"},
-				{Label: "Contrast", XPath: "Isp/Isp/contrast", Kind: "number"},
-				{Label: "Saturation", XPath: "Isp/Isp/saturation", Kind: "number"},
-				{Label: "Day and night switching", XPath: "Isp/Isp/dayNight", Kind: "text"},
+				{Label: "Brightness", XPath: "VideoInput/bright", Kind: "number"},
+				{Label: "Contrast", XPath: "VideoInput/contrast", Kind: "number"},
+				{Label: "Saturation", XPath: "VideoInput/saturation", Kind: "number"},
+				{Label: "Day and night mode", XPath: "InputAdvanceCfg/DayNight/mode", Kind: "text"},
+				// The infrared cut filter, corrected: see
+				// irLivesInImageWarning's comment for why this exists at
+				// all, despite an earlier version of this page claiming
+				// it did not.
+				{Label: "Infrared cut filter", XPath: "InputAdvanceCfg/DayNight/IrcutMode", Kind: "text"},
 				{Label: unsafeToRewriteWarning, Kind: "warning"},
 			},
 		},
 		{
 			Title:         "Lights and IR",
-			Block:         "led get",
+			Blocks:        []string{"led get"},
 			ConfirmReason: lightsConfirmReason,
 			Fields: []Field{
-				{Label: "Status LED", XPath: "LedState/state", Kind: "toggle"},
-				{Label: noWritableIRWarning, Kind: "warning"},
+				// LedState/state is a string enum ("auto" on the camera
+				// this was verified against), not the 0/1 boolean this
+				// field used to send: a numeric toggle would have written
+				// "0" or "1" into a field the camera never uses those
+				// values for. Free text, seeded from whatever string the
+				// camera actually holds, so a person edits the camera's
+				// own value rather than a guessed dropdown.
+				{Label: "Status LED", XPath: "LedState/state", Kind: "text"},
+				{Label: irLivesInImageWarning, Kind: "warning"},
 			},
 		},
 	}
 }
 
 // pairForName finds the read/write pair whose firmware description is
-// name, the same wording Group.Block and PairRow.Name already use. It is
-// how a Group's Block gets resolved back to the ids a handler needs to seed
-// and write its fields.
+// name, the same wording Group.Blocks and PairRow.Name already use. It is
+// how one of a Group's Blocks candidates gets resolved back to the ids a
+// handler needs to seed and write its fields.
 func pairForName(name string) (baichuan.ConfigPair, bool) {
 	for _, p := range baichuan.ConfigPairs() {
 		if p.Name == name {
@@ -291,10 +333,25 @@ type settingsPage struct {
 	Camera Camera
 	Groups []Group
 	// Values maps a Field's XPath to what the camera actually holds right
-	// now, seeded from the read each group's Block names. A field absent
-	// from Values (an unreadable block, or a path this camera's document
-	// does not carry) renders with an empty value rather than a guess.
+	// now, seeded from the read each group's resolved block names. A field
+	// absent from Values is never rendered as an editable, blank input:
+	// see Unavailable.
 	Values map[string]string
+	// Unavailable maps a Field's XPath to why it has no entry in Values,
+	// for every field that is not: none of the group's Blocks answered, or
+	// the block answered but this XPath is not in the document it sent.
+	// settings.html renders this text where the control would be, in
+	// place of the input, so an operator sees a stated fact rather than an
+	// empty box that only fails once they try to use it. This is Finding
+	// 3: a blank editable field for a read that failed gave no indication
+	// anything was wrong until the write itself refused.
+	Unavailable map[string]string
+	// ResolvedBlock maps a Group's Title to whichever of its Blocks
+	// candidates this camera actually answered 200 for, so the form for
+	// each field posts the block that was actually read, not just the
+	// first candidate listed. Absent for a group where no candidate
+	// resolved.
+	ResolvedBlock map[string]string
 	// Err carries a failure that stopped part of this page from being
 	// filled in, the same discipline every other page in this package
 	// follows: text for a person, never inspected.
@@ -315,6 +372,40 @@ type settingsPage struct {
 	FloodlightConfirm string
 }
 
+// resolveGroupBlock tries each of g.Blocks against conn, in order, and
+// returns the first one that both names a real read/write pair and reads
+// back 200: this is what discovers, rather than assumes, which of two
+// independently recovered pairs for the same settings this camera actually
+// implements (see Group's own comment on Blocks). failReason is empty
+// exactly when pair and doc are usable; otherwise it names why every
+// candidate was rejected, for a caller to show in place of a control.
+func resolveGroupBlock(ctx context.Context, conn *baichuan.Conn, g Group) (pair baichuan.ConfigPair, doc []byte, failReason string) {
+	var lastReason string
+	for _, name := range g.Blocks {
+		p, ok := pairForName(name)
+		if !ok {
+			lastReason = fmt.Sprintf("%q is not a known read/write pair", name)
+			continue
+		}
+		readCtx, readCancel := context.WithTimeout(ctx, readTimeout)
+		d, status, err := baichuan.ReadConfig(readCtx, conn, p.Get)
+		readCancel()
+		if err != nil {
+			lastReason = fmt.Sprintf("reading %s: %v", name, err)
+			continue
+		}
+		if status != 200 {
+			lastReason = fmt.Sprintf("%s: %s", name, baichuan.ExplainStatus(status))
+			continue
+		}
+		return p, d, ""
+	}
+	if lastReason == "" {
+		lastReason = "no candidate block is configured for this group"
+	}
+	return baichuan.ConfigPair{}, nil, fmt.Sprintf("this camera did not answer any of %s (%s)", strings.Join(g.Blocks, ", "), lastReason)
+}
+
 // serveSettings shows the curated Picture and OSD group: what a person
 // actually changes, seeded from the same reads the raw view uses, so this
 // page never shows a value it did not itself just read from the camera.
@@ -331,6 +422,8 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 		Camera:            cam,
 		Groups:            groups(),
 		Values:            map[string]string{},
+		Unavailable:       map[string]string{},
+		ResolvedBlock:     map[string]string{},
 		FloodlightOptions: floodlightOptions,
 		FloodlightConfirm: lightsConfirmReason,
 	}
@@ -347,19 +440,24 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	for _, g := range page.Groups {
-		pair, ok := pairForName(g.Block)
-		if !ok {
+		pair, doc, failReason := resolveGroupBlock(ctx, conn, g)
+		if failReason != "" {
+			for _, f := range g.Fields {
+				if f.Kind != "warning" {
+					page.Unavailable[f.XPath] = failReason
+				}
+			}
 			continue
 		}
-		readCtx, readCancel := context.WithTimeout(ctx, readTimeout)
-		doc, status, readErr := baichuan.ReadConfig(readCtx, conn, pair.Get)
-		readCancel()
-		if readErr != nil || status != 200 {
-			continue
-		}
+		page.ResolvedBlock[g.Title] = pair.Name
 		for _, f := range g.Fields {
+			if f.Kind == "warning" {
+				continue
+			}
 			if v, ok := fieldValue(doc, f.XPath); ok {
 				page.Values[f.XPath] = v
+			} else {
+				page.Unavailable[f.XPath] = fmt.Sprintf("%s does not appear in %s on this camera", f.XPath, pair.Name)
 			}
 		}
 	}
@@ -389,7 +487,7 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 // page itself curated, never on whatever a request happens to claim.
 func curatedField(block, xpath string) (Field, bool) {
 	for _, g := range groups() {
-		if g.Block != block {
+		if !slices.Contains(g.Blocks, block) {
 			continue
 		}
 		for _, f := range g.Fields {

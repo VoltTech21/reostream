@@ -188,14 +188,38 @@ func TestServeApplyFloodlightRefusesAnUnknownOption(t *testing.T) {
 // state), and that both carry the confirm-every-time reason where a person
 // reading the page can see it, not only in a comment.
 func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
+	osdGetPair, ok := pairForName("osd get")
+	if !ok {
+		t.Fatal("osd get pair not found")
+	}
+	getOsdPair, ok := pairForName("get osd")
+	if !ok {
+		t.Fatal("get osd pair not found")
+	}
+	ispPair, ok := pairForName("isp get")
+	if !ok {
+		t.Fatal("isp get pair not found")
+	}
 	ledPair, ok := pairForName("led get")
 	if !ok {
 		t.Fatal("led get pair not found")
 	}
 	ledXML := testXMLHeader + `<body><LedState><channelId>0</channelId><state>1</state></LedState></body>`
 
+	// serveSettings reads every group's block on one connection, in order:
+	// Camera name and overlay (its two OSD candidates), then Image, then
+	// Lights and IR. fakecam streams its whole fixture the instant it
+	// accepts, so a reply for a later group that arrives before its own
+	// request is read gets discarded as a mismatched id by an earlier
+	// group's read rather than saved for its turn. This test cares about
+	// the Lights and IR group, but its fixture still has to answer every
+	// read that precedes it, in that same order, or its own led reply
+	// never survives to be read.
 	key := baichuan.AESKey(testProbeNonce, "")
 	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	fixture = append(fixture, statusReply(t, key, osdGetPair.Get, baichuan.StatusNotImplemented, "")...)
+	fixture = append(fixture, statusReply(t, key, getOsdPair.Get, baichuan.StatusNotImplemented, "")...)
+	fixture = append(fixture, statusReply(t, key, ispPair.Get, baichuan.StatusNotImplemented, "")...)
 	fixture = append(fixture, statusReply(t, key, ledPair.Get, 200, ledXML)...)
 
 	baichuanCam := fakecam.New(t, fixture)
@@ -225,7 +249,7 @@ func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
 	}
 	html := string(raw)
 
-	for _, want := range []string{"Lights and IR", "Status LED", "Floodlight", lightsConfirmReason, noWritableIRWarning} {
+	for _, want := range []string{"Lights and IR", "Status LED", "Floodlight", lightsConfirmReason, irLivesInImageWarning} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render %q", want)
 		}

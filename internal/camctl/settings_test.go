@@ -7,10 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/cgi"
 	"github.com/VoltTech21/reostream/internal/fakecam"
 )
 
@@ -83,16 +87,16 @@ func TestSetFieldEscapesTheValue(t *testing.T) {
 func TestImageGroupIsMarkedUnsafeToRewrite(t *testing.T) {
 	found := false
 	for _, g := range groups() {
-		if g.Block != "isp get" {
+		if !slices.Contains(g.Blocks, "isp get") {
 			continue
 		}
 		found = true
-		pair, ok := pairForName(g.Block)
+		pair, ok := pairForName("isp get")
 		if !ok {
-			t.Fatalf("group %q names block %q, which is not a known read/write pair", g.Title, g.Block)
+			t.Fatalf("group %q names block %q, which is not a known read/write pair", g.Title, "isp get")
 		}
 		if !baichuan.UnsafeToRewrite(pair.Set) {
-			t.Fatalf("group %q's block %q is not unsafe to rewrite, but this test assumed it was", g.Title, g.Block)
+			t.Fatalf("group %q's block %q is not unsafe to rewrite, but this test assumed it was", g.Title, "isp get")
 		}
 		hasWarning := false
 		for _, f := range g.Fields {
@@ -153,14 +157,31 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	if !ok {
 		t.Fatal("isp get pair not found")
 	}
+	ledPair, ok := pairForName("led get")
+	if !ok {
+		t.Fatal("led get pair not found")
+	}
 
-	osdXML := testXMLHeader + `<body><Osd><channelId>0</channelId><osdChannel><enable>1</enable><name>lounge</name></osdChannel><osdTime><enable>1</enable></osdTime></Osd></body>`
-	ispXML := testXMLHeader + `<body><Isp><channelId>0</channelId><Isp><bright>120</bright><contrast>110</contrast><saturation>100</saturation><dayNight>Auto</dayNight></Isp></Isp></body>`
+	// Shaped exactly like testdata/livefixtures/osd2.xml and isp.xml, a real
+	// RLC-810A's own replies, not the invented "Osd/osdChannel" shape this
+	// test used to fabricate. See groups()'s own comment on why that
+	// mattered: the earlier XPaths matched nothing this camera actually
+	// sends.
+	osdXML := testXMLHeader + `<body><OsdChannelName><channelId>0</channelId><name>lounge</name><enable>1</enable></OsdChannelName><OsdDatetime><channelId>0</channelId><enable>1</enable></OsdDatetime></body>`
+	ispXML := testXMLHeader + `<body><VideoInput><channelId>0</channelId><bright>120</bright><contrast>110</contrast><saturation>100</saturation></VideoInput><InputAdvanceCfg><channelId>0</channelId><DayNight><mode>auto</mode><IrcutMode>ir</IrcutMode><Threshold>medium</Threshold></DayNight></InputAdvanceCfg></body>`
+	ledXML := testXMLHeader + `<body><LedState><channelId>0</channelId><state>auto</state></LedState></body>`
 
+	// serveSettings reads every group's block on one connection, in the
+	// order groups() declares them, and fakecam streams its whole fixture
+	// up front: a reply that arrives before its own request is read gets
+	// discarded as a mismatched id by an earlier read, not saved for its
+	// turn. So every group needs a reply here, in that same order, even
+	// though this test's assertions only look at Camera name and Image.
 	key := baichuan.AESKey(testProbeNonce, "")
 	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
 	fixture = append(fixture, statusReply(t, key, osdPair.Get, 200, osdXML)...)
 	fixture = append(fixture, statusReply(t, key, ispPair.Get, 200, ispXML)...)
+	fixture = append(fixture, statusReply(t, key, ledPair.Get, 200, ledXML)...)
 
 	cam := fakecam.New(t, fixture)
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
@@ -184,7 +205,7 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	}
 	html := string(raw)
 
-	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night switching", unsafeToRewriteWarning} {
+	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night mode", "Infrared cut filter", unsafeToRewriteWarning} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render the %q field", want)
 		}
@@ -196,6 +217,12 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	}
 	if !strings.Contains(html, `value="120"`) {
 		t.Errorf("page does not show the brightness read from the camera:\n%s", html)
+	}
+	if !strings.Contains(html, `value="ir"`) {
+		t.Errorf("page does not show the infrared cut filter read from the camera:\n%s", html)
+	}
+	if strings.Contains(html, "not available:") {
+		t.Errorf("a field that resolved cleanly was rendered as unavailable:\n%s", html)
 	}
 }
 
@@ -280,8 +307,8 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 	if !ok {
 		t.Fatal("osd get pair not found")
 	}
-	before := `<body><Osd><channelId>0</channelId><osdChannel><enable>1</enable><name>front</name></osdChannel></Osd></body>`
-	after := `<body><Osd><channelId>0</channelId><osdChannel><enable>1</enable><name>lounge</name></osdChannel></Osd></body>`
+	before := `<body><OsdChannelName><channelId>0</channelId><name>front</name><enable>1</enable></OsdChannelName></body>`
+	after := `<body><OsdChannelName><channelId>0</channelId><name>lounge</name><enable>1</enable></OsdChannelName></body>`
 
 	writeCam, verifyCam := buildApplySettingFixtures(t, pair, before, after, 200)
 
@@ -300,7 +327,7 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 
 	resp, err := http.PostForm(ts.URL+"/camera/cam1/settings", url.Values{
 		"block": {"osd get"},
-		"xpath": {"Osd/osdChannel/name"},
+		"xpath": {"OsdChannelName/name"},
 		"value": {"lounge"},
 	})
 	if err != nil {
@@ -341,9 +368,10 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 	if !ok {
 		t.Fatal("isp get pair not found")
 	}
-	// A document this model actually returned, but with no dayNight element
-	// at all: the curated field names a path this camera does not carry.
-	before := `<body><Isp><channelId>0</channelId><Isp><bright>120</bright></Isp></Isp></body>`
+	// A document this model actually returned, but with no
+	// InputAdvanceCfg/DayNight/IrcutMode at all: the curated field names a
+	// path this camera does not carry.
+	before := `<body><VideoInput><channelId>0</channelId><bright>120</bright></VideoInput></body>`
 
 	key := baichuan.AESKey(testProbeNonce, "")
 	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
@@ -359,8 +387,8 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 
 	resp, err := http.PostForm(ts.URL+"/camera/cam1/settings", url.Values{
 		"block": {"isp get"},
-		"xpath": {"Isp/Isp/dayNight"},
-		"value": {"Auto"},
+		"xpath": {"InputAdvanceCfg/DayNight/IrcutMode"},
+		"value": {"ir"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -389,5 +417,192 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 			t.Fatal("a SetConfig message reached the camera for a field that never resolved")
 		}
 		off += n + int(h.MsgLen)
+	}
+}
+
+// TestCuratedXPathsResolveAgainstRealLiveFixtures builds the fixes
+// directly against testdata/livefixtures: a real RLC-810A's own osd2.xml,
+// isp.xml and led.xml. An earlier version of groups() invented XPaths that
+// matched none of these documents at all (Finding 4); this pins every
+// currently curated, non-warning field to a path present in the actual
+// capture, so a future invented path fails here rather than only showing
+// up as a blank box on a real camera.
+func TestCuratedXPathsResolveAgainstRealLiveFixtures(t *testing.T) {
+	docs := map[string][]byte{
+		"osd get": readTestdata(t, "testdata/livefixtures/osd2.xml"),
+		"isp get": readTestdata(t, "testdata/livefixtures/isp.xml"),
+		"led get": readTestdata(t, "testdata/livefixtures/led.xml"),
+	}
+	want := map[string]string{
+		"OsdChannelName/name":                "Rear Bay",
+		"OsdChannelName/enable":              "0",
+		"OsdDatetime/enable":                 "1",
+		"VideoInput/bright":                  "128",
+		"VideoInput/contrast":                "128",
+		"VideoInput/saturation":              "128",
+		"InputAdvanceCfg/DayNight/mode":      "auto",
+		"InputAdvanceCfg/DayNight/IrcutMode": "ir",
+		"LedState/state":                     "auto",
+	}
+	for _, g := range groups() {
+		for _, f := range g.Fields {
+			if f.Kind == "warning" {
+				continue
+			}
+			var doc []byte
+			for _, blockName := range g.Blocks {
+				if d, ok := docs[blockName]; ok {
+					doc = d
+					break
+				}
+			}
+			if doc == nil {
+				t.Fatalf("field %q's group %q names no block this test has a fixture for (%v)", f.XPath, g.Title, g.Blocks)
+			}
+			got, ok := fieldValue(doc, f.XPath)
+			if !ok {
+				t.Errorf("%s does not resolve against the real fixture for group %q", f.XPath, g.Title)
+				continue
+			}
+			if w, ok := want[f.XPath]; ok && got != w {
+				t.Errorf("%s = %q, want %q from the live fixture", f.XPath, got, w)
+			}
+		}
+	}
+}
+
+// readTestdata reads a testdata file relative to this package's directory,
+// failing the test if it is missing.
+func readTestdata(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return b
+}
+
+// TestNoDefaultsOnlyBlockCanEverBeCuratedTogether pins the structural
+// safety property groups()'s own comment on Blocks relies on: a
+// defaults-only read such as "osd def get" (110, testdata/livefixtures/
+// osd3.xml, the FACTORY DEFAULTS for the exact same settings osd2.xml
+// carries live) never appears in ConfigPairs at all, because it has no
+// matching "osd def set". Had the curated OSD group ever fallen back onto
+// it, writing back through it would have renamed the camera to "Camera1"
+// and switched its OSD language to Chinese. This test is the guarantee
+// that resolveGroupBlock has no path to it, not just that groups() does
+// not currently list it.
+func TestNoDefaultsOnlyBlockCanEverBeCuratedTogether(t *testing.T) {
+	for _, defaultsName := range []string{"osd def get", "isp def"} {
+		if _, ok := pairForName(defaultsName); ok {
+			t.Fatalf("%q resolved to a writable pair; a defaults-only read must never pair with a Set", defaultsName)
+		}
+	}
+}
+
+// TestResolveGroupBlockFallsBackToTheSecondCandidate is Finding 4's
+// discovery mechanism: a camera that answers 405 for the first candidate
+// but 200 for the second must still seed the group, from whichever
+// candidate actually worked, not fail the whole group because the first
+// guess was wrong. This is exactly the shop_rear-probe.txt fact this page
+// was verified against: "osd" (get osd, 29) answers 405 there while "osd2"
+// (osd get, 44) answers 200.
+func TestResolveGroupBlockFallsBackToTheSecondCandidate(t *testing.T) {
+	firstName, ok := pairForName("osd get")
+	if !ok {
+		t.Fatal("osd get pair not found")
+	}
+	secondName, ok := pairForName("get osd")
+	if !ok {
+		t.Fatal("get osd pair not found")
+	}
+	osdXML := testXMLHeader + `<body><OsdChannelName><channelId>0</channelId><name>Rear Bay</name><enable>0</enable></OsdChannelName></body>`
+
+	key := baichuan.AESKey(testProbeNonce, "")
+	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	fixture = append(fixture, statusReply(t, key, firstName.Get, baichuan.StatusNotImplemented, "")...)
+	fixture = append(fixture, statusReply(t, key, secondName.Get, 200, osdXML)...)
+	cam := fakecam.New(t, fixture)
+
+	conn, err := baichuan.Dial(context.Background(), cam.Addr(), baichuan.Options{Password: ""})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	g := Group{Title: "Camera name and overlay", Blocks: []string{"osd get", "get osd"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pair, doc, reason := resolveGroupBlock(ctx, conn, g)
+	if reason != "" {
+		t.Fatalf("resolveGroupBlock did not fall back to the working candidate: %s", reason)
+	}
+	if pair.Name != "get osd" {
+		t.Fatalf("resolved block = %q, want %q", pair.Name, "get osd")
+	}
+	if v, ok := fieldValue(doc, "OsdChannelName/name"); !ok || v != "Rear Bay" {
+		t.Fatalf("resolved document did not seed the expected value: %q, ok=%v", v, ok)
+	}
+}
+
+// TestUnavailableFieldRendersExplanationNotBlankInput is Finding 3: a
+// curated field whose block never answered must say so where the control
+// would be, not render an empty, silently-broken editable input.
+func TestUnavailableFieldRendersExplanationNotBlankInput(t *testing.T) {
+	osdGetPair, ok := pairForName("osd get")
+	if !ok {
+		t.Fatal("osd get pair not found")
+	}
+	getOsdPair, ok := pairForName("get osd")
+	if !ok {
+		t.Fatal("get osd pair not found")
+	}
+	ispPair, ok := pairForName("isp get")
+	if !ok {
+		t.Fatal("isp get pair not found")
+	}
+	ledPair, ok := pairForName("led get")
+	if !ok {
+		t.Fatal("led get pair not found")
+	}
+
+	key := baichuan.AESKey(testProbeNonce, "")
+	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	// Every group's read gets an explicit, fast 405, in request order: both
+	// OSD candidates, then Image, then Lights. This camera implements
+	// none of them.
+	fixture = append(fixture, statusReply(t, key, osdGetPair.Get, baichuan.StatusNotImplemented, "")...)
+	fixture = append(fixture, statusReply(t, key, getOsdPair.Get, baichuan.StatusNotImplemented, "")...)
+	fixture = append(fixture, statusReply(t, key, ispPair.Get, baichuan.StatusNotImplemented, "")...)
+	fixture = append(fixture, statusReply(t, key, ledPair.Get, baichuan.StatusNotImplemented, "")...)
+	cam := fakecam.New(t, fixture)
+
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
+	}
+	cgiCam := newFakeCGICamera(t, 0, 0)
+	cgiDial := func(c Camera) (*cgi.Client, error) {
+		return cgi.Dial(cgiCam.addr(), "admin", "")
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/camera/cam1/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+
+	if !strings.Contains(html, "not available:") {
+		t.Fatalf("page does not explain the unresolved OSD group:\n%s", html)
+	}
+	if strings.Contains(html, `name="xpath" value="OsdChannelName/name"`) {
+		t.Fatalf("page rendered an editable input for a field whose block never answered:\n%s", html)
 	}
 }
