@@ -86,6 +86,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /camera/{name}/settings", s.auth.Wrap(http.HandlerFunc(s.serveSettings)))
 	mux.Handle("POST /camera/{name}/settings", s.auth.Wrap(http.HandlerFunc(s.serveApplySetting)))
 	mux.Handle("POST /camera/{name}/floodlight", s.auth.Wrap(http.HandlerFunc(s.serveApplyFloodlight)))
+	mux.Handle("GET /camera/{name}/time", s.auth.Wrap(http.HandlerFunc(s.serveTime)))
+	mux.Handle("POST /camera/{name}/time", s.auth.Wrap(http.HandlerFunc(s.serveApplyTime)))
+	// Accounts get a GET route only. No POST, PUT, PATCH or DELETE route
+	// exists for /camera/{name}/accounts anywhere in this package; see
+	// accounts.go's top comment for why. Go's ServeMux answers 405 for a
+	// method-specific pattern's path with no matching method, which is
+	// what makes a request for any of those methods refuse itself without
+	// this handler ever having to notice or check.
+	mux.Handle("GET /camera/{name}/accounts", s.auth.Wrap(http.HandlerFunc(s.serveAccounts)))
 	mux.Handle("POST /camera/{name}/write/{id}", s.auth.Wrap(http.HandlerFunc(s.serveWrite)))
 	return mux
 }
