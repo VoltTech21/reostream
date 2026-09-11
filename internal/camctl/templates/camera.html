@@ -31,7 +31,7 @@
 which is what makes asking about every known message safe, and is the only honest way to
 find out what a model has: no table can say it in advance.</p>
 <table>
-<tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>Hung up</th></tr>
+<tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>No answer</th></tr>
 <tr><td>{{.SupportedCount}}</td><td>{{.WantsParamsCount}}</td><td>{{.AbsentCount}}</td><td>{{.HungUpCount}}</td></tr>
 </table>
 <table>
@@ -41,7 +41,7 @@ find out what a model has: no table can say it in advance.</p>
 <td>{{.Name}}</td>
 <td>{{.ID}}</td>
 <td>{{.Status}}</td>
-<td>{{if .Supported}}supported{{else if .WantsParams}}wants parameters (400){{else if .Absent}}absent (405){{else if .HungUp}}hung up{{end}}</td>
+<td>{{if .Supported}}supported{{else if .WantsParams}}wants parameters (400){{else if .Absent}}absent (405){{else if .HungUp}}no answer{{end}}</td>
 </tr>
 {{end}}
 </table>

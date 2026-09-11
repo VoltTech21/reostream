@@ -160,6 +160,18 @@ func TestProbeCameraReconnectsAfterAHangupAndRecordsIt(t *testing.T) {
 		t.Fatalf("dial was called %d times, want 2 (the original connection, then one reconnect)", calls)
 	}
 
+	// The second dial goes to fullCam and is the connection probeCamera is
+	// still holding when it returns, so it must be the one the deferred
+	// close reaches. dropCam's own fakecam variant does not track this
+	// (NewDropAfter simulates the *camera* dropping the connection, not the
+	// client closing it, so there is nothing on that side to count), but
+	// fullCam's is exactly the signal a leaked-connection bug shows up as:
+	// `defer conn.Close()` bound to the stale, already-hung-up connection
+	// would never touch this one at all, and it would stay at 0 forever.
+	if got := fullCam.Closes(); got != 1 {
+		t.Fatalf("fullCam recorded %d closes, want 1: the live connection at return time must be closed exactly once", got)
+	}
+
 	for i, p := range probes {
 		if p.Name != names[i] {
 			t.Fatalf("probe %d is %q, want %q", i, p.Name, names[i])
