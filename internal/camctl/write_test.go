@@ -3,6 +3,7 @@ package camctl
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -242,6 +243,95 @@ func TestServeWriteRejectsAnEmptyBody(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400 for an empty body", resp.StatusCode)
+	}
+}
+
+// pickUnsafePair finds a real ConfigPairs entry whose Set id is
+// UnsafeToRewrite, so the warning tests below exercise the actual table
+// rather than a fabricated pair.
+func pickUnsafePair(t *testing.T) baichuan.ConfigPair {
+	t.Helper()
+	for _, p := range baichuan.ConfigPairs() {
+		if baichuan.UnsafeToRewrite(p.Set) {
+			return p
+		}
+	}
+	t.Fatal("no ConfigPairs entry is UnsafeToRewrite; the two tests below need one")
+	return baichuan.ConfigPair{}
+}
+
+// TestUnsafeToRewriteWarningSurvivesAFailedFreshDial is the regression for
+// the bug review caught: the warning that a pair is unsafe to rewrite was
+// being discarded whenever the post-write verification step failed, which
+// is exactly the case an operator needs it most in. Here the write itself
+// succeeds (200) and the fresh dial for verification fails outright.
+func TestUnsafeToRewriteWarningSurvivesAFailedFreshDial(t *testing.T) {
+	pair := pickUnsafePair(t)
+	writeCam := fakecam.New(t, buildWriteFixture(t, pair, "<body><field>old-value</field></body>", 200))
+
+	calls := 0
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		calls++
+		if calls == 2 {
+			return nil, errors.New("simulated dial failure")
+		}
+		return baichuan.Dial(ctx, writeCam.Addr(), baichuan.Options{Password: ""})
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	cam, err := s.byName("cam1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := s.writeBlock(context.Background(), cam, pair.Set, []byte("<body><field>new-value</field></body>"), true)
+	if err != nil {
+		t.Fatalf("writeBlock: %v", err)
+	}
+	if result.Outcome != "accepted" {
+		t.Fatalf("outcome = %q, want accepted (the write succeeded, verification could not run)", result.Outcome)
+	}
+	if !strings.Contains(result.Detail, "unsafe to rewrite") {
+		t.Fatalf("Detail lost the unsafe-to-rewrite warning when the fresh dial failed: %q", result.Detail)
+	}
+}
+
+// TestUnsafeToRewriteWarningSurvivesAFailedReadBack is the other half of
+// the regression: the write succeeds (200) and the fresh connection dials
+// fine, but the read-back on it fails (the camera drops the connection
+// before answering).
+func TestUnsafeToRewriteWarningSurvivesAFailedReadBack(t *testing.T) {
+	pair := pickUnsafePair(t)
+	writeCam := fakecam.New(t, buildWriteFixture(t, pair, "<body><field>old-value</field></body>", 200))
+	// Login succeeds but the connection is cut before the Get reply goes
+	// out, so ReadConfig on the fresh connection returns an error rather
+	// than timing out.
+	loginOnly := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	verifyCam := fakecam.NewDropAfter(t, loginOnly, len(loginOnly))
+
+	calls := 0
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		calls++
+		addr := writeCam.Addr()
+		if calls == 2 {
+			addr = verifyCam.Addr()
+		}
+		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	cam, err := s.byName("cam1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := s.writeBlock(context.Background(), cam, pair.Set, []byte("<body><field>new-value</field></body>"), true)
+	if err != nil {
+		t.Fatalf("writeBlock: %v", err)
+	}
+	if result.Outcome != "accepted" {
+		t.Fatalf("outcome = %q, want accepted (the write succeeded, the read-back failed)", result.Outcome)
+	}
+	if !strings.Contains(result.Detail, "unsafe to rewrite") {
+		t.Fatalf("Detail lost the unsafe-to-rewrite warning when the read-back failed: %q", result.Detail)
 	}
 }
 

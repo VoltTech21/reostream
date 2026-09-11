@@ -84,11 +84,29 @@ func pairForSet(id uint32) (baichuan.ConfigPair, bool) {
 // this codebase has no right to make. Every effect docs/control.md records
 // as proven was confirmed on a connection opened after the write, not the
 // one that carried it.
-func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []byte, verify bool) (WriteResult, error) {
+func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []byte, verify bool) (result WriteResult, err error) {
 	pair, ok := pairForSet(id)
 	if !ok {
 		return WriteResult{}, fmt.Errorf("camctl: %d is not a known writable pair for %q", id, cam.Name)
 	}
+
+	// UnsafeToRewrite is about this codebase's own evidence, from
+	// docs/control.md, not the status the camera answers: a clean 200 on a
+	// pair known to reconfigure the pipeline gives no hint by itself that
+	// the stream was just interrupted, and that is exactly the case an
+	// operator most needs the warning for. This defer is the one place
+	// that appends it, running after every branch below has finished
+	// deciding Detail, including the two verification-failure branches
+	// that replace Detail outright with their own message: appending
+	// per-branch, as an earlier version of this function did, meant a
+	// later branch's plain assignment silently discarded a warning an
+	// earlier branch had already added. A single append at the end cannot
+	// be clobbered by branches that run before it.
+	defer func() {
+		if err == nil && confidenceOf(pair) == UnsafeToRewrite {
+			result.Detail = "this pair is unsafe to rewrite: re-applying it interrupts the stream, even though the write itself succeeded. " + result.Detail
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
@@ -124,15 +142,8 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 		return WriteResult{}, fmt.Errorf("camctl: writing %s for %q: %w", pair.Name, cam.Name, err)
 	}
 
-	result := outcomeFor(status, body, nil, false)
+	result = outcomeFor(status, body, nil, false)
 	result.Before = before
-	// UnsafeToRewrite is about this codebase's own evidence, from
-	// docs/control.md, not the status the camera just answered: even a
-	// clean 200 on a pair known to reconfigure the pipeline on write needs
-	// this said plainly, because the status alone gives no hint of it.
-	if confidenceOf(pair) == UnsafeToRewrite {
-		result.Detail = "this pair is unsafe to rewrite: re-applying it interrupts the stream, even though the write itself succeeds. " + result.Detail
-	}
 
 	if status != 200 || !verify {
 		return result, nil
@@ -144,30 +155,27 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 	// above exists for.
 	conn.Close()
 	conn = nil
-	fresh, err := s.dial(ctx, cam)
-	if err != nil {
+	fresh, dialErr := s.dial(ctx, cam)
+	if dialErr != nil {
 		// The write itself is not in doubt, only whether it can be proven.
 		// Report what was actually established: a 200 with no completed
 		// verification is accepted, not confirmed.
-		result.Detail = fmt.Sprintf("accepted (200), but the fresh connection for verification could not be opened: %v. This is not proof the camera changed anything.", err)
+		result.Detail = fmt.Sprintf("accepted (200), but the fresh connection for verification could not be opened: %v. This is not proof the camera changed anything.", dialErr)
 		return result, nil
 	}
 	conn = fresh
 
 	readCtx, readCancel = context.WithTimeout(ctx, readTimeout)
-	after, _, err := baichuan.ReadConfig(readCtx, conn, pair.Get)
+	after, _, readErr := baichuan.ReadConfig(readCtx, conn, pair.Get)
 	readCancel()
-	if err != nil {
-		result.Detail = fmt.Sprintf("accepted (200), but the read-back on a fresh connection failed: %v. This is not proof the camera changed anything.", err)
+	if readErr != nil {
+		result.Detail = fmt.Sprintf("accepted (200), but the read-back on a fresh connection failed: %v. This is not proof the camera changed anything.", readErr)
 		return result, nil
 	}
 
 	result = outcomeFor(status, body, after, true)
 	result.Before = before
 	result.After = after
-	if confidenceOf(pair) == UnsafeToRewrite {
-		result.Detail = "this pair is unsafe to rewrite: re-applying it interrupts the stream, even though the write itself succeeds. " + result.Detail
-	}
 	return result, nil
 }
 
