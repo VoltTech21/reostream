@@ -78,9 +78,26 @@ var renameConfig = os.Rename
 // disk just because it is well formed, or a restart is left unable to boot
 // from the very file it wrote.
 func saveConfig(path, text string, checkFleet func([]config.Camera) error) error {
+	// Prefer the target's own directory: a temp file there lives on the
+	// same filesystem as path, which is what keeps the atomic rename below
+	// available. But that directory is /etc/reostream in the shipped image,
+	// owned by root, while the daemon runs as the nonroot:nonroot user in
+	// the distroless container; nonroot cannot create anything there. When
+	// that is why CreateTemp failed, fall back to the system temp dir so
+	// validation still has somewhere to put the candidate text, and note
+	// that the rename path is now unavailable since the fallback location
+	// is not guaranteed to share a filesystem with path.
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".reostream-config-*")
+	sameFS := true
 	if err != nil {
-		return err
+		if !errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		sameFS = false
+		tmp, err = os.CreateTemp("", ".reostream-config-*")
+		if err != nil {
+			return err
+		}
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
@@ -121,38 +138,56 @@ func saveConfig(path, text string, checkFleet func([]config.Camera) error) error
 		return err
 	}
 
+	// The backup normally lives next to the target. But when path's
+	// directory refused even a temp file above (the /etc/reostream
+	// nonroot case), it will refuse a file named config.toml.bak for the
+	// identical reason, so put the backup in the system temp dir instead.
+	// It loses nothing by not being beside the target: it is never
+	// renamed anywhere, only read back by a human doing recovery.
+	backupPath := path + ".bak"
+	if !sameFS {
+		backupPath = filepath.Join(os.TempDir(), filepath.Base(path)+".bak")
+	}
 	if old, err := os.ReadFile(path); err == nil {
-		if err := os.WriteFile(path+".bak", old, 0o600); err != nil {
+		if err := os.WriteFile(backupPath, old, 0o600); err != nil {
 			return fmt.Errorf("could not write backup: %w", err)
 		}
 	}
 
 	// Rename, so a crash mid-write cannot leave a half written config that
 	// the next boot refuses. This is the fast, atomic path and is correct
-	// wherever the filesystem allows it.
-	if err := renameConfig(tmpPath, path); err != nil {
-		if !errors.Is(err, syscall.EBUSY) && !errors.Is(err, syscall.EXDEV) {
-			return err
+	// wherever the filesystem allows it. When the temp file landed in the
+	// system temp dir above, it is not on the same filesystem as path, so
+	// a rename would fail with EXDEV every time; skip straight to the
+	// in-place write instead of attempting a rename known to fail.
+	if sameFS {
+		if err := renameConfig(tmpPath, path); err != nil {
+			if !errors.Is(err, syscall.EBUSY) && !errors.Is(err, syscall.EXDEV) {
+				return err
+			}
+			// Docker's single-file bind mount (-v host/config.toml:/config.toml,
+			// which is how this daemon's config actually reaches it in the
+			// only environment this feature ships to) attaches the mount to
+			// the target's inode. Rename is a directory-entry swap, and the
+			// kernel refuses to detach a bind-mounted inode that way: EBUSY,
+			// every time. A cross-device mount setup can fail the same rename
+			// with EXDEV. The fallback below writes the already-validated
+			// bytes into the existing inode instead, which works under a
+			// bind mount. It is not atomic: a crash mid-write can leave the
+			// file half-written. The backup written just above is what makes
+			// that recoverable.
+			return writeInPlace(tmpPath, path, mode)
 		}
-		// Docker's single-file bind mount (-v host/config.toml:/config.toml,
-		// which is how this daemon's config actually reaches it in the
-		// only environment this feature ships to) attaches the mount to
-		// the target's inode. Rename is a directory-entry swap, and the
-		// kernel refuses to detach a bind-mounted inode that way: EBUSY,
-		// every time. A cross-device mount setup can fail the same rename
-		// with EXDEV. The fallback below writes the already-validated
-		// bytes into the existing inode instead, which works under a
-		// bind mount. It is not atomic: a crash mid-write can leave the
-		// file half-written. The backup written just above is what makes
-		// that recoverable.
-		return writeInPlace(tmpPath, path, mode)
+		return nil
 	}
-	return nil
+	return writeInPlace(tmpPath, path, mode)
 }
 
 // writeInPlace rewrites path's existing inode with text's bytes, truncating
-// first. Used only when rename cannot swap the target in, such as a
-// single-file bind mount; unlike rename, this is not atomic.
+// first. Used both when rename cannot swap the target in, such as a
+// single-file bind mount, and when the temp file could not even be created
+// next to path, so no rename was attempted at all. Unlike rename, this is
+// not atomic.
 func writeInPlace(tmpPath, path string, mode os.FileMode) error {
 	text, err := os.ReadFile(tmpPath)
 	if err != nil {
@@ -160,6 +195,16 @@ func writeInPlace(tmpPath, path string, mode os.FileMode) error {
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			// A bare "permission denied" here sends the operator looking
+			// at the wrong layer: the daemon already proved it can read
+			// and validate this file, so the failure is specifically that
+			// the mounted file's owner does not match the container's
+			// nonroot user. Say that plainly instead of leaving them to
+			// guess. Fixing ownership is the operator's call, not
+			// something this daemon should do to a file it does not own.
+			return fmt.Errorf("config file %s is not writable by the daemon (usually means its ownership does not match the user the container runs as): %w", path, err)
+		}
 		return err
 	}
 	if _, err := f.Write(text); err != nil {

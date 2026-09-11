@@ -188,6 +188,102 @@ func TestSaveConfigFallsBackToInPlaceWriteWhenRenameIsBusy(t *testing.T) {
 	}
 }
 
+// TestSaveConfigFallsBackWhenTheTargetDirectoryIsNotWritable reproduces the
+// production failure: /etc/reostream is root-owned in the image, the
+// daemon runs as nonroot, and config.toml is a single-file bind mount, so
+// os.CreateTemp(filepath.Dir(path), ...) is denied before rename is ever
+// reached. Root can write into a 0500 directory regardless of its mode, so
+// this test cannot observe the failure it exists to catch when run as
+// root; skip rather than let it pass for the wrong reason.
+func TestSaveConfigFallsBackWhenTheTargetDirectoryIsNotWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permission bits; this test needs a real non-writable directory")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("listen = \"0.0.0.0:1\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+
+	if err := saveConfig(path, validTOML, nil); err != nil {
+		t.Fatalf("save should have fallen back to the system temp dir: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != validTOML {
+		t.Fatalf("config not written; got %q", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode changed to %v, want 0640 preserved", info.Mode().Perm())
+	}
+	// The target directory refused config.toml.bak for the same reason it
+	// refused the temp file, so the backup lands in the system temp dir
+	// instead; see saveConfig's backupPath comment.
+	backupPath := filepath.Join(os.TempDir(), "config.toml.bak")
+	defer os.Remove(backupPath)
+	backup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("no backup kept at %s: %v", backupPath, err)
+	}
+	if !strings.Contains(string(backup), "0.0.0.0:1") {
+		t.Fatalf("backup holds %q, not the previous config", backup)
+	}
+}
+
+// TestSaveConfigReportsOwnershipMismatchWhenTheFileItselfIsUnwritable covers
+// the other half of the bind-mount failure: the directory may be writable
+// (system temp dir fallback succeeded, or rename was possible) while the
+// mounted config file's own owner still does not match the container's
+// nonroot user, so the in-place write is denied too. The message must say
+// so plainly rather than surface a bare "permission denied".
+func TestSaveConfigReportsOwnershipMismatchWhenTheFileItselfIsUnwritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permission bits; this test needs a real unwritable file")
+	}
+
+	// Rename would happily replace path regardless of path's own
+	// permission bits, since a rename only needs the directory to be
+	// writable, not the file it is displacing. So to reach writeInPlace at
+	// all, force the EBUSY path exactly as
+	// TestSaveConfigFallsBackToInPlaceWriteWhenRenameIsBusy does; only then
+	// does opening the 0400 target for writing hit a real permission
+	// error.
+	old := renameConfig
+	renameConfig = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EBUSY}
+	}
+	defer func() { renameConfig = old }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(validTOML), 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	err := saveConfig(path, validTOML+"\n", nil)
+	if err == nil {
+		t.Fatal("expected the unwritable target to surface an error")
+	}
+	if !strings.Contains(err.Error(), "not writable by the daemon") {
+		t.Fatalf("error %q does not explain the daemon cannot write the file", err)
+	}
+	if !strings.Contains(err.Error(), "ownership") {
+		t.Fatalf("error %q does not point at ownership as the likely cause", err)
+	}
+}
+
 func TestSaveConfigDoesNotFallBackOnAnUnrelatedRenameError(t *testing.T) {
 	old := renameConfig
 	renameConfig = func(oldpath, newpath string) error {
