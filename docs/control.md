@@ -20,10 +20,21 @@ Three models here, all on one fleet:
 
 | | RLC-810A | FE-P | Duo 3 PoE |
 |---|---|---|---|
-| supported | 39 | 45 | 47 |
-| wants parameters (400) | 10 | 11 | 11 |
-| absent (405) | 54 | 47 | 45 |
+| supported | 40 | 46 | 48 |
+| wants parameters (400) | 11 | 12 | 12 |
+| absent (405) | 52 | 45 | 43 |
 | hung up | 0 | 0 | 0 |
+
+Re-measured 2026-09-11. The classifier that produced the first version of this table
+checked whether a reply had a body before checking its status code, so a message that
+answers 400 with an error body was filed as supported, and it had a single catch-all
+for everything else, printed as "absent (405)" regardless of what the camera actually
+sent. Fixing that moved three messages, the same three on every model: `dns` and
+`syscpuload` answer 200 with an empty body and were being counted as absent, and
+`usercfg` answers 400 with a body and was being counted as supported. Each model's
+count is therefore supported +1, wants-parameters +1, absent -2 from the original
+table. The numbers above are from the fixed, status-only classifier; nothing here
+implies any camera's actual behavior changed.
 
 The useful number is the agreement: of 103 messages probed, **89 answer the same way on
 all three**, and these are not similar cameras. Only 14 differ, and they differ where you
