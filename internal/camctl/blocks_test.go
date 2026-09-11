@@ -2,6 +2,7 @@ package camctl
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -196,5 +197,70 @@ func TestServeBlocksRendersXMLAndConfidenceLabels(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not mention the %q label", want)
 		}
+	}
+}
+
+// buildBlockFixtureForPair answers every name baichuan.ConfigNames knows
+// with 405, except pair's own Get id, which answers 200 carrying body. It
+// is buildBlockFixture's targeted sibling, for a test that needs a
+// specific writable pair's row to come back Editable rather than whichever
+// pair happens to be first in ConfigNames order.
+func buildBlockFixtureForPair(t *testing.T, pair baichuan.ConfigPair, body string) []byte {
+	t.Helper()
+	names := baichuan.ConfigNames()
+	key := baichuan.AESKey(testProbeNonce, "")
+	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	for _, name := range names {
+		id := baichuan.ConfigMessages[name]
+		if id == pair.Get {
+			fixture = append(fixture, statusReply(t, key, id, 200, testXMLHeader+body)...)
+		} else {
+			fixture = append(fixture, statusReply(t, key, id, 405, "")...)
+		}
+	}
+	return fixture
+}
+
+// TestBlocksPageEditorPostsToServeWrite is the regression for the raw
+// block editor's textarea sitting in no form at all: the seeded editor
+// must be wired to a form posting to serveWrite's own route
+// (/camera/{name}/write/{id}), carrying the seeded document as its body
+// field, so the raw view can actually promote a write from unverified to
+// proven rather than only display one nothing on the page can submit.
+func TestBlocksPageEditorPostsToServeWrite(t *testing.T) {
+	pair := pickTestPair(t)
+	body := "<body><field>seed-value</field></body>"
+	fixture := buildBlockFixtureForPair(t, pair, body)
+	cam := fakecam.New(t, fixture)
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/camera/cam1/blocks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+
+	wantAction := fmt.Sprintf(`action="/camera/cam1/write/%d"`, pair.Set)
+	if !strings.Contains(html, wantAction) {
+		t.Fatalf("page does not carry a form posting to %s:\n%s", wantAction, html)
+	}
+	if !strings.Contains(html, `name="body"`) {
+		t.Fatalf("page carries no textarea named \"body\" for serveWrite to read:\n%s", html)
+	}
+	if !strings.Contains(html, "seed-value") {
+		t.Fatalf("the editor is not seeded from the block this page just read:\n%s", html)
 	}
 }

@@ -22,7 +22,18 @@ see docs/control.md.</p>
 <td>{{.Confidence}}</td>
 <td>
 {{if .Editable}}
-<textarea rows="4" cols="60">{{.Seed}}</textarea>
+{{/*
+  This is the raw view's whole point: promote a write from unverified to
+  proven by changing a field, writing it, and reading it back. The body
+  posted is always .Seed as edited here, never a document composed from
+  nothing, so this form can only ever send what serveBlocks itself just
+  read from the camera.
+*/}}
+<form method="post" action="/camera/{{$.Camera.Name}}/write/{{.Set}}">
+<textarea name="body" rows="4" cols="60">{{.Seed}}</textarea><br>
+<input type="hidden" name="verify" value="true">
+<button type="submit">write</button>
+</form>
 {{else}}
 <em>not read on this probe</em>
 {{end}}
