@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
@@ -45,11 +46,24 @@ type FleetResult struct {
 // It is given fresh to every camera applyAll tries, never shared off one
 // overall deadline: a camera that is unreachable, powered off, or mid
 // reboot must be free to burn its own timeout without leaving less time for
-// the cameras behind it in the list. Reusing probeTimeout keeps this in
-// step with the bound every other write in this package already answers to
-// (writeBlock, serveApplySetting, serveApplyTime), rather than inventing a
-// second number nobody has reason to expect differs from it.
-const fleetApplyTimeout = probeTimeout
+// the cameras behind it in the list.
+//
+// This is deliberately its own number, not probeTimeout. probeTimeout
+// bounds a sweep of around a hundred reads with redials; a fleet apply does
+// one CGI round trip per camera (setNTP and setTimeZone each run at most a
+// dial, a read, a write, and a read-back: up to four calls, each bounded by
+// cgi.Client's own 20 second http.Client timeout, so at most about 80
+// seconds in the worst case). applyAll runs the fleet serially, so this
+// number is multiplied by the fleet size on the bad day every camera is
+// down: at 3 minutes, an eight-camera fleet that is entirely unreachable
+// would leave the page looking hung for 24 minutes. 90 seconds covers the
+// worst-case four-call chain with headroom without multiplying into
+// something an operator would give up on and kill.
+//
+// This is a ceiling, not a guarantee that a hung CGI call gets cancelled
+// mid-flight: cgi.Client.Get and Set take no context, so what this actually
+// bounds is the gap between calls, the same property setNTP already has.
+const fleetApplyTimeout = 90 * time.Second
 
 // applyAll runs apply against every configured camera and returns one
 // result per camera, in fleet order. It never stops at the first failure,

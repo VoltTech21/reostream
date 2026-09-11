@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
@@ -81,26 +82,43 @@ func TestApplyAllDoesNotStopAtTheFirstFailure(t *testing.T) {
 // first camera must not carry that expiry into the second, or a single
 // dead camera at the front of the list would eat the budget for everyone
 // behind it, exactly the failure mode the brief calls out by name.
+//
+// Checking only that each call's ctx.Deadline() reports ok is not enough:
+// a buggy implementation that hoists one context.WithTimeout above the
+// loop and shares it across every camera would pass that check too, since
+// every call would still see a deadline, just the same shrinking one. This
+// spends real time inside the first camera's apply and asserts the second
+// camera's remaining budget is still close to the full timeout rather than
+// the first camera's leftovers: under a shared context, the first
+// camera's sleep eats directly into what the second camera sees; under a
+// fresh timeout per camera, the second camera gets back nearly the whole
+// budget regardless of what the first spent.
 func TestApplyAllBoundsEachCameraSeparately(t *testing.T) {
 	s := newTestServer(t, Options{
 		AllowNoPassword: true,
 		ConfigPath:      writeTestConfig(t, "first", "second"),
 	})
-	var deadlines []bool
+	const sleep = 200 * time.Millisecond
+	var remaining []time.Duration
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
-		_, ok := ctx.Deadline()
-		deadlines = append(deadlines, ok)
+		if cam.Name == "first" {
+			time.Sleep(sleep)
+		}
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatalf("camera %q ran with no deadline: each camera must be bounded on its own", cam.Name)
+		}
+		remaining = append(remaining, time.Until(dl))
 		return WriteResult{Outcome: "confirmed"}, nil
 	}
 
 	s.applyAll(context.Background(), apply)
-	if len(deadlines) != 2 {
-		t.Fatalf("got %d calls, want 2", len(deadlines))
+	if len(remaining) != 2 {
+		t.Fatalf("got %d calls, want 2", len(remaining))
 	}
-	for i, ok := range deadlines {
-		if !ok {
-			t.Fatalf("camera %d ran with no deadline: each camera must be bounded on its own", i)
-		}
+	margin := sleep / 2
+	if remaining[1] < remaining[0]+margin {
+		t.Fatalf("second camera's remaining budget (%v) is not clearly more than the first's (%v) after it slept %v: timeouts are not independent per camera", remaining[1], remaining[0], sleep)
 	}
 }
 
