@@ -17,3 +17,4 @@ reostream.toml
 # Editor and OS noise
 .DS_Store
 *.swp
+internal/rtsp/testdata/*.bin
