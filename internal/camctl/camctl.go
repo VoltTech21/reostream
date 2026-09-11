@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/cgi"
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
@@ -32,6 +33,14 @@ type Options struct {
 	// deployment wants; a test supplies its own so it can probe a fake
 	// camera instead of reaching for a real one.
 	Dial func(ctx context.Context, cam Camera) (*baichuan.Conn, error)
+
+	// CGIDial opens a CGI session to cam, for the handful of settings
+	// reachable only over the camera's HTTP API: the floodlight, the
+	// fisheye view modes, the dual lens stitch parameters. Nil means
+	// cgi.Dial against cam's own address and credentials; a test supplies
+	// its own so it can substitute a fake HTTP server instead of reaching
+	// for a real camera.
+	CGIDial func(cam Camera) (*cgi.Client, error)
 }
 
 // Server serves the camera control page.
@@ -76,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /camera/{name}/blocks", s.auth.Wrap(http.HandlerFunc(s.serveBlocks)))
 	mux.Handle("GET /camera/{name}/settings", s.auth.Wrap(http.HandlerFunc(s.serveSettings)))
 	mux.Handle("POST /camera/{name}/settings", s.auth.Wrap(http.HandlerFunc(s.serveApplySetting)))
+	mux.Handle("POST /camera/{name}/floodlight", s.auth.Wrap(http.HandlerFunc(s.serveApplyFloodlight)))
 	mux.Handle("POST /camera/{name}/write/{id}", s.auth.Wrap(http.HandlerFunc(s.serveWrite)))
 	return mux
 }

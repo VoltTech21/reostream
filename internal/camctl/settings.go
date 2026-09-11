@@ -46,6 +46,12 @@ type Group struct {
 	Title  string
 	Block  string
 	Fields []Field
+	// ConfirmReason, when non-empty, is shown next to the group's heading
+	// and used as the confirmation prompt every one of its forms asks
+	// through before it submits. Empty for a group like Picture and OSD,
+	// where nothing switches anything a person or a camera can see happen;
+	// set for Lights and IR, where every field is an emitter.
+	ConfirmReason string
 }
 
 // unsafeToRewriteWarning is shown next to a control that edits a block
@@ -54,12 +60,19 @@ type Group struct {
 // describes a write that already went out.
 const unsafeToRewriteWarning = "unsafe to rewrite: writing this block, even with only one field changed, makes the camera reconfigure its pipeline and interrupts the stream."
 
-// groups declares the curated Picture and OSD surface: what a person
-// actually changes, so they do not have to edit raw XML.
+// groups declares the curated Picture and OSD surface plus Lights and IR:
+// what a person actually changes, so they do not have to edit raw XML.
 //
-// IR belongs to the Lights and IR group instead, not here, because it is an
-// emitter and inherits that group's confirm-every-time rule; nothing in
-// this group switches anything a person or a camera can see happen.
+// IR itself is not here yet: docs/control.md's read/write pairs carry no
+// writable IR message at all ("fty ir_cut info" reads only, and pairs on
+// nothing), so there is nothing yet to curate. The status LED (message
+// 209) is here because it is proven; the floodlight is not a Field at all,
+// because its write lives over CGI, not a Baichuan block, and settingsPage
+// carries it separately.
+//
+// Lights and IR sets ConfirmReason because everything in it is an emitter:
+// nothing in Picture and OSD switches anything a person or a camera can
+// see happen, and this group is the opposite of that.
 func groups() []Group {
 	return []Group{
 		{
@@ -80,6 +93,14 @@ func groups() []Group {
 				{Label: "Saturation", XPath: "Isp/Isp/saturation", Kind: "number"},
 				{Label: "Day and night switching", XPath: "Isp/Isp/dayNight", Kind: "text"},
 				{Label: unsafeToRewriteWarning, Kind: "warning"},
+			},
+		},
+		{
+			Title:         "Lights and IR",
+			Block:         "led get",
+			ConfirmReason: lightsConfirmReason,
+			Fields: []Field{
+				{Label: "Status LED", XPath: "LedState/state", Kind: "toggle"},
 			},
 		},
 	}
@@ -270,6 +291,20 @@ type settingsPage struct {
 	// filled in, the same discipline every other page in this package
 	// follows: text for a person, never inspected.
 	Err string
+
+	// FloodlightOptions, FloodlightCurrent and FloodlightErr seed the
+	// floodlight control. It is not a Field in Groups because its write
+	// goes over CGI, not a Baichuan block, so it cannot go through
+	// curatedField or writeBlock the way every other control here does; it
+	// gets its own section in the template and its own route,
+	// serveApplyFloodlight.
+	FloodlightOptions []floodlightOption
+	FloodlightCurrent string
+	FloodlightErr     string
+	// FloodlightConfirm is the same reason Lights and IR's ConfirmReason
+	// carries, repeated here because the floodlight form lives outside
+	// Groups and so cannot read it off a Group.
+	FloodlightConfirm string
 }
 
 // serveSettings shows the curated Picture and OSD group: what a person
@@ -283,7 +318,14 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page := settingsPage{Title: cam.Name + " settings", Camera: cam, Groups: groups(), Values: map[string]string{}}
+	page := settingsPage{
+		Title:             cam.Name + " settings",
+		Camera:            cam,
+		Groups:            groups(),
+		Values:            map[string]string{},
+		FloodlightOptions: floodlightOptions,
+		FloodlightConfirm: lightsConfirmReason,
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
@@ -312,6 +354,19 @@ func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
 				page.Values[f.XPath] = v
 			}
 		}
+	}
+
+	// The floodlight is CGI only, an entirely separate transport and
+	// session from the Baichuan conn dialed above, so a failure reading it
+	// must not blank out the Baichuan groups this handler already filled
+	// in: it is reported on its own, in FloodlightErr, rather than through
+	// page.Err.
+	if c, cgiErr := s.cgiDial(cam); cgiErr != nil {
+		page.FloodlightErr = fmt.Sprintf("could not connect for the floodlight: %v", cgiErr)
+	} else if mode, state, readErr := readFloodlight(c); readErr != nil {
+		page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
+	} else {
+		page.FloodlightCurrent = floodlightState(mode, state)
 	}
 
 	s.render(w, "settings.html", page)
