@@ -182,8 +182,7 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "dashboard.html", struct {
-		Title string
-		Rows  []row
-		Tiles []tile
-	}{Title: "Status", Rows: s.rows(), Tiles: s.tiles()})
+		Title  string
+		Groups []cameraGroup
+	}{Title: "Status", Groups: s.cameraGroups()})
 }

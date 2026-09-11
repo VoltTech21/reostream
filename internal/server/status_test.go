@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/hub"
 )
@@ -125,5 +126,33 @@ func TestAudioFramesSurfacesInMetrics(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, `reostream_stream_audio_frames_total{stream="a"} 9`) {
 		t.Errorf("metrics missing the audio frame count\n%s", body)
+	}
+}
+
+// TestStatusReportsRawBitrateBps pins /api/status as a published interface:
+// the operator dashboard now renders bitrate in Mbps for a person, but that
+// is a presentation change in the dashboard template only. A recorder and
+// Prometheus both parse bitrate_bps as raw bits per second, and that must
+// not change here.
+func TestStatusReportsRawBitrateBps(t *testing.T) {
+	h := hub.New(4)
+	h.RecordFrame(775936) // ~6.2 Mbps over the 1s stats window
+	time.Sleep(1100 * time.Millisecond)
+	h.RecordFrame(0) // crosses the window boundary, committing the measurement above
+
+	s := New(StaticHubs(map[string]*hub.Hub{"a": h}))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/status", nil))
+	var body struct {
+		Streams map[string]struct {
+			BitrateBps float64 `json:"bitrate_bps"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	got := body.Streams["a"].BitrateBps
+	if got < 5_000_000 || got > 7_000_000 {
+		t.Fatalf("bitrate_bps = %v, want the raw bits-per-second value (roughly 6.2e6), not Mbps or anything else scaled", got)
 	}
 }

@@ -1,40 +1,94 @@
 {{define "body"}}
 <h1>Status</h1>
 <table>
-<tr><th>Stream</th><th>State</th><th>FPS</th><th>Bitrate</th><th>Clients</th><th>Restarts</th><th>Last error</th></tr>
-{{range .Rows}}
+<tr><th>Stream</th><th>State</th><th>FPS</th><th>Bitrate (Mbps)</th><th>Clients</th><th>Restarts</th><th>Last error</th><th>Video</th></tr>
+{{range .Groups}}
+{{$group := .}}
+{{$n := len .Rows}}
+{{if eq $n 0}}
 <tr>
-<td>{{.Name}}</td>
-<td class="state-{{.State}}">{{.State}}</td>
-<td>{{printf "%.1f" .FPS}}</td>
-<td>{{printf "%.0f" .BitrateBps}}</td>
-<td>{{.Clients}}</td>
-<td>{{.Restarts}}</td>
-<td>{{.LastError}}</td>
+<td>{{.Camera}}</td>
+<td colspan="6">no status yet</td>
+<td>{{template "cameravideo" $group}}</td>
 </tr>
+{{else}}
+{{range $i, $r := .Rows}}
+<tr>
+<td>{{$r.Name}}</td>
+<td class="state-{{$r.State}}">{{$r.State}}</td>
+<td>{{printf "%.1f" $r.FPS}}</td>
+<td>{{$r.MbpsBitrate}}</td>
+<td>{{$r.Clients}}</td>
+<td>{{$r.Restarts}}</td>
+<td>{{$r.LastError}}</td>
+{{if eq $i 0}}
+<td rowspan="{{$n}}">{{template "cameravideo" $group}}</td>
+{{end}}
+</tr>
+{{end}}
+{{end}}
 {{end}}
 </table>
 
-<h2>Live</h2>
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(20rem,1fr));gap:.75rem">
-{{range .Tiles}}
-<figure style="margin:0">
-<figcaption>{{.Camera}}</figcaption>
-{{if .Playable}}
-<video data-src="{{.URL}}" muted playsinline controls style="width:100%"></video>
+<script src="/assets/mpegts.js"></script>
+<script>
+// A camera's video area starts nothing on its own: with eight cameras on
+// this fleet, creating a player for every tile at page load meant eight
+// simultaneous MPEG-TS decodes the instant the dashboard opened, which is
+// what pegged the operator's CPU and RAM. Nothing decodes until a tile is
+// clicked, and starting one tile always stops whatever tile was already
+// running, so at most one stream is ever being decoded in this tab.
+function startPlayer(container) {
+  if (!window.mpegts || !mpegts.isSupported()) return;
+  stopActive();
+  const src = container.dataset.src;
+  const video = container.querySelector('video');
+  const btn = container.querySelector('.play-btn');
+  const player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: src});
+  player.attachMediaElement(video);
+  player.load();
+  player.play();
+  video.setAttribute('controls', '');
+  btn.hidden = true;
+  active = {player: player, video: video, btn: btn};
+}
+
+var active = null;
+
+function stopActive() {
+  if (!active) return;
+  // Pausing the <video> element is not enough: mpegts.js keeps pulling the
+  // stream over XHR even while paused, which would leave the daemon
+  // streaming to a tab nobody is watching, the same bug in a quieter form.
+  // destroy() actually closes the fetch, which is what drops this tab out
+  // of the stream's /api/status client count.
+  try { active.player.pause(); } catch (e) {}
+  try { active.player.unload(); } catch (e) {}
+  try { active.player.detachMediaElement(); } catch (e) {}
+  active.player.destroy();
+  active.video.removeAttribute('controls');
+  active.btn.hidden = false;
+  active = null;
+}
+
+for (const container of document.querySelectorAll('.cam-video[data-src]')) {
+  const btn = container.querySelector('.play-btn');
+  const video = container.querySelector('video');
+  btn.addEventListener('click', function() { startPlayer(container); });
+  video.addEventListener('click', function() {
+    if (!video.hasAttribute('controls')) startPlayer(container);
+  });
+}
+</script>
+{{end}}
+
+{{define "cameravideo"}}
+{{if .Tile.Playable}}
+<div class="cam-video" data-src="{{.Tile.URL}}">
+<video muted playsinline></video>
+<button type="button" class="play-btn">Play {{.Camera}}</button>
+</div>
 {{else}}
 <p>No browser playable stream on this camera. Its streams are HEVC, which browsers here do not decode.</p>
 {{end}}
-</figure>
-{{end}}
-</div>
-<script src="/assets/mpegts.js"></script>
-<script>
-for (const el of document.querySelectorAll('video[data-src]')) {
-  if (!window.mpegts || !mpegts.isSupported()) break;
-  const player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: el.dataset.src});
-  player.attachMediaElement(el);
-  player.load();
-}
-</script>
 {{end}}

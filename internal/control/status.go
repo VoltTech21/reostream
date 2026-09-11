@@ -1,6 +1,7 @@
 package control
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/VoltTech21/reostream/internal/server"
@@ -36,6 +37,14 @@ type row struct {
 	Name  string
 	State string
 	server.StreamStatus
+}
+
+// MbpsBitrate renders BitrateBps for a person, not a scraper: /api/status
+// and /metrics keep the raw bits-per-second value exactly as they always
+// have, since a recorder and Prometheus both parse it, but a human reading
+// the dashboard wants "6.2 Mbps", not "6231488".
+func (r row) MbpsBitrate() string {
+	return fmt.Sprintf("%.1f", r.BitrateBps/1e6)
 }
 
 func (s *Server) rows() []row {
