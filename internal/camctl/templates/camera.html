@@ -1,6 +1,7 @@
 {{define "body"}}
 <h1>{{.Camera.Name}}</h1>
 <p>{{.Camera.Address}}</p>
+<p><a href="/camera/{{.Camera.Name}}/blocks">every block, as XML</a></p>
 {{if .Err}}<p>{{.Err}}</p>{{end}}
 
 {{if .Support}}

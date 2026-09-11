@@ -1,0 +1,47 @@
+{{define "body"}}
+<h1>{{.Camera.Name}}: every block</h1>
+<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
+{{if .Err}}<p>{{.Err}}</p>{{end}}
+
+<h2>Writable pairs</h2>
+<p>What this codebase actually knows about each pair's write, not what the camera claims
+when it answers 200. <strong>proven</strong> means a field was changed, read back on a
+fresh connection, and restored. <strong>known inert</strong> means the write is accepted
+and does nothing, on more than one model. <strong>unsafe to rewrite</strong> means the
+write probably works, which is the problem: re-applying it interrupts the stream.
+Everything else is <strong>unverified</strong>: the shape is right and nobody has
+observed an effect. Moving a pair off unverified takes an observed effect, never a 200;
+see docs/control.md.</p>
+<table>
+<tr><th>Name</th><th>Get</th><th>Set</th><th>Confidence</th><th>Editor</th></tr>
+{{range .Pairs}}
+<tr>
+<td>{{.Name}}</td>
+<td>{{.Get}}</td>
+<td>{{.Set}}</td>
+<td>{{.Confidence}}</td>
+<td>
+{{if .Editable}}
+<textarea rows="4" cols="60">{{.Seed}}</textarea>
+{{else}}
+<em>not read on this probe</em>
+{{end}}
+</td>
+</tr>
+{{end}}
+</table>
+
+<h2>Every readable block</h2>
+<p>A message this model does not implement answers 405 rather than dropping the
+connection, which is what makes asking for every known message safe.</p>
+{{range .Blocks}}
+<h3>{{.Name}} ({{.ID}})</h3>
+{{if .HungUp}}
+<p>no answer</p>
+{{else if eq .Status 200}}
+<pre>{{.XML}}</pre>
+{{else}}
+<p>status {{.Status}}</p>
+{{end}}
+{{end}}
+{{end}}

@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.serveLogin)
 	mux.Handle("GET /{$}", s.auth.Wrap(http.HandlerFunc(s.serveFleet)))
 	mux.Handle("GET /camera/{name}", s.auth.Wrap(http.HandlerFunc(s.serveCamera)))
+	mux.Handle("GET /camera/{name}/blocks", s.auth.Wrap(http.HandlerFunc(s.serveBlocks)))
 	return mux
 }
 
