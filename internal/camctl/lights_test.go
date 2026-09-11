@@ -203,7 +203,7 @@ func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
 	}
 	html := string(raw)
 
-	for _, want := range []string{"Lights and IR", "Status LED", "Floodlight", lightsConfirmReason} {
+	for _, want := range []string{"Lights and IR", "Status LED", "Floodlight", lightsConfirmReason, noWritableIRWarning} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render %q", want)
 		}

@@ -60,6 +60,14 @@ type Group struct {
 // describes a write that already went out.
 const unsafeToRewriteWarning = "unsafe to rewrite: writing this block, even with only one field changed, makes the camera reconfigure its pipeline and interrupts the stream."
 
+// noWritableIRWarning is shown in the Lights and IR group itself, not just
+// recorded in a comment, because an operator who opens that section looking
+// for an IR control and finds none has no way to tell, from the page alone,
+// whether that is a gap in this tool or a fact about the camera. It is the
+// latter: "fty ir_cut info" (371) reads, but nothing in the recovered
+// read/write table pairs a writable message to it.
+const noWritableIRWarning = "the infrared cut filter (fty ir_cut info) is readable but has no writable message in the recovered table, so it cannot be changed from here."
+
 // groups declares the curated Picture and OSD surface plus Lights and IR:
 // what a person actually changes, so they do not have to edit raw XML.
 //
@@ -101,6 +109,7 @@ func groups() []Group {
 			ConfirmReason: lightsConfirmReason,
 			Fields: []Field{
 				{Label: "Status LED", XPath: "LedState/state", Kind: "toggle"},
+				{Label: noWritableIRWarning, Kind: "warning"},
 			},
 		},
 	}
