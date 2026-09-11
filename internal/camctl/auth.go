@@ -29,7 +29,7 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     webui.SessionCookie,
+		Name:     s.auth.CookieName,
 		Value:    tok,
 		Path:     "/",
 		HttpOnly: true,

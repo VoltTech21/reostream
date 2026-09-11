@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// SessionCookie is the cookie both surfaces use.
-const SessionCookie = "reostream_session"
-
 // SessionTTL is an absolute expiry from issue, not a sliding window: these
 // pages can read and write camera credentials, so a session that lives
 // forever on a shared machine is a real exposure, and there is no renewal on
@@ -84,11 +81,21 @@ func (s *SessionStore) len() int {
 
 // Auth gates a handler on a session. LoginPath is where an unauthenticated
 // request is sent.
+//
+// CookieName is supplied by the consumer, not a shared package constant,
+// because this package is used by two independent surfaces on one host:
+// reocam's camera control page on :8563 and the streaming daemon's own
+// operator page on :8560. Each runs its own SessionStore, so two surfaces
+// sharing one cookie name means logging into one silently logs the other
+// out, intermittently, whenever the browser resends whichever cookie it
+// last set for that name. Requiring every caller to name its own cookie is
+// what stops a third surface from inheriting that collision by accident.
 type Auth struct {
 	Store           *SessionStore
 	Password        string
 	AllowNoPassword bool
 	LoginPath       string
+	CookieName      string
 }
 
 // Check compares a submitted password in constant time, so a wrong one
@@ -103,7 +110,7 @@ func (a Auth) Wrap(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		ck, err := r.Cookie(SessionCookie)
+		ck, err := r.Cookie(a.CookieName)
 		if err != nil || !a.Store.Valid(ck.Value) {
 			http.Redirect(w, r, a.LoginPath, http.StatusSeeOther)
 			return

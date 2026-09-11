@@ -69,6 +69,11 @@ func New(opts Options) (*Server, error) {
 			Password:        opts.Password,
 			AllowNoPassword: opts.AllowNoPassword,
 			LoginPath:       "/login",
+			// Distinct from internal/control's own cookie name: the two
+			// surfaces run on one host with independent SessionStores, and
+			// a shared name would mean logging into one silently logs the
+			// other out. See webui.Auth's own comment.
+			CookieName: "reostream_camctl_session",
 		},
 		sessions: sessions,
 	}, nil

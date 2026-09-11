@@ -98,7 +98,7 @@ func TestWrongPasswordReturns401AndSetsNoUsableCookie(t *testing.T) {
 		t.Fatalf("got %d, want 401", resp.StatusCode)
 	}
 	for _, ck := range resp.Cookies() {
-		if ck.Name == "reostream_session" && ck.Value != "" {
+		if ck.Name == "reostream_camctl_session" && ck.Value != "" {
 			t.Fatal("a session cookie was set for a failed login")
 		}
 	}

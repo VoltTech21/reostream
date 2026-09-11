@@ -116,6 +116,9 @@ func New(opts Options) *Server {
 			Password:        opts.Password,
 			AllowNoPassword: opts.AllowNoPassword,
 			LoginPath:       "/login",
+			// Distinct from camctl's own cookie name: see webui.Auth's own
+			// comment for why the two surfaces cannot share one.
+			CookieName: "reostream_control_session",
 		},
 		sessions:       sessions,
 		done:           make(chan struct{}),

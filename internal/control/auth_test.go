@@ -66,7 +66,7 @@ func TestLoginWithTheWrongPasswordDoesNot(t *testing.T) {
 		t.Fatalf("got %d, want 401", resp.StatusCode)
 	}
 	for _, ck := range resp.Cookies() {
-		if ck.Name == "reostream_session" && ck.Value != "" {
+		if ck.Name == "reostream_control_session" && ck.Value != "" {
 			t.Fatal("a session cookie was set for a failed login")
 		}
 	}
@@ -98,7 +98,7 @@ func TestSessionTokensDifferBetweenLogins(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		for _, ck := range resp.Cookies() {
-			if ck.Name == "reostream_session" {
+			if ck.Name == "reostream_control_session" {
 				return ck.Value
 			}
 		}
