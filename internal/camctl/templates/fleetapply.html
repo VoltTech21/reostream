@@ -1,0 +1,66 @@
+{{/*
+  Fleet apply: push NTP server or timezone to every configured camera in
+  one request. Two separate forms, two separate POSTs, because the two
+  settings write through two different code paths (setNTP, setTimeZone)
+  and a camera failing one must never be conflated with it failing the
+  other.
+
+  Results, when present, is one row per camera, always, even when every
+  row confirmed: a single summary line over a partial apply is the same
+  lie fleetapply.go's own comment warns against, and this table is what
+  keeps that from happening on the page too.
+*/}}
+{{define "body"}}
+<h1>Fleet apply</h1>
+<p><a href="/">back to cameras</a></p>
+<p>Pushes one clock setting to every configured camera. Each camera reports its own outcome below; a camera failing does not stop the rest from being tried.</p>
+
+<section>
+<h2>NTP server</h2>
+<form method="post" action="/fleet/apply/ntp">
+<table>
+<tr>
+<td>Enabled</td>
+<td>
+<select name="enabled">
+<option value="0">off</option>
+<option value="1">on</option>
+</select>
+</td>
+</tr>
+<tr>
+<td>Server</td>
+<td><input type="text" name="server"></td>
+</tr>
+</table>
+<button type="submit">apply to every camera</button>
+</form>
+</section>
+
+<section>
+<h2>Timezone</h2>
+<p>Raw CGI value; the sign convention has not been confirmed against real hardware, so send back exactly what a camera's own time page reports.</p>
+<form method="post" action="/fleet/apply/timezone">
+<table>
+<tr>
+<td>Timezone</td>
+<td><input type="number" name="timezone"></td>
+</tr>
+</table>
+<button type="submit">apply to every camera</button>
+</form>
+</section>
+
+{{if .Results}}
+<section>
+<h2>Result{{if .Target}}: {{.Target}}{{end}}</h2>
+<table>
+<tr><th>Camera</th><th>Outcome</th><th>Detail</th></tr>
+{{range .Results}}
+<tr><td>{{.Camera}}</td><td>{{.Outcome}}</td><td>{{.Detail}}</td></tr>
+{{end}}
+</table>
+</section>
+{{end}}
+{{if .Err}}<p>{{.Err}}</p>{{end}}
+{{end}}
