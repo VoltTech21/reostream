@@ -1,0 +1,12 @@
+listen = "0.0.0.0:8560"
+
+[control]
+listen = "0.0.0.0:8562"
+password = "$TEST_DIALING_UNSET_CONTROL_PW"
+
+[[camera]]
+name = "driveway"
+address = "192.0.2.50"
+username = "admin"
+password = "$TEST_DIALING_CAM_PASSWORD"
+streams = ["main"]

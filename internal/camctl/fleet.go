@@ -16,13 +16,19 @@ type Camera struct {
 
 // fleet reads the camera list from reostream's config.
 //
-// config.Load, not config.LoadRaw: this program dials cameras, so it needs
-// passwords resolved from the environment rather than "$NAME" references.
-// The operator page's camera form needs the opposite, because it re-encodes
-// the config and writes it back, and resolving there would write every
-// camera's real password into the file. This program never writes that file.
+// config.LoadForDialing, not config.Load and not config.LoadRaw: this
+// program dials cameras, so it needs camera passwords resolved from the
+// environment rather than "$NAME" references. But it never dials
+// reostream's own control listener, so unlike the streaming daemon it has
+// no business requiring [control].password to resolve too, and in the real
+// deployment that variable lives in reostream's container, not this one's.
+// config.Load requiring it made every page 500 on startup; see
+// LoadForDialing's own comment. The operator page's camera form needs a
+// third thing again, LoadRaw, because it re-encodes the config and writes
+// it back, and resolving there would write every camera's real password
+// into the file. This program never writes that file.
 func (s *Server) fleet() ([]Camera, error) {
-	cfg, err := config.Load(s.opts.ConfigPath)
+	cfg, err := config.LoadForDialing(s.opts.ConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("camctl: reading the fleet: %w", err)
 	}

@@ -229,6 +229,51 @@ func TestControlWithoutAPasswordIsRefused(t *testing.T) {
 	}
 }
 
+// This is the exact fault the real deployment hit: reocam's config has
+// [control].password set to a variable ("$REOSTREAM_CONTROL_PASSWORD")
+// that lives in the streaming daemon's own container, not reocam's, so
+// Load failed at every request and the camera control page returned 500
+// across the board. LoadForDialing must load the fleet anyway, because it
+// never uses [control].password at all.
+func TestLoadForDialingIgnoresAnUnresolvableControlPassword(t *testing.T) {
+	os.Unsetenv("TEST_DIALING_UNSET_CONTROL_PW")
+	t.Setenv("TEST_DIALING_CAM_PASSWORD", "s3cret")
+
+	cfg, err := LoadForDialing("testdata/dialing.toml")
+	if err != nil {
+		t.Fatalf("LoadForDialing: %v", err)
+	}
+	if got := cfg.Cameras[0].Password; got != "s3cret" {
+		t.Fatalf("camera password = %q, want it resolved from the environment", got)
+	}
+	if got := cfg.Control.Password; got != "$TEST_DIALING_UNSET_CONTROL_PW" {
+		t.Fatalf("control password = %q, want the raw reference left unresolved", got)
+	}
+}
+
+// A camera password must still fail loudly when unset: a camera that
+// silently never authenticates is much harder to notice than a process
+// that refuses to start, and LoadForDialing must not relax that half.
+func TestLoadForDialingStillRequiresCameraPasswords(t *testing.T) {
+	os.Unsetenv("TEST_DIALING_UNSET_CONTROL_PW")
+	os.Unsetenv("TEST_DIALING_CAM_PASSWORD")
+
+	if _, err := LoadForDialing("testdata/dialing.toml"); err == nil {
+		t.Fatal("expected an error when a camera's referenced variable is unset")
+	}
+}
+
+// Load, unlike LoadForDialing, genuinely needs [control].password: it is
+// what the streaming daemon itself starts its own control listener with.
+func TestLoadStillRequiresControlPassword(t *testing.T) {
+	os.Unsetenv("TEST_DIALING_UNSET_CONTROL_PW")
+	t.Setenv("TEST_DIALING_CAM_PASSWORD", "s3cret")
+
+	if _, err := Load("testdata/dialing.toml"); err == nil {
+		t.Fatal("expected Load to fail when [control].password's variable is unset")
+	}
+}
+
 func TestControlWithoutAPasswordIsAllowedWhenSaidExplicitly(t *testing.T) {
 	cfg := Config{
 		Control: &ControlConfig{Listen: "0.0.0.0:8562", AllowNoPassword: true},

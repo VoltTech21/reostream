@@ -84,7 +84,32 @@ var validStreamNames = map[string]bool{
 // than stored in the file; an unset variable is an error rather than an
 // empty password, because a camera that silently never authenticates is
 // much harder to notice than a process that refuses to start.
+//
+// This resolves [control]'s password too, which is right for the daemon
+// that actually listens on it. A caller that only dials cameras should use
+// LoadForDialing instead; see its own comment for why.
 func Load(path string) (*Config, error) {
+	return load(path, true)
+}
+
+// LoadForDialing reads and validates the config file at path exactly as
+// Load does, except it does not require [control]'s password to resolve.
+//
+// It exists for reocam, which dials cameras and never the control page's
+// own listener: in the real deployment, [control].password is
+// "$REOSTREAM_CONTROL_PASSWORD", a variable set in the streaming daemon's
+// container, not reocam's. Load failing on that unset variable meant
+// reocam could not start at all, even though it never reads that password.
+//
+// Camera passwords still resolve, and still fail loudly if unset: a camera
+// that silently never authenticates is much harder to notice than a
+// process that refuses to start, which is exactly Load's own reasoning and
+// applies here just as much.
+func LoadForDialing(path string) (*Config, error) {
+	return load(path, false)
+}
+
+func load(path string, resolveControlPassword bool) (*Config, error) {
 	var cfg Config
 	meta, err := toml.DecodeFile(path, &cfg)
 	if err != nil {
@@ -111,7 +136,7 @@ func Load(path string) (*Config, error) {
 		cfg.Cameras[i].Password = val
 	}
 
-	if cfg.Control != nil && strings.HasPrefix(cfg.Control.Password, "$") {
+	if resolveControlPassword && cfg.Control != nil && strings.HasPrefix(cfg.Control.Password, "$") {
 		name := strings.TrimPrefix(cfg.Control.Password, "$")
 		val, ok := os.LookupEnv(name)
 		if !ok {
