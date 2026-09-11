@@ -48,6 +48,12 @@ func TestUnsafeToRewriteBeatsUnverified(t *testing.T) {
 	// pass having asserted nothing; resolved tracks that so this test fails
 	// loudly instead.
 	resolved := 0
+	// matched counts pairs actually checked below. resolved alone is not
+	// enough: a name can resolve through ConfigMessages and still have no
+	// counterpart in ConfigPairs, which would leave the inner loop's
+	// t.Fatalf unreachable for that name while resolved still climbed. Both
+	// counters must be nonzero or this test has asserted nothing.
+	matched := 0
 	for _, name := range []string{"set enc", "isp set", "enc", "isp"} {
 		id := baichuan.ConfigMessages[name]
 		if id == 0 {
@@ -63,6 +69,7 @@ func TestUnsafeToRewriteBeatsUnverified(t *testing.T) {
 			if pair.Get != id {
 				continue
 			}
+			matched++
 			if got := confidenceOf(pair); got != UnsafeToRewrite {
 				t.Fatalf("%s (get %d, set %d) labelled %q", pair.Name, pair.Get, pair.Set, got)
 			}
@@ -70,6 +77,9 @@ func TestUnsafeToRewriteBeatsUnverified(t *testing.T) {
 	}
 	if resolved == 0 {
 		t.Fatal("no name in the test table resolved through ConfigMessages; this test asserted nothing")
+	}
+	if matched == 0 {
+		t.Fatal("no resolved name had a matching pair in ConfigPairs; this test asserted nothing")
 	}
 }
 
@@ -145,15 +155,11 @@ func TestBuildPairRowsOnlySeedsEditorsFromA200Read(t *testing.T) {
 	if row, ok := seen[29]; !ok || !row.Editable || row.Seed != "<body><osd>1</osd></body>" {
 		t.Fatalf("osd pair (get 29) = %+v, want an editable row seeded from the 200 read", row)
 	}
-	if row, ok := seen[208]; ok {
-		if row.Editable || row.Seed != "" {
-			t.Fatalf("led pair (get 208, status 400) = %+v, want no seed and Editable=false", row)
-		}
+	if row, ok := seen[208]; !ok || row.Editable || row.Seed != "" {
+		t.Fatalf("led pair (get 208, status 400) = %+v, want no seed and Editable=false", row)
 	}
-	if row, ok := seen[46]; ok {
-		if row.Editable || row.Seed != "" {
-			t.Fatalf("md pair (get 46, hung up) = %+v, want no seed and Editable=false", row)
-		}
+	if row, ok := seen[46]; !ok || row.Editable || row.Seed != "" {
+		t.Fatalf("md pair (get 46, hung up) = %+v, want no seed and Editable=false", row)
 	}
 }
 
