@@ -1,0 +1,53 @@
+{{/*
+  The curated settings page: groups() in settings.go, one <section> per
+  Group. A handler is not wired to this page yet; this template only
+  establishes the shape a later task's serveSettings renders into, which is
+  why it is written to tolerate a zero-value SettingsPage rather than assume
+  one.
+
+  Task 8 appends its own Lights and IR section after the ones already here.
+  It must APPEND, not replace this file: the file already carries the
+  Picture and OSD group.
+*/}}
+{{define "body"}}
+<h1>{{.Camera.Name}}: settings</h1>
+<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
+<p>What a person actually changes, curated out of the raw blocks. See
+<a href="/camera/{{.Camera.Name}}/blocks">every block, as XML</a> for anything not here.</p>
+{{if .Err}}<p>{{.Err}}</p>{{end}}
+
+{{/* Picture and OSD, from settings.go's groups(). */}}
+{{range $group := .Groups}}
+<section>
+<h2>{{$group.Title}}</h2>
+<table>
+{{range $group.Fields}}
+{{if eq .Kind "warning"}}
+<tr><td colspan="2"><p class="warning">{{.Label}}</p></td></tr>
+{{else}}
+<tr>
+<td>{{.Label}}</td>
+<td>
+<form method="post" action="/camera/{{$.Camera.Name}}/settings">
+<input type="hidden" name="block" value="{{$group.Block}}">
+<input type="hidden" name="xpath" value="{{.XPath}}">
+{{if eq .Kind "toggle"}}
+<select name="value">
+<option value="0">off</option>
+<option value="1">on</option>
+</select>
+{{else if eq .Kind "number"}}
+<input type="number" name="value">
+{{else}}
+<input type="text" name="value">
+{{end}}
+<button type="submit">set</button>
+</form>
+</td>
+</tr>
+{{end}}
+{{end}}
+</table>
+</section>
+{{end}}
+{{end}}
