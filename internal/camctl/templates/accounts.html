@@ -6,16 +6,17 @@
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}: accounts</h1>
-<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
 <p class="warning">Read only. Message 59 ("Set user cfg") turned out to be a write sitting
 in this project's own read sweep: <code>get all</code> was sending a user config set with
 an empty body at live cameras for some time, and nobody has established what it does.
 Until somebody deliberately does, this page offers no way to change an account, because
 that is a way to lock an operator out of their own camera with no way back short of a
 factory reset.</p>
-{{if .Err}}<p>{{.Err}}</p>{{end}}
+{{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
 {{if .XML}}
+<div class="card">
 <h2>What message 58 ("get user cfg") answered</h2>
-<pre>{{.XML}}</pre>
+<pre style="overflow:auto">{{.XML}}</pre>
+</div>
 {{end}}
 {{end}}

@@ -4,11 +4,13 @@
 {{if not .Cameras}}
 <p>No cameras are configured.</p>
 {{else}}
+<div class="card table-wrap">
 <table>
 <tr><th>Name</th><th>Address</th><th>Username</th></tr>
 {{range .Cameras}}
 <tr><td><a href="/camera/{{.Name}}">{{.Name}}</a></td><td>{{.Address}}</td><td>{{.Username}}</td></tr>
 {{end}}
 </table>
+</div>
 {{end}}
 {{end}}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
@@ -34,6 +35,13 @@ const (
 	// stronger warning than "unverified", so it takes priority over it.
 	UnsafeToRewrite Confidence = "unsafe to rewrite"
 )
+
+// Slug renders a Confidence as a CSS class fragment. "known inert" and
+// "unsafe to rewrite" carry spaces, which are not legal inside a single
+// CSS class token.
+func (c Confidence) Slug() string {
+	return strings.ReplaceAll(string(c), " ", "-")
+}
 
 // provenSetIDs and knownInertSetIDs are the only two tables that can move a
 // pair off Unverified. Both are drawn from docs/control.md's own record of

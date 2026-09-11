@@ -4,19 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} - reostream</title>
-<style>
-:root { color-scheme: light dark; }
-body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 70rem; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8883; }
-nav a { margin-right: 1rem; }
-.state-streaming { color: #1a7f37; }
-.state-novideo, .state-reconnecting { color: #9a6700; }
-.state-down { color: #cf222e; }
-</style>
+<link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
-<nav><a href="/">Status</a><a href="/cameras">Cameras</a><a href="/config">Config</a><a href="/logs">Logs</a></nav>
+<div class="sidebar">
+<p class="brand">reostream</p>
+<nav>
+<ul>
+<li><a href="/">Status</a></li>
+<li><a href="/logs">Logs</a></li>
+<li><a href="/config">Config</a></li>
+<li><a href="/cameras">Cameras</a></li>
+<li><a href="/setup">Setup</a></li>
+</ul>
+</nav>
+</div>
+<main>
 {{template "body" .}}
+</main>
+<script>
+// The sidebar is the same markup on every page; which entry is current is
+// worked out from the URL rather than passed down by every handler.
+(function () {
+  var path = location.pathname;
+  var links = document.querySelectorAll('.sidebar nav a');
+  var best = null;
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].getAttribute('href');
+    if (path === href || (href !== '/' && path.indexOf(href) === 0)) {
+      if (!best || href.length > best.getAttribute('href').length) best = links[i];
+    }
+  }
+  if (best) best.setAttribute('aria-current', 'page');
+})();
+</script>
 </body>
 </html>{{end}}

@@ -28,7 +28,13 @@ type Camera struct {
 // it back, and resolving there would write every camera's real password
 // into the file. This program never writes that file.
 func (s *Server) fleet() ([]Camera, error) {
-	cfg, err := config.LoadForDialing(s.opts.ConfigPath)
+	return loadFleet(s.opts.ConfigPath)
+}
+
+// loadFleet is fleet's free-function core, split out so the sidebar's
+// "fleet" template function can load the same list without a *Server.
+func loadFleet(configPath string) ([]Camera, error) {
+	cfg, err := config.LoadForDialing(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("camctl: reading the fleet: %w", err)
 	}

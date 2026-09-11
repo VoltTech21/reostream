@@ -99,7 +99,7 @@ type Server struct {
 }
 
 func New(opts Options) *Server {
-	rend, err := webui.NewRenderer(templateFS, "templates/*.html")
+	rend, err := webui.NewRenderer(templateFS, "templates/*.html", nil)
 	if err != nil {
 		// The template set is embedded at build time, so a parse failure
 		// here is a bug in the binary itself, not something a caller can

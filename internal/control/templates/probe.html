@@ -14,7 +14,7 @@
 {{if .Absent}}
 <td colspan="3">not offered by this camera{{if .Reason}} ({{.Reason}}){{end}}</td>
 {{else if .Undetermined}}
-<td colspan="3" class="state-down">could not determine: {{.Reason}}</td>
+<td colspan="3" class="state-undetermined">could not determine: {{.Reason}}</td>
 {{else}}
 <td>{{.Codec}}</td>
 <td>{{.Width}}x{{.Height}}</td>

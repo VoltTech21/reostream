@@ -11,7 +11,10 @@ package camctl
 import (
 	"context"
 	"embed"
+	"html/template"
+	"io/fs"
 	"net/http"
+	"reflect"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/cgi"
@@ -20,6 +23,35 @@ import (
 
 //go:embed templates/*.html
 var templateFS embed.FS
+
+//go:embed assets
+var assetFS embed.FS
+
+// assetSub drops the "assets" prefix so the URL and the file path match.
+var assetSub, _ = fs.Sub(assetFS, "assets")
+
+// cameraOf finds a field named Camera on whatever page data v is, and
+// returns it as a *Camera, or nil when the page has no such field. The
+// sidebar template uses this to decide whether it is looking at a
+// camera-specific page (blocks, settings, time, accounts, the camera
+// overview) or a fleet-wide one (the fleet list, fleet apply, login):
+// those pages carry no Camera at all, and a plain {{.Camera}} in the
+// shared layout would fail to execute on them.
+func cameraOf(v any) *Camera {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Struct {
+		return nil
+	}
+	f := rv.FieldByName("Camera")
+	if !f.IsValid() {
+		return nil
+	}
+	cam, ok := f.Interface().(Camera)
+	if !ok {
+		return nil
+	}
+	return &cam
+}
 
 // Options is everything the camera control server needs.
 type Options struct {
@@ -55,7 +87,22 @@ type Server struct {
 // rather than this package crashing a process that has not opened a
 // listener yet.
 func New(opts Options) (*Server, error) {
-	rend, err := webui.NewRenderer(templateFS, "templates/*.html")
+	// The sidebar needs the fleet on every page, not just serveFleet's own,
+	// so it is a template function bound to this daemon's config path
+	// rather than a field every page struct would otherwise have to carry.
+	// A page that cannot read the config renders its sidebar without a
+	// fleet list rather than failing the whole render.
+	funcs := template.FuncMap{
+		"fleet": func() []Camera {
+			cams, err := loadFleet(opts.ConfigPath)
+			if err != nil {
+				return nil
+			}
+			return cams
+		},
+		"cameraOf": cameraOf,
+	}
+	rend, err := webui.NewRenderer(templateFS, "templates/*.html", funcs)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +150,8 @@ func (s *Server) Handler() http.Handler {
 	// this handler ever having to notice or check.
 	mux.Handle("GET /camera/{name}/accounts", s.auth.Wrap(http.HandlerFunc(s.serveAccounts)))
 	mux.Handle("POST /camera/{name}/write/{id}", s.auth.Wrap(http.HandlerFunc(s.serveWrite)))
+	mux.Handle("GET /assets/", s.auth.Wrap(http.StripPrefix("/assets/",
+		http.FileServer(http.FS(assetSub)))))
 	return mux
 }
 

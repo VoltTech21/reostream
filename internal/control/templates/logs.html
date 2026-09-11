@@ -1,7 +1,9 @@
 {{define "body"}}
 <h1>Logs</h1>
+<div class="card">
 <label>Filter <input id="filter" placeholder="camera name"></label>
-<pre id="log" style="max-height:70vh;overflow:auto;border:1px solid #8883;padding:.5rem"></pre>
+<pre id="log" style="max-height:70vh;overflow:auto;border:1px solid var(--line);padding:.5rem;border-radius:6px"></pre>
+</div>
 <script>
 const log = document.getElementById('log');
 const filter = document.getElementById('filter');

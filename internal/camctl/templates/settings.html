@@ -9,10 +9,9 @@
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}: settings</h1>
-<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
-<p>What a person actually changes, curated out of the raw blocks. See
+<p class="hint">What a person actually changes, curated out of the raw blocks. See
 <a href="/camera/{{.Camera.Name}}/blocks">every block, as XML</a> for anything not here.</p>
-{{if .Err}}<p>{{.Err}}</p>{{end}}
+{{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
 
 {{/* Picture and OSD, and Lights and IR, from settings.go's groups(). */}}
 {{range $group := .Groups}}
@@ -80,7 +79,7 @@
 <section>
 <h2>Floodlight</h2>
 <p class="warning">{{.FloodlightConfirm}}</p>
-{{if .FloodlightErr}}<p>{{.FloodlightErr}}</p>{{end}}
+{{if .FloodlightErr}}<p class="outcome-refused">{{.FloodlightErr}}</p>{{end}}
 <table>
 <tr>
 <td>Floodlight</td>

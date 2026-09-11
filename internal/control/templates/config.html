@@ -2,8 +2,10 @@
 <h1>Config</h1>
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 {{if .Saved}}<p class="state-streaming">Saved. {{.ReloadNote}}</p>{{end}}
+<div class="card">
 <form method="post" action="/config">
-<textarea name="toml" rows="24" style="width:100%;font-family:ui-monospace,monospace">{{.Text}}</textarea>
+<textarea name="toml" rows="24">{{.Text}}</textarea>
 <button type="submit">Save and apply</button>
 </form>
+</div>
 {{end}}

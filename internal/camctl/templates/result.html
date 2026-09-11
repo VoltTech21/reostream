@@ -6,23 +6,23 @@
 */}}
 {{define "body"}}
 <h1>{{.Title}}</h1>
-<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
 
-<p>Outcome: <strong>{{.Outcome}}</strong></p>
+<div class="card">
+<p>Outcome: <strong class="outcome-{{.Outcome}}">{{.Outcome}}</strong></p>
 <p>{{.Detail}}</p>
 
 {{if .Before}}
 <h2>Before</h2>
-<pre>{{.Before}}</pre>
+<pre style="overflow:auto">{{.Before}}</pre>
 {{end}}
 {{if .After}}
 <h2>After</h2>
-<pre>{{.After}}</pre>
+<pre style="overflow:auto">{{.After}}</pre>
 {{end}}
 
 {{if .RestoreAction}}
 <h2>Restore</h2>
-<p>Send the "Before" value back through the same verified write path.</p>
+<p class="hint">Send the "Before" value back through the same verified write path.</p>
 <form method="post" action="{{.RestoreAction}}" onsubmit="return confirm('Restore the previous value?')">
 {{range $k, $v := .RestoreHidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
 {{end}}
@@ -30,4 +30,5 @@
 <button type="submit">restore previous</button>
 </form>
 {{end}}
+</div>
 {{end}}

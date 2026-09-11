@@ -1,0 +1,262 @@
+/* reocam camera control page.
+ *
+ * Same organising idea as the operator page's stylesheet: write outcome
+ * (confirmed/accepted/refused) and write confidence
+ * (proven/unverified/known inert/unsafe to rewrite) are the one place this
+ * interface spends colour. "accepted" must never look like success -- a 200
+ * from these cameras is not proof -- so it always carries the partial
+ * colour, never the proven one.
+ */
+
+:root {
+  --ink: #14171A;
+  --panel: #1C2024;
+  --line: #2A3038;
+  --text: #E4E7EA;
+  --muted: #8A9199;
+  --proven: #35B37E;
+  --partial: #E0A030;
+  --refused: #E05252;
+  --unknown: #5A6470;
+
+  --sidebar-w: 16rem;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--text);
+}
+
+body {
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+}
+
+a { color: var(--proven); }
+
+/* Sidebar */
+
+.sidebar {
+  flex: 0 0 var(--sidebar-w);
+  min-height: 100vh;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+  max-height: 100vh;
+}
+
+.sidebar .brand {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 1.5rem .5rem;
+}
+
+.sidebar nav h2 {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 1.25rem .5rem .4rem;
+}
+
+.sidebar nav h2:first-child { margin-top: 0; }
+
+.sidebar nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar nav a {
+  display: block;
+  padding: .4rem .6rem;
+  margin-bottom: .1rem;
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: .9375rem;
+  border-left: 2px solid transparent;
+  overflow-wrap: anywhere;
+}
+
+.sidebar nav a:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .04);
+}
+
+.sidebar nav a[aria-current="page"] {
+  color: var(--text);
+  background: rgba(255, 255, 255, .05);
+  border-left-color: var(--proven);
+}
+
+.sidebar nav a:focus-visible {
+  outline: 2px solid var(--proven);
+  outline-offset: -2px;
+}
+
+/* Main content */
+
+main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2rem 2.25rem;
+  max-width: 60rem;
+}
+
+main h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 1.25rem;
+}
+
+main h2 {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: .875rem;
+  margin: .25rem 0 0;
+}
+
+/* Tables and settings rows: label left, value right, hairline between. */
+
+.table-wrap { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; }
+
+th, td {
+  text-align: left;
+  padding: .6rem .5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: .8125rem;
+}
+
+tr:last-child td { border-bottom: none; }
+
+label { display: block; margin-bottom: .75rem; color: var(--text); }
+label input, label select, label textarea { display: block; margin-top: .3rem; }
+
+input, select, textarea, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .4rem .55rem;
+}
+
+textarea { width: 100%; font-family: ui-monospace, monospace; }
+
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--proven);
+  outline-offset: 1px;
+}
+
+button {
+  background: var(--proven);
+  border-color: var(--proven);
+  color: #06210f;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover { filter: brightness(1.08); }
+
+/* Helper text under a label where a control needs explaining, and the
+   explanatory text for a read that failed or a field that could not be
+   resolved. This is the product, not clutter: it stays inline, never
+   behind a tooltip or an accordion. */
+
+.warning {
+  color: var(--partial);
+  font-size: .875rem;
+  margin: .25rem 0;
+}
+
+/* Write outcome: confirmed / accepted / refused. "accepted" is deliberately
+   the partial colour, not the proven one -- a 200 is not proof. */
+
+.outcome-confirmed { color: var(--proven); }
+.outcome-accepted { color: var(--partial); }
+.outcome-refused { color: var(--refused); }
+
+/* Write confidence: proven / unverified / known inert / unsafe to rewrite. */
+
+.confidence-proven { color: var(--proven); }
+.confidence-unverified { color: var(--partial); }
+.confidence-known-inert { color: var(--refused); }
+.confidence-unsafe-to-rewrite { color: var(--refused); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .4em;
+  padding: .2rem .65rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-weight: 600;
+  font-size: .8125rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: "";
+  width: .5em;
+  height: .5em;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  body { flex-direction: column; }
+  .sidebar {
+    position: static;
+    width: 100%;
+    min-height: auto;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  main { padding: 1.25rem 1rem; max-width: none; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button, .sidebar nav a { transition: filter .1s ease, background-color .1s ease; }
+}

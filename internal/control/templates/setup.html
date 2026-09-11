@@ -1,5 +1,6 @@
 {{define "body"}}
 <h1>Set up reostream</h1>
+<div class="card">
 <p>Add a camera. reostream will connect to it and report what it is before anything is saved.</p>
 <form id="probe-form">
 <label>Address <input name="address" placeholder="192.168.1.50" required></label>
@@ -16,6 +17,7 @@
 <button type="submit">Add this camera</button>
 </form>
 <p><a href="/setup/urls">I have added my cameras, show me the URLs</a></p>
+</div>
 <script>
 const probeForm = document.getElementById('probe-form');
 const result = document.getElementById('result');

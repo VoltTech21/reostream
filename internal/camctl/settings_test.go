@@ -341,7 +341,7 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
 	}
-	if !strings.Contains(string(raw), "<strong>confirmed</strong>") {
+	if !strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) {
 		t.Fatalf("response does not report confirmed: %s", raw)
 	}
 
@@ -398,10 +398,10 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "<strong>refused</strong>") {
+	if !strings.Contains(string(raw), `<strong class="outcome-refused">refused</strong>`) {
 		t.Fatalf("an unresolved field must be reported as refused, got: %s", raw)
 	}
-	if strings.Contains(string(raw), "<strong>confirmed</strong>") || strings.Contains(string(raw), "<strong>accepted</strong>") {
+	if strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) || strings.Contains(string(raw), `<strong class="outcome-accepted">accepted</strong>`) {
 		t.Fatalf("an unresolved field must never read as any kind of success: %s", raw)
 	}
 	// Nothing to write was ever composed, so nothing should have reached

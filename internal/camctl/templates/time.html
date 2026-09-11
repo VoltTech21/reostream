@@ -5,11 +5,10 @@
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}: time</h1>
-<p><a href="/camera/{{.Camera.Name}}">back to {{.Camera.Name}}</a></p>
 
 <section>
 <h2>NTP</h2>
-{{if .NTPErr}}<p>{{.NTPErr}}</p>{{end}}
+{{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
 <form method="post" action="/camera/{{.Camera.Name}}/time">
 <table>
 <tr>
@@ -32,8 +31,8 @@
 
 <section>
 <h2>Timezone</h2>
-<p>Read only: no write path exists for this from here.</p>
-{{if .TimeZoneErr}}<p>{{.TimeZoneErr}}</p>{{else}}
+<p class="hint">Read only: no write path exists for this from here.</p>
+{{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
 <p>The camera reports its timeZone field as {{.TimeZone}} (raw CGI value; the sign
 convention has not been confirmed against real hardware, so this is shown as the camera
 gave it, not converted).</p>

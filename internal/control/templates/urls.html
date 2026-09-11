@@ -2,16 +2,19 @@
 <h1>Point your recorder at these</h1>
 
 {{if .Error}}
-<p style="color:#c00;border:1px solid #c00;padding:.5rem">
+<p class="state-down">
 Could not read the config: {{.Error}}. Fix it on the
 <a href="/config">config page</a> before trusting anything below.
 </p>
 {{end}}
 
+<div class="card">
 <h2>Frigate</h2>
 <p>Paste into your Frigate config. The sub stream does detection and the main stream records.</p>
-<pre style="border:1px solid #8883;padding:.5rem;overflow:auto">{{.URLs.Frigate}}</pre>
+<pre style="border:1px solid var(--line);padding:.5rem;border-radius:6px;overflow:auto">{{.URLs.Frigate}}</pre>
+</div>
 
+<div class="card">
 {{if .URLs.RTSP}}
 <h2>RTSP</h2>
 <p>For Blue Iris, Synology, or anything that takes an RTSP URL.</p>
@@ -21,10 +24,13 @@ Could not read the config: {{.Error}}. Fix it on the
 <p>No RTSP output is configured. Add an <code>[rtsp]</code> section on the
 <a href="/config">config page</a> and list the streams to serve on each camera.</p>
 {{end}}
+</div>
 
+<div class="card">
 <h2>Anything else</h2>
 <p>These play in VLC and mpv directly.</p>
 <ul>{{range .URLs.HTTP}}<li><code>{{.}}</code></li>{{end}}</ul>
+</div>
 
 <p><a href="/">Watch it work</a></p>
 {{end}}

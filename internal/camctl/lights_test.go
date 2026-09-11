@@ -139,10 +139,10 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
 	}
-	if !strings.Contains(string(raw), "<strong>accepted</strong>") {
+	if !strings.Contains(string(raw), `<strong class="outcome-accepted">accepted</strong>`) {
 		t.Fatalf("response does not report accepted: %s", raw)
 	}
-	if strings.Contains(string(raw), "<strong>confirmed</strong>") {
+	if strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) {
 		t.Fatalf("the floodlight must never claim confirmed off a same-session read-back: %s", raw)
 	}
 

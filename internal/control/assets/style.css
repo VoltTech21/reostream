@@ -1,0 +1,278 @@
+/* reostream operator page.
+ *
+ * The organising idea is that the four stream states, the three write
+ * outcomes, and the four write-confidence labels are the one place this
+ * interface spends any colour. Everything else stays quiet so those signals
+ * stay legible at a glance across an eight camera fleet.
+ */
+
+:root {
+  --ink: #14171A;
+  --panel: #1C2024;
+  --line: #2A3038;
+  --text: #E4E7EA;
+  --muted: #8A9199;
+  --proven: #35B37E;
+  --partial: #E0A030;
+  --refused: #E05252;
+  --unknown: #5A6470;
+
+  --sidebar-w: 15rem;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--text);
+}
+
+body {
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+}
+
+a { color: var(--proven); }
+
+/* Sidebar */
+
+.sidebar {
+  flex: 0 0 var(--sidebar-w);
+  min-height: 100vh;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+}
+
+.sidebar .brand {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 1.5rem .5rem;
+}
+
+.sidebar nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar nav a {
+  display: block;
+  padding: .5rem .6rem;
+  margin-bottom: .125rem;
+  border-radius: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+  border-left: 2px solid transparent;
+}
+
+.sidebar nav a:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .04);
+}
+
+.sidebar nav a[aria-current="page"] {
+  color: var(--text);
+  background: rgba(255, 255, 255, .05);
+  border-left-color: var(--proven);
+}
+
+.sidebar nav a:focus-visible {
+  outline: 2px solid var(--proven);
+  outline-offset: -2px;
+}
+
+/* Main content */
+
+main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2rem 2.25rem;
+  max-width: 68rem;
+}
+
+main h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 1.25rem;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.card h2 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 .75rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: .875rem;
+  margin: .25rem 0 0;
+}
+
+/* Tables and settings rows: label left, value right, hairline between. */
+
+table { border-collapse: collapse; width: 100%; }
+
+th, td {
+  text-align: left;
+  padding: .6rem .5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: .8125rem;
+}
+
+tr:last-child td { border-bottom: none; }
+
+label { display: block; margin-bottom: .75rem; color: var(--text); }
+label input, label select, label textarea { display: block; margin-top: .3rem; }
+
+input, select, textarea, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .4rem .55rem;
+}
+
+textarea { width: 100%; font-family: ui-monospace, monospace; }
+
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--proven);
+  outline-offset: 1px;
+}
+
+button {
+  background: var(--proven);
+  border-color: var(--proven);
+  color: #06210f;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover { filter: brightness(1.08); }
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 0 .75rem;
+}
+legend { color: var(--muted); padding: 0 .4rem; }
+
+/* Signal colours: the one place this page spends boldness. */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .4em;
+  padding: .2rem .65rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-weight: 600;
+  font-size: .8125rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: "";
+  width: .5em;
+  height: .5em;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.state-streaming { color: var(--proven); }
+.state-novideo, .state-reconnecting { color: var(--partial); }
+.state-down { color: var(--refused); }
+.state-undetermined, .state-unknown { color: var(--unknown); }
+
+/* Status rows (the dashboard). Each camera is one row; on a narrow
+   viewport it stacks instead of forcing horizontal scroll. */
+
+.statuslist { display: flex; flex-direction: column; gap: 1rem; }
+
+.statusrow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  align-items: start;
+}
+
+.statusrow-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem 1rem;
+}
+
+.statusrow-main .cam-name {
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.statusrow-main .metric {
+  color: var(--muted);
+  font-size: .875rem;
+}
+
+.statusrow-main .lasterror {
+  color: var(--refused);
+  font-size: .875rem;
+  flex-basis: 100%;
+}
+
+.statusrow-video { flex: 0 0 auto; }
+
+.cam-video video {
+  display: block;
+  max-width: 22rem;
+  width: 100%;
+  border-radius: 8px;
+  background: #000;
+}
+
+.cam-video .play-btn {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  body { flex-direction: column; }
+  .sidebar {
+    position: static;
+    width: 100%;
+    min-height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .sidebar nav ul { display: flex; flex-wrap: wrap; gap: .25rem; }
+  main { padding: 1.25rem 1rem; max-width: none; }
+  .statusrow { grid-template-columns: 1fr; }
+  .cam-video video { max-width: 100%; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button, .sidebar nav a { transition: filter .1s ease, background-color .1s ease; }
+}

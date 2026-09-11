@@ -14,8 +14,10 @@ type Renderer struct {
 }
 
 // NewRenderer parses every template matching glob in fsys as the base set.
-func NewRenderer(fsys fs.FS, glob string) (*Renderer, error) {
-	t, err := template.ParseFS(fsys, glob)
+// funcs is registered before parsing, so a template body may call anything
+// in it; nil is fine for a caller with no functions to add.
+func NewRenderer(fsys fs.FS, glob string, funcs template.FuncMap) (*Renderer, error) {
+	t, err := template.New("").Funcs(funcs).ParseFS(fsys, glob)
 	if err != nil {
 		return nil, err
 	}

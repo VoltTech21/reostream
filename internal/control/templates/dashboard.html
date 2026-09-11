@@ -1,34 +1,37 @@
 {{define "body"}}
 <h1>Status</h1>
-<table>
-<tr><th>Stream</th><th>State</th><th>FPS</th><th>Bitrate (Mbps)</th><th>Clients</th><th>Restarts</th><th>Last error</th><th>Video</th></tr>
+<div class="statuslist">
 {{range .Groups}}
 {{$group := .}}
 {{$n := len .Rows}}
 {{if eq $n 0}}
-<tr>
-<td>{{.Camera}}</td>
-<td colspan="6">no status yet</td>
-<td>{{template "cameravideo" $group}}</td>
-</tr>
+<div class="card statusrow">
+<div class="statusrow-main">
+<span class="cam-name">{{.Camera}}</span>
+<span class="pill state-unknown">no status yet</span>
+</div>
+<div class="statusrow-video">{{template "cameravideo" $group}}</div>
+</div>
 {{else}}
 {{range $i, $r := .Rows}}
-<tr>
-<td>{{$r.Name}}</td>
-<td class="state-{{$r.State}}">{{$r.State}}</td>
-<td>{{printf "%.1f" $r.FPS}}</td>
-<td>{{$r.MbpsBitrate}}</td>
-<td>{{$r.Clients}}</td>
-<td>{{$r.Restarts}}</td>
-<td>{{$r.LastError}}</td>
+<div class="card statusrow">
+<div class="statusrow-main">
+<span class="cam-name">{{$r.Name}}</span>
+<span class="pill state-{{$r.State}}">{{$r.State}}</span>
+<span class="metric">{{printf "%.1f" $r.FPS}} fps</span>
+<span class="metric">{{$r.MbpsBitrate}} Mbps</span>
+<span class="metric">{{$r.Clients}} clients</span>
+<span class="metric">{{$r.Restarts}} restarts</span>
+{{if $r.LastError}}<span class="lasterror">{{$r.LastError}}</span>{{end}}
+</div>
 {{if eq $i 0}}
-<td rowspan="{{$n}}">{{template "cameravideo" $group}}</td>
+<div class="statusrow-video">{{template "cameravideo" $group}}</div>
 {{end}}
-</tr>
+</div>
 {{end}}
 {{end}}
 {{end}}
-</table>
+</div>
 
 <script src="/assets/mpegts.js"></script>
 <script>
@@ -89,6 +92,6 @@ for (const container of document.querySelectorAll('.cam-video[data-src]')) {
 <button type="button" class="play-btn">Play {{.Camera}}</button>
 </div>
 {{else}}
-<p>No browser playable stream on this camera. Its streams are HEVC, which browsers here do not decode.</p>
+<p class="hint">No browser playable stream on this camera. Its streams are HEVC, which browsers here do not decode.</p>
 {{end}}
 {{end}}

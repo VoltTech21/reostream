@@ -3,6 +3,7 @@
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 {{if .ReloadNote}}<p class="state-streaming">{{.ReloadNote}}</p>{{end}}
 {{range .Cameras}}
+<div class="card">
 <form method="post" action="/cameras">
 <input type="hidden" name="name" value="{{.Name}}">
 <h2>{{.Name}}</h2>
@@ -19,8 +20,10 @@
 </fieldset>
 <button type="submit">Save and apply</button>
 </form>
+</div>
 {{end}}
 
+<div class="card">
 <h2>Add a camera</h2>
 <form method="post" action="/cameras">
 <label>Name <input name="name"></label>
@@ -34,4 +37,5 @@
 </fieldset>
 <button type="submit">Add</button>
 </form>
+</div>
 {{end}}
