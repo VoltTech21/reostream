@@ -97,12 +97,31 @@ meant a bandpass filter on the camera's own stream and on its neighbours' (see
 `docs/protocol.md`). Anything else implemented here needs an equivalent, and the ones that
 have no measurable effect should be treated as unverified no matter how clean the code is.
 
+## Operator page
+
+Built and verified on the live 8 camera fleet, 2026-09-10: an `[control]` listener
+separate from the streaming port, password auth, a status page translating
+`/api/status` into per-stream state with live video tiles, config editing validated by
+the same parser the daemon boots with, a diffed reload that touches only what changed,
+and a live log tail. See the README's Control section and `docs/measurements.md` for the
+reload measurement. This is more than the read-only status page originally wanted here;
+that item is done and superseded by this.
+
+Known gaps, honestly:
+
+- **No camera discovery.** Adding a camera means typing its address. Local UDP device
+  discovery was scoped as separate protocol work, not part of this feature, and has not
+  been done.
+- **Absence of a stream is not positively detectable.** Only `extern` has a real wire
+  signal for not being there. Every other stream that fails to read reports "could not
+  determine" with a reason, rather than the page claiming the camera lacks it.
+- **The RTSP server logs "write queue is full" continuously**, roughly 135 times a
+  minute, even with zero RTSP readers connected. Observed on the live fleet on
+  2026-09-10. This comes from the RTSP output work, not the operator page, and it floods
+  the log. Needs investigating on that branch.
+
 ## Wanted, not started
 
-- **A read only status page.** `/api/status` and `/metrics` already carry everything; this is
-  rendering them. The question an operator actually asks is whether a camera is streaming
-  right now, and today that means reading JSON by hand. Cheap, no dependencies, fits the
-  project.
 - **A camera control surface**, separate from this daemon. Started, and staying in this
   repository rather than splitting out; see the release document for why. `cmd/reocam` reads
   103 configuration blocks, probes what a model implements, and writes. Writes are

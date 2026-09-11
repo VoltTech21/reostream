@@ -175,6 +175,51 @@ Not yet done, and worth being direct about:
 See `docs/design/` for the design and `docs/protocol.md` for what the wire actually
 does, which differs from the published documentation in several places.
 
+## Control
+
+An `[control]` section turns on a web page for the three things that otherwise need a
+text editor, `curl` and `docker logs`: watching stream status, editing the config, and
+reading logs.
+
+```toml
+[control]
+listen = "0.0.0.0:8562"
+password = "$REOSTREAM_CONTROL_PASSWORD"
+```
+
+Absent the section nothing is served and nothing changes. `password` follows the same
+rule as a camera password: a value beginning with `$` is read from that environment
+variable. `listen` with no password refuses to boot unless `allow_no_password = true` is
+set explicitly.
+
+Control runs on its own listener, separate from the streaming port. The streaming port
+stays open and unauthenticated, which is what a recorder needs; the control port carries
+the only credential in this daemon, so a firewall rule that opens streaming to a recorder
+never has to also decide whether that recorder should be able to change the config.
+
+The page shows one row per stream translated from `/api/status` into a state
+(streaming, no video, reconnecting, down) rather than raw booleans, plays each stream's
+video live in the browser, edits the config with the same parser the daemon boots with
+so an invalid save is rejected before it is written, and tails the daemon's own logs.
+Saving diffs the old config against the new and reloads only what changed: an unchanged
+stream is never stopped, and a changed camera is stopped to completion before it is
+started again, so its session is released before the same camera is asked to reconnect.
+Verified on a live 8 camera fleet; see docs/measurements.md.
+
+Two things about deploying it matter more than they look:
+
+- **The container runs as a non-root user (uid 65532).** If the config file is owned by
+  root, or its directory is not writable by that user, a save from the page fails. The
+  daemon falls back to the system temp directory when the config's own directory is not
+  writable, so a save still succeeds, but the backup file lands in that temp directory
+  too and does not survive the container being recreated.
+- **Bind-mount the config's directory, not the config file itself.** A single-file mount
+  (`./config.toml:/etc/reostream/config.toml`, the pattern in docker-compose.yml above)
+  leaves that file's directory not writable from inside the container, so no temp file
+  can be created beside it and the atomic rename this daemon otherwise uses is
+  unavailable. Mounting the directory instead (`./config:/etc/reostream`) restores atomic
+  replacement and keeps the backup durably next to the config across restarts.
+
 ## Camera control
 
 `reocam` is a second binary in this repository that reads and changes camera settings.

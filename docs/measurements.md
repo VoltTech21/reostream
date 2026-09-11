@@ -314,3 +314,32 @@ One thing this makes visible: reostream opens every configured stream at startup
 it whether or not anything is consuming it. For a main stream feeding a recorder that is
 correct. For a balanced stream nobody is watching it is about 13 Mbps of pointless traffic
 across seven cameras. An on-demand mode is worth having and does not exist.
+
+## Operator page reload, live fleet, 2026-09-10
+
+The reload feature exists to prove that changing one camera's config does not disturb the
+others. Deployed to the production recorder host: 8 cameras, 23 streams, container running
+as the non-root uid, config bind-mounted.
+
+Baseline before either reload: 23 streams, 23 connected, 23 streaming, every restart count
+0.
+
+Removed one stream, the `lounge` camera's `extern` stream, by saving through the control
+page.
+
+| | |
+|---|---|
+| page reported | 0 added, 1 removed, 0 restarted, 22 left alone |
+| `/api/status` | `lounge`/`extern` gone; the other 22 streams unchanged restart counts, all 22 still streaming |
+
+Restored the same stream the same way.
+
+| | |
+|---|---|
+| page reported | 1 added, 0 removed, 0 restarted, 22 left alone |
+| `/api/status` | back to 23 of 23 connected and streaming; `lounge`/`extern` reconnected at 20.0 fps |
+
+Across both reloads, not one stream other than the one being changed was restarted or
+interrupted. The restored stream reconnecting immediately, rather than the camera refusing
+it for minutes, is also the confirmation that its session was released cleanly rather than
+left held.
