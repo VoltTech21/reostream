@@ -8,10 +8,33 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/fakecam"
 )
+
+// waitForCloses polls cam.Closes() until it reaches want or waitTimeout
+// elapses, then fails with the same message either sampling once would have
+// given. This exists because Close on the client side only puts the FIN on
+// the wire; fakecam's own accept-loop goroutine records a close after *it*
+// observes the peer go away, which happens on a separate goroutine, so
+// reading Closes() the instant probeCamera returns races that goroutine
+// rather than being ordered after it.
+const waitCloseTimeout = 2 * time.Second
+
+func waitForCloses(t *testing.T, cam *fakecam.Camera, want int) {
+	t.Helper()
+	deadline := time.Now().Add(waitCloseTimeout)
+	for {
+		if got := cam.Closes(); got == want {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("fullCam recorded %d closes, want %d: the live connection at return time must be closed exactly once", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 func TestProbeSortsRepliesIntoSupportedWantsParamsAndAbsent(t *testing.T) {
 	// A message a camera does not implement answers 405 rather than failing
@@ -168,9 +191,11 @@ func TestProbeCameraReconnectsAfterAHangupAndRecordsIt(t *testing.T) {
 	// fullCam's is exactly the signal a leaked-connection bug shows up as:
 	// `defer conn.Close()` bound to the stale, already-hung-up connection
 	// would never touch this one at all, and it would stay at 0 forever.
-	if got := fullCam.Closes(); got != 1 {
-		t.Fatalf("fullCam recorded %d closes, want 1: the live connection at return time must be closed exactly once", got)
-	}
+	// Poll rather than sample once: probeCamera returning only means the
+	// close has gone out on the wire, not that fullCam's own accept-loop
+	// goroutine has yet observed the peer go away and incremented its
+	// counter, so reading Closes() immediately races that goroutine.
+	waitForCloses(t, fullCam, 1)
 
 	for i, p := range probes {
 		if p.Name != names[i] {
