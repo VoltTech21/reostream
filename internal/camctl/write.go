@@ -42,6 +42,19 @@ type WriteResult struct {
 // read-back, onto the three outcomes. It does not touch the network: every
 // dial and read happens in writeBlock, so this stays a pure function a test
 // can drive with fixed bytes rather than a fake camera.
+//
+// The confirmed check is bytes.Contains(readBack, wrote): wrote is the
+// whole document this codebase sent, not just the one field a caller
+// meant to change, and outcomeFor has no xpath or field name to compare
+// against on its own, only the two full documents. So this asks the
+// stricter question "does the fresh read-back carry the exact document
+// this codebase sent, byte for byte", not "does the changed field hold the
+// new value": a camera that reformats whitespace, reorders siblings, or
+// renumbers an attribute elsewhere in the document fails this check even
+// though the field itself took, and reads as accepted rather than
+// confirmed. That is the safe direction to err in, since confirmed is the
+// stronger claim, but it does mean confirmed will rarely fire against a
+// camera that reformats.
 func outcomeFor(status int16, wrote, readBack []byte, verify bool) WriteResult {
 	if status != 200 {
 		return WriteResult{Outcome: "refused", Detail: baichuan.ExplainStatus(status)}
@@ -49,7 +62,7 @@ func outcomeFor(status int16, wrote, readBack []byte, verify bool) WriteResult {
 	if verify && bytes.Contains(readBack, wrote) {
 		return WriteResult{
 			Outcome: "confirmed",
-			Detail:  "confirmed: read back on a fresh connection, and the changed field holds the new value.",
+			Detail:  "confirmed: read back on a fresh connection, and the document sent is present in it byte for byte.",
 		}
 	}
 	// Either verify was never asked for, or it was and the read-back does

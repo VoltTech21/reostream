@@ -74,6 +74,13 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "camera.html", page)
 		return
 	}
+	// Deferred rather than closed inline after the two reads below: an
+	// early return added between the dial and a later close is exactly how
+	// the connection-leak bug elsewhere in this package happened, and conn
+	// is never reassigned here the way writeBlock's and probeCamera's own
+	// conn are, so nothing here needs the closure-over-a-variable pattern
+	// those two use.
+	defer conn.Close()
 
 	if sup, err := baichuan.GetSupport(ctx, conn); err == nil {
 		page.Support = &sup
@@ -85,7 +92,6 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	} else if page.Err == "" {
 		page.Err = fmt.Sprintf("abilities read failed: %v", err)
 	}
-	conn.Close()
 
 	probes, err := s.probeCamera(ctx, cam)
 	page.Probes = probes

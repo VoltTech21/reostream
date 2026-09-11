@@ -42,15 +42,14 @@ func TestProbeSortsRepliesIntoSupportedWantsParamsAndAbsent(t *testing.T) {
 	// is the only honest way to find out what a model has.
 	cases := []struct {
 		status int16
-		xml    string
 		want   string
 	}{
-		{200, "<body/>", "supported"},
-		{400, "", "wants params"},
-		{405, "", "absent"},
+		{200, "supported"},
+		{400, "wants params"},
+		{405, "absent"},
 	}
 	for _, tc := range cases {
-		got := classify(tc.status, []byte(tc.xml))
+		got := classify(tc.status)
 		if got != tc.want {
 			t.Fatalf("status %d classified %q, want %q", tc.status, got, tc.want)
 		}

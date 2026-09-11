@@ -46,11 +46,12 @@ type BlockProbe struct {
 }
 
 // classify sorts one config read's reply into the three answers a camera can
-// give about a message it was asked for. A camera that does not implement a
-// message answers 405 rather than dropping the connection, which is what
-// makes asking about every known message safe, and is the only honest way
-// to learn what a model has: no table can say it in advance.
-func classify(status int16, xml []byte) string {
+// give about a message it was asked for, by status alone: a camera that
+// does not implement a message answers 405 rather than dropping the
+// connection, which is what makes asking about every known message safe,
+// and is the only honest way to learn what a model has: no table can say
+// it in advance.
+func classify(status int16) string {
 	switch status {
 	case baichuan.StatusNotImplemented:
 		return "absent"
@@ -64,7 +65,7 @@ func classify(status int16, xml []byte) string {
 // newBlockProbe builds the BlockProbe for one answered read.
 func newBlockProbe(name string, id uint32, status int16, xml []byte) BlockProbe {
 	bp := BlockProbe{Name: name, ID: id, Status: status}
-	switch classify(status, xml) {
+	switch classify(status) {
 	case "supported":
 		bp.Supported = true
 	case "wants params":

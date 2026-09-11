@@ -42,7 +42,6 @@ func runServe(args []string) {
 		Password:        password,
 		AllowNoPassword: *allowNoPassword,
 		ConfigPath:      *configPath,
-		Listen:          *listen,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "reocam serve:", err)

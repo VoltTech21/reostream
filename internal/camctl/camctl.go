@@ -26,7 +26,6 @@ type Options struct {
 	Password        string
 	AllowNoPassword bool
 	ConfigPath      string
-	Listen          string
 
 	// Dial opens one connection to cam. Nil means baichuan.Dial against
 	// cam's own address and credentials, which is what every real

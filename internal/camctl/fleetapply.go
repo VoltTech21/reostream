@@ -107,20 +107,15 @@ func (s *Server) applyAll(ctx context.Context, apply func(context.Context, Camer
 	return results
 }
 
-// fleetApplyTargets is the whole list of settings fleet apply may push to
-// every camera at once, keyed by the id its own route and form use.
-//
-// This is how a setting becomes fleet-appliable: by being added here,
-// explicitly, by name. Not by being editable. settings.go's groups() and
-// time.go's own NTP form both already expose more editable fields than
-// this map lists, and none of them gained the ability to be pushed to
-// eight cameras in one request just by having a form control; only NTP
-// server and timezone have earned a row here, and the next field that
-// wants one needs its own line added on purpose.
-var fleetApplyTargets = map[string]string{
-	"ntp":      "NTP server",
-	"timezone": "Timezone",
-}
+// What fleet apply may push to every camera at once is gated by routing,
+// not a lookup table: /fleet/apply/ntp and /fleet/apply/timezone in
+// camctl.go's Handler are the only two routes wired to applyAll, each
+// hardcoded to the one setter (setNTP, setTimeZone) it fleet-applies.
+// settings.go's groups() and time.go's own NTP form both already expose
+// more editable fields than that, and none of them gained the ability to
+// be pushed to eight cameras in one request just by having a form control;
+// the next field that wants one needs its own route added on purpose, the
+// same way these two were.
 
 // fleetApplyPage is what fleetapply.html renders: the form, or, once a
 // target has been submitted, the per-camera table applyAll produced.
@@ -134,8 +129,8 @@ type fleetApplyPage struct {
 }
 
 // serveFleetApplyForm shows the two fleet-appliable forms with no results
-// yet: NTP server plus enabled, and timezone, the only two entries in
-// fleetApplyTargets.
+// yet: NTP server plus enabled, and timezone, the only two routes
+// Handler wires to applyAll.
 func (s *Server) serveFleetApplyForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "fleetapply.html", fleetApplyPage{Title: "Fleet apply"})
 }
