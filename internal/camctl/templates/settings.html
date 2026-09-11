@@ -1,9 +1,7 @@
 {{/*
-  The curated settings page: groups() in settings.go, one <section> per
-  Group. A handler is not wired to this page yet; this template only
-  establishes the shape a later task's serveSettings renders into, which is
-  why it is written to tolerate a zero-value SettingsPage rather than assume
-  one.
+  The curated settings page: settingsPage (settings.go) renders one
+  <section> per Group from groups(), seeded from Values, the read
+  serveSettings actually took.
 
   Task 8 appends its own Lights and IR section after the ones already here.
   It must APPEND, not replace this file: the file already carries the
@@ -25,6 +23,7 @@
 {{if eq .Kind "warning"}}
 <tr><td colspan="2"><p class="warning">{{.Label}}</p></td></tr>
 {{else}}
+{{$current := index $.Values .XPath}}
 <tr>
 <td>{{.Label}}</td>
 <td>
@@ -33,13 +32,13 @@
 <input type="hidden" name="xpath" value="{{.XPath}}">
 {{if eq .Kind "toggle"}}
 <select name="value">
-<option value="0">off</option>
-<option value="1">on</option>
+<option value="0" {{if eq $current "0"}}selected{{end}}>off</option>
+<option value="1" {{if eq $current "1"}}selected{{end}}>on</option>
 </select>
 {{else if eq .Kind "number"}}
-<input type="number" name="value">
+<input type="number" name="value" value="{{$current}}">
 {{else}}
-<input type="text" name="value">
+<input type="text" name="value" value="{{$current}}">
 {{end}}
 <button type="submit">set</button>
 </form>

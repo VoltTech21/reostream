@@ -2,9 +2,15 @@ package camctl
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/fakecam"
 )
 
 func TestSetFieldReplacesOneElementAndLeavesTheRestByteIdentical(t *testing.T) {
@@ -109,5 +115,85 @@ func TestPairForNameFindsTheOsdPair(t *testing.T) {
 	}
 	if pair.Get != 44 || pair.Set != 45 {
 		t.Fatalf("osd get pair is {Get:%d Set:%d}, want {Get:44 Set:45}", pair.Get, pair.Set)
+	}
+}
+
+// TestSetFieldRefusesAnAmbiguousMatchRatherThanGuessing pins the fix for
+// the sharper edge of suffix matching: a short path matches every ancestor
+// chain ending in the same names, so a document carrying that pair more
+// than once, one per channel here, must not let the first one win. A wrong
+// pick here is a wrong write, not a refusal, which is the one failure this
+// codebase cares most about never producing silently.
+func TestSetFieldRefusesAnAmbiguousMatchRatherThanGuessing(t *testing.T) {
+	doc := []byte(`<body>` +
+		`<channel><Isp><bright>100</bright></Isp></channel>` +
+		`<channel><Isp><bright>200</bright></Isp></channel>` +
+		`</body>`)
+	_, err := setField(doc, "Isp/bright", "150")
+	if err == nil {
+		t.Fatal("setField silently wrote to one of two matching elements instead of refusing")
+	}
+	if !strings.Contains(err.Error(), "2 elements match") {
+		t.Fatalf("error does not explain the ambiguity: %v", err)
+	}
+}
+
+// TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera proves the
+// route actually works end to end: a request for /camera/{name}/settings
+// reaches serveSettings, which reads the osd and isp blocks off a real
+// (fake) connection and seeds the page with what they actually said, not
+// with a blank form.
+func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
+	osdPair, ok := pairForName("osd get")
+	if !ok {
+		t.Fatal("osd get pair not found")
+	}
+	ispPair, ok := pairForName("isp get")
+	if !ok {
+		t.Fatal("isp get pair not found")
+	}
+
+	osdXML := testXMLHeader + `<body><Osd><channelId>0</channelId><osdChannel><enable>1</enable><name>lounge</name></osdChannel><osdTime><enable>1</enable></osdTime></Osd></body>`
+	ispXML := testXMLHeader + `<body><Isp><channelId>0</channelId><Isp><bright>120</bright><contrast>110</contrast><saturation>100</saturation><dayNight>Auto</dayNight></Isp></Isp></body>`
+
+	key := baichuan.AESKey(testProbeNonce, "")
+	fixture := loginHandshake(testProbeNonce, testProbeDeviceInfo)
+	fixture = append(fixture, statusReply(t, key, osdPair.Get, 200, osdXML)...)
+	fixture = append(fixture, statusReply(t, key, ispPair.Get, 200, ispXML)...)
+
+	cam := fakecam.New(t, fixture)
+	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
+		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/camera/cam1/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+
+	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night switching", unsafeToRewriteWarning} {
+		if !strings.Contains(html, want) {
+			t.Errorf("page does not render the %q field", want)
+		}
+	}
+	// Seeded from the read, not blank: the camera name the fixture answered
+	// with must appear as the value of its control.
+	if !strings.Contains(html, `value="lounge"`) {
+		t.Errorf("page does not show the camera name read from the camera:\n%s", html)
+	}
+	if !strings.Contains(html, `value="120"`) {
+		t.Errorf("page does not show the brightness read from the camera:\n%s", html)
 	}
 }

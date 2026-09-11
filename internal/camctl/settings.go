@@ -6,8 +6,10 @@ package camctl
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -133,21 +135,39 @@ func setField(doc []byte, xpath, value string) ([]byte, error) {
 	return out, nil
 }
 
+// span is one candidate match locateLeaf found: the byte range of an
+// element's inner text.
+type span struct{ start, end int }
+
 // locateLeaf finds the byte span of the inner text of the element chain
 // path names, matched as a trailing suffix of the document's current
 // element stack, so a caller never has to spell out whatever the document
 // wraps it in.
 //
 // It reads doc as a stream of tokens rather than building a tree, using
-// only the decoder's own byte offsets to find where the leaf's content
+// only the decoder's own byte offsets to find where a match's content
 // starts and ends. Nothing here reconstructs or reorders any byte setField
-// hands back to its caller; the decoder is used purely to find two offsets
-// into the original, untouched bytes.
+// hands back to its caller; the decoder is used purely to find offsets into
+// the original, untouched bytes.
+//
+// Matching by suffix is what lets a caller's path skip an outer wrapper it
+// was never told about, but the same rule means a short path such as
+// "Isp/bright" matches every ancestor chain ending in those two names. A
+// document with that pair once, say per channel, would make the first
+// match a silent guess at which channel the caller meant: not a refusal,
+// a wrong write, which is the one failure this codebase cares most about
+// not producing. So this scans the whole document rather than stopping at
+// the first hit, and refuses when more than one element matches, on the
+// same principle that refuses an element that is not present at all: a
+// path this code cannot resolve to exactly one element is not information
+// this code has, and it must not guess.
 func locateLeaf(doc []byte, path []string) (start, end int, err error) {
 	dec := xml.NewDecoder(bytes.NewReader(doc))
 	var stack []string
+	var matches []span
 	matchDepth := -1
 	pendingStart := false
+	var curStart int
 
 	for {
 		off := int(dec.InputOffset())
@@ -156,24 +176,37 @@ func locateLeaf(doc []byte, path []string) (start, end int, err error) {
 			break
 		}
 		if pendingStart {
-			start = off
+			curStart = off
 			pendingStart = false
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
 			stack = append(stack, t.Name.Local)
+			// matchDepth == -1 also guards against a match already open:
+			// once one is found, nothing inside its own subtree can start
+			// a second, independent match, only a sibling or a later
+			// element can.
 			if matchDepth == -1 && suffixMatches(stack, path) {
 				matchDepth = len(stack)
 				pendingStart = true
 			}
 		case xml.EndElement:
 			if matchDepth == len(stack) {
-				return start, off, nil
+				matches = append(matches, span{curStart, off})
+				matchDepth = -1
 			}
 			stack = stack[:len(stack)-1]
 		}
 	}
-	return 0, 0, fmt.Errorf("element not found in document")
+
+	switch len(matches) {
+	case 0:
+		return 0, 0, fmt.Errorf("element not found in document")
+	case 1:
+		return matches[0].start, matches[0].end, nil
+	default:
+		return 0, 0, fmt.Errorf("%d elements match this path; refusing rather than guessing which one was meant", len(matches))
+	}
 }
 
 // suffixMatches reports whether path is the trailing sequence of stack, so
@@ -190,4 +223,82 @@ func suffixMatches(stack, path []string) bool {
 		}
 	}
 	return true
+}
+
+// fieldValue reads what setField would replace, without replacing it: the
+// current text of the element xpath names, for seeding a form with what the
+// camera actually holds right now. It shares locateLeaf with setField, so a
+// value shown on the page and a value setField would refuse are found by
+// exactly the same rule, including refusing an ambiguous match rather than
+// guessing which one to display.
+func fieldValue(doc []byte, xpath string) (string, bool) {
+	if xpath == "" {
+		return "", false
+	}
+	start, end, err := locateLeaf(doc, strings.Split(xpath, "/"))
+	if err != nil {
+		return "", false
+	}
+	return string(doc[start:end]), true
+}
+
+// settingsPage is what settings.html renders.
+type settingsPage struct {
+	Title  string
+	Camera Camera
+	Groups []Group
+	// Values maps a Field's XPath to what the camera actually holds right
+	// now, seeded from the read each group's Block names. A field absent
+	// from Values (an unreadable block, or a path this camera's document
+	// does not carry) renders with an empty value rather than a guess.
+	Values map[string]string
+	// Err carries a failure that stopped part of this page from being
+	// filled in, the same discipline every other page in this package
+	// follows: text for a person, never inspected.
+	Err string
+}
+
+// serveSettings shows the curated Picture and OSD group: what a person
+// actually changes, seeded from the same reads the raw view uses, so this
+// page never shows a value it did not itself just read from the camera.
+func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cam, err := s.byName(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	page := settingsPage{Title: cam.Name + " settings", Camera: cam, Groups: groups(), Values: map[string]string{}}
+
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	defer cancel()
+
+	conn, err := s.dial(ctx, cam)
+	if err != nil {
+		page.Err = fmt.Sprintf("could not connect: %v", err)
+		s.render(w, "settings.html", page)
+		return
+	}
+	defer conn.Close()
+
+	for _, g := range page.Groups {
+		pair, ok := pairForName(g.Block)
+		if !ok {
+			continue
+		}
+		readCtx, readCancel := context.WithTimeout(ctx, readTimeout)
+		doc, status, readErr := baichuan.ReadConfig(readCtx, conn, pair.Get)
+		readCancel()
+		if readErr != nil || status != 200 {
+			continue
+		}
+		for _, f := range g.Fields {
+			if v, ok := fieldValue(doc, f.XPath); ok {
+				page.Values[f.XPath] = v
+			}
+		}
+	}
+
+	s.render(w, "settings.html", page)
 }
