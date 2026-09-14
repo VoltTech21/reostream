@@ -61,7 +61,79 @@ func main() {
 	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://10.0.0.2:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
 	flag.Parse()
 
-	configPath := resolveConfigPath(*dataDir, *configFlag)
+	d, err := startup(*configFlag, *dataDir, *listenOverride, *streamBase)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reostream: %v\n", err)
+		os.Exit(1)
+	}
+
+	sigs := make(chan os.Signal, 1)
+	// SIGHUP and SIGQUIT must be handled, not just SIGINT and SIGTERM: this
+	// process is normally started over SSH, where a terminal disconnect or a
+	// tmux detach sends SIGHUP, and Go's default action for an unhandled
+	// SIGHUP or SIGQUIT terminates the process immediately with no defers
+	// run. That skips every stream's stream-stop message, and the cameras
+	// refuse new connections on those streams for minutes. This is not
+	// hypothetical: it cost nine minutes of live camera footage during
+	// testing on 2026-09-08.
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	sig := <-sigs
+	log.Printf("reostream: got %s, shutting down", sig)
+
+	// Close RTSP before the streams stop. A reader still attached when the
+	// camera sessions are released would otherwise be served from a stream
+	// that is being torn down underneath it.
+	if d.rtspSrv != nil {
+		d.rtspSrv.Close()
+	}
+
+	// Shut the control server down in its own goroutine, not inline here.
+	// http.Server.Shutdown blocks until active connections finish and does
+	// not cancel their request contexts, so a long-lived connection on the
+	// control listener (the log stream Task 7 adds, or just a browser tab
+	// left open on the page) would otherwise delay runShutdown's cancel()
+	// below by up to its own timeout, and that cancel is what starts
+	// releasing camera sessions. Running it concurrently means a slow
+	// control-page client only delays the control listener's own shutdown,
+	// never the start of camera session release.
+	if d.controlSrv != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+			defer cancel()
+			d.controlSrv.Shutdown(ctx)
+		}()
+	}
+
+	if err := runShutdown(d.cancelSup, d.runDone, d.httpSrv, runStopGrace, httpShutdownTimeout); err != nil {
+		log.Printf("reostream: http shutdown: %v", err)
+	}
+}
+
+// daemon holds everything startup assembles -- the resolved config, the
+// supervisor, and every listener -- before main blocks on a shutdown
+// signal. Factoring this out of main lets a test drive the real
+// config-resolution-and-serve path (see firstrun_test.go) without main's
+// signal handling, which stays untouched below.
+type daemon struct {
+	cfg        *config.Config
+	sup        *supervisor.Supervisor
+	rtspSrv    *rtsp.Server
+	controlSrv *http.Server
+	httpSrv    *http.Server
+	supCtx     context.Context
+	cancelSup  context.CancelFunc
+	runDone    <-chan error
+}
+
+// startup resolves the config -- including the no-config first-run path --
+// builds the supervisor and every listener exactly as main always has, and
+// starts them, returning before anything blocks on a shutdown signal. An
+// error here is always fatal in main: a config that exists and fails to
+// parse or validate, an explicit -config pointing at nothing, or a listener
+// that fails to start.
+func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, error) {
+	explicitConfig := configFlag != ""
+	configPath := resolveConfigPath(dataDir, configFlag)
 
 	// Tee, not redirect: stderr keeps everything it had, so docker logs and
 	// journald are unaffected, and the page reads the same lines from
@@ -77,10 +149,22 @@ func main() {
 
 	var cfg *config.Config
 	if _, statErr := os.Stat(configPath); errors.Is(statErr, fs.ErrNotExist) {
-		// No config file at all: this is a fresh install, not an error.
-		// Start with an empty fleet and a claimable control page instead of
-		// refusing to run, and keep saying so until something claims it,
-		// per resolveConfigPath's doc comment.
+		if explicitConfig {
+			// An explicit -config that names a file which is not there is
+			// not a fresh install, it is a broken deployment -- an
+			// unmounted volume, a typo'd flag during a migration, a bind
+			// mount that has not attached yet. Only the *default* path
+			// gets the first-run treatment; a caller that named a path
+			// stays exactly as fatal as it always was, so a redeploy that
+			// loses its config crash-loops loudly instead of quietly
+			// coming up with an unauthenticated control page.
+			cancelSup()
+			return nil, fmt.Errorf("config: %s: %w", configPath, statErr)
+		}
+		// No config file at all, and nobody asked for one by name: this is
+		// a fresh install, not an error. Start with an empty fleet and a
+		// claimable control page instead of refusing to run, and keep
+		// saying so until something claims it.
 		cfg = &config.Config{
 			Listen: defaultListen,
 			Control: &config.ControlConfig{
@@ -88,20 +172,8 @@ func main() {
 				AllowNoPassword: true,
 			},
 		}
-		msg := fmt.Sprintf("reostream: no config at %s, serving the setup page, not yet claimed", configPath)
-		log.Print(msg)
-		go func() {
-			t := time.NewTicker(firstRunLogInterval)
-			defer t.Stop()
-			for {
-				select {
-				case <-supCtx.Done():
-					return
-				case <-t.C:
-					log.Print(msg)
-				}
-			}
-		}()
+		log.Print(firstRunMessage(configPath))
+		go firstRunLoop(supCtx, configPath)
 	} else {
 		// The file exists (or Stat failed for some other reason, in which
 		// case Load below will surface it): load it normally. A file that
@@ -111,15 +183,15 @@ func main() {
 		// unconfigured without anyone noticing.
 		c, err := config.Load(configPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "reostream: %v\n", err)
-			os.Exit(1)
+			cancelSup()
+			return nil, err
 		}
 		cfg = c
 	}
 
 	listen := cfg.Listen
-	if *listenOverride != "" {
-		listen = *listenOverride
+	if listenOverride != "" {
+		listen = listenOverride
 	}
 	if listen == "" {
 		listen = defaultListen
@@ -139,7 +211,8 @@ func main() {
 			return rtspSrv.Add(rtsp.Path(camera, st))
 		})
 		if err := rtspSrv.Start(); err != nil {
-			log.Fatalf("reostream: %v", err)
+			cancelSup()
+			return nil, err
 		}
 		log.Printf("reostream: rtsp listening on %s", cfg.RTSP.Listen)
 	}
@@ -155,12 +228,13 @@ func main() {
 			Status:          srv,
 			Logs:            logs,
 			Hubs:            sup,
-			StreamBase:      *streamBase,
+			StreamBase:      streamBase,
 			ConfigPath:      configPath,
 			Supervisor:      sup,
 		})
 		if err != nil {
-			log.Fatalf("reostream: control: %v", err)
+			cancelSup()
+			return nil, fmt.Errorf("control: %w", err)
 		}
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits
@@ -191,46 +265,60 @@ func main() {
 		}
 	}()
 
-	sigs := make(chan os.Signal, 1)
-	// SIGHUP and SIGQUIT must be handled, not just SIGINT and SIGTERM: this
-	// process is normally started over SSH, where a terminal disconnect or a
-	// tmux detach sends SIGHUP, and Go's default action for an unhandled
-	// SIGHUP or SIGQUIT terminates the process immediately with no defers
-	// run. That skips every stream's stream-stop message, and the cameras
-	// refuse new connections on those streams for minutes. This is not
-	// hypothetical: it cost nine minutes of live camera footage during
-	// testing on 2026-09-08.
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
-	sig := <-sigs
-	log.Printf("reostream: got %s, shutting down", sig)
+	return &daemon{
+		cfg:        cfg,
+		sup:        sup,
+		rtspSrv:    rtspSrv,
+		controlSrv: controlSrv,
+		httpSrv:    httpSrv,
+		supCtx:     supCtx,
+		cancelSup:  cancelSup,
+		runDone:    runDone,
+	}, nil
+}
 
-	// Close RTSP before the streams stop. A reader still attached when the
-	// camera sessions are released would otherwise be served from a stream
-	// that is being torn down underneath it.
-	if rtspSrv != nil {
-		rtspSrv.Close()
-	}
+// firstRunMessage is the log line startup prints, and firstRunLoop repeats,
+// while the daemon is running on a synthesized first-run config.
+func firstRunMessage(configPath string) string {
+	return fmt.Sprintf("reostream: no config at %s, serving the setup page, not yet claimed", configPath)
+}
 
-	// Shut the control server down in its own goroutine, not inline here.
-	// http.Server.Shutdown blocks until active connections finish and does
-	// not cancel their request contexts, so a long-lived connection on the
-	// control listener (the log stream Task 7 adds, or just a browser tab
-	// left open on the page) would otherwise delay runShutdown's cancel()
-	// below by up to its own timeout, and that cancel is what starts
-	// releasing camera sessions. Running it concurrently means a slow
-	// control-page client only delays the control listener's own shutdown,
-	// never the start of camera session release.
-	if controlSrv != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
-			defer cancel()
-			controlSrv.Shutdown(ctx)
-		}()
+// firstRunLoop repeats firstRunMessage every firstRunLogInterval, loud
+// enough that it turns up in `docker logs` without anyone going looking for
+// it, until ctx is cancelled (the daemon is shutting down) or configPath
+// exists (something -- the setup page, or an operator by hand -- has
+// written a config there). It re-Stats configPath on every tick rather than
+// trusting the absence it saw at startup: an operator can use the open page
+// to write a real config while this loop is still running, and the message
+// must stop being true the moment that happens, not wait for a restart.
+//
+// This only silences the log; it does not touch the running control
+// server's AllowNoPassword, which was captured once in control.New and has
+// no way to notice a claim from here. Closing that gap is a later task's
+// claim-flow mechanism, not this loop's job.
+func firstRunLoop(ctx context.Context, configPath string) {
+	t := time.NewTicker(firstRunLogInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if firstRunClaimed(configPath) {
+				return
+			}
+			log.Print(firstRunMessage(configPath))
+		}
 	}
+}
 
-	if err := runShutdown(cancelSup, runDone, httpSrv, runStopGrace, httpShutdownTimeout); err != nil {
-		log.Printf("reostream: http shutdown: %v", err)
-	}
+// firstRunClaimed reports whether configPath now exists -- meaning
+// something has written a config since the daemon started on a synthesized
+// one, so firstRunMessage is no longer true and firstRunLoop should stop
+// repeating it.
+func firstRunClaimed(configPath string) bool {
+	_, err := os.Stat(configPath)
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // httpShutdownTimeout bounds http.Server.Shutdown itself, once the stream
@@ -272,10 +360,14 @@ func runShutdown(cancel context.CancelFunc, runDone <-chan error, srv httpShutdo
 // resolveConfigPath decides which config file main should try to load. An
 // explicit -config override always wins: an existing deployment that
 // already passes -config must keep working exactly as before, unchanged by
-// any of this. Only when it is empty does a fresh install's convention
-// apply, <data>/config.toml, so starting the container with just -data (or
-// its default, /data) set is enough to find or create a config without
-// anyone having to know the flag exists.
+// any of this -- including staying fatal, not falling back to a fresh
+// first-run config, when the named file is not there (see startup's use of
+// explicitConfig, which is what actually keeps that promise; this function
+// only chooses the path, not what happens when it is missing). Only when
+// override is empty does a fresh install's convention apply,
+// <data>/config.toml, so starting the container with just -data (or its
+// default, /data) set is enough to find or create a config without anyone
+// having to know the flag exists.
 func resolveConfigPath(dataDir, override string) string {
 	if override != "" {
 		return override
