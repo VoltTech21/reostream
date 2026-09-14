@@ -290,12 +290,19 @@ func (s *Server) writeAndApply(text string) (string, error) {
 	// auth live -- the claim handler -- and that made this one a trap: an
 	// operator on an allow_no_password install who added a password here
 	// got a "saved" banner from a page that went on serving without one
-	// until somebody restarted the daemon. after comes from config.Load, so
-	// any "$NAME" reference in the file is already resolved. adoptPassword
-	// only ever tightens, and does nothing if this process already has a
-	// password of its own.
+	// until somebody restarted the daemon. That includes a password being
+	// CHANGED, not just one appearing: rotating it is what an operator does
+	// after a suspected compromise, and a save that leaves the old
+	// credential working is the worst possible answer to that.
+	//
+	// adoptResolvedPassword, NOT adoptPassword: after comes from
+	// config.Load, which has already resolved any "$NAME" reference, and a
+	// real secret is allowed to begin with a "$". Handing a resolved secret
+	// to the function that applies the "$NAME" rule would look up the rest
+	// of the password as a variable name, find nothing, and lock the page
+	// on an unrelated save.
 	if after.Control != nil && after.Control.Password != "" {
-		s.adoptPassword(after.Control.Password)
+		s.adoptResolvedPassword(after.Control.Password)
 	}
 
 	var note string

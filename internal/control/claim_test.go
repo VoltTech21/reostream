@@ -263,6 +263,10 @@ func TestAClaimThroughAProxyIsRefused(t *testing.T) {
 	for _, h := range []struct{ name, value string }{
 		{"X-Forwarded-For", "203.0.113.9"},
 		{"Forwarded", "for=203.0.113.9;proto=https"},
+		// The nginx snippet everyone copies sets only this one.
+		{"X-Real-IP", "203.0.113.9"},
+		{"CF-Connecting-IP", "203.0.113.9"},
+		{"X-Forwarded-Proto", "https"},
 	} {
 		path := filepath.Join(t.TempDir(), "config.toml")
 		s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
@@ -367,16 +371,18 @@ func TestAnAdoptedPasswordResolvesAnEnvironmentReference(t *testing.T) {
 	}
 }
 
-// An unset variable means this process cannot know the password. It is
-// still a claimed install, so the page locks rather than staying open:
-// locked and wrong is recoverable by a restart, open is not.
+// An unset variable means this process cannot know the password. Serving on
+// unauthenticated is not an option, so the page locks: refuse everybody
+// until somebody fixes it. Locked and wrong is recoverable, open is not.
 func TestAnUnresolvableAdoptedPasswordLocksThePage(t *testing.T) {
 	s := newTestServer(t, Options{
 		AllowNoPassword: true,
 		ConfigPath:      writeHandConfig(t, `password = "$TEST_ADOPT_UNSET_PW"`),
 	})
-	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/login" {
-		t.Fatalf("/ went to %q, want /login", rec.Header().Get("Location"))
+	// Every route refuses: the gate sends it to the claim screen, and the
+	// claim screen has nothing to offer because the file is already there.
+	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/claim" {
+		t.Fatalf("/ went to %q, want /claim", rec.Header().Get("Location"))
 	}
 	auth := s.authNow()
 	if auth.AllowNoPassword {
@@ -386,6 +392,95 @@ func TestAnUnresolvableAdoptedPasswordLocksThePage(t *testing.T) {
 		if auth.Check(guess) {
 			t.Fatalf("the locked page accepted %q", guess)
 		}
+	}
+}
+
+// Locking is right; latching it is not. An operator who fixes the config by
+// writing a real password must not need a restart to get in -- that was the
+// whole point of adoption, and a lock that only a restart clears quietly
+// takes it back.
+func TestALockedPageHealsWhenARealPasswordIsWritten(t *testing.T) {
+	path := writeHandConfig(t, `password = "$TEST_ADOPT_UNSET_PW_2"`)
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+
+	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/claim" {
+		t.Fatalf("/ went to %q, want /claim", rec.Header().Get("Location"))
+	}
+	if s.claimed() {
+		t.Fatal("a locked page counted as claimed, so nothing later can change its mind")
+	}
+
+	if err := os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\npassword = \"written-after\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := getFrom(t, s, "/")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("after fixing the config, / answered %d to %q, want 303 to /login", rec.Code, rec.Header().Get("Location"))
+	}
+	if !s.authNow().Check("written-after") {
+		t.Fatal("the password written after the lock was never adopted: the lock latched")
+	}
+}
+
+// Rotating the password is what an operator does after a suspected
+// compromise. A "Saved" banner over a page where the old credential still
+// works would be the worst possible answer to it.
+func TestRotatingThePasswordFromTheConfigPageTakesEffect(t *testing.T) {
+	s := newTestServer(t, Options{
+		Password:   "the-old-one",
+		ConfigPath: writeHandConfig(t, `password = "the-old-one"`),
+	})
+	if _, err := s.writeAndApply("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\npassword = \"the-new-one\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	auth := s.authNow()
+	if !auth.Check("the-new-one") {
+		t.Fatal("the rotated password does not work")
+	}
+	if auth.Check("the-old-one") {
+		t.Fatal("the password the operator believes they revoked still works")
+	}
+}
+
+// A real secret is allowed to begin with a "$". config.Load has already
+// resolved the file's "$NAME" reference by the time a save adopts it, so
+// applying the reference rule a second time would look up the rest of the
+// password as a variable name, find nothing, and lock the page on a save
+// that had nothing to do with the password.
+func TestASecretBeginningWithADollarSurvivesASave(t *testing.T) {
+	t.Setenv("TEST_DOLLAR_SECRET_PW", "$w0rd!")
+	text := "listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\npassword = \"$TEST_DOLLAR_SECRET_PW\"\n"
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{Password: "$w0rd!", ConfigPath: path})
+
+	// Any unrelated save at all: this is the one that used to lock.
+	if _, err := s.writeAndApply(text + "\n[[camera]]\nname = \"gate\"\naddress = \"192.0.2.10\"\nusername = \"admin\"\npassword = \"\"\nstreams = [\"main\"]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.authNow().Check("$w0rd!") {
+		t.Fatal("saving an unrelated change locked the page out from its own password")
+	}
+}
+
+// Learning that there is nothing to claim here after typing a password is
+// learning it too late.
+func TestTheClaimScreenSaysUpFrontWhenAConfigIsAlreadyThere(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("listen = \"unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+	rec := getFrom(t, s, "/claim")
+	body := rec.Body.String()
+	if !strings.Contains(body, path) || !strings.Contains(body, "nothing to claim") {
+		t.Fatalf("the claim screen does not say a config is already there:\n%s", body)
+	}
+	if strings.Contains(body, `type="password"`) {
+		t.Fatal("the claim screen still offers a form that POST will refuse")
 	}
 }
 

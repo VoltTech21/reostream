@@ -127,9 +127,17 @@ type Server struct {
 	// claimSettled is the memo for claimed's config read: once the file
 	// has said this install has an owner, that answer cannot change back,
 	// so there is no reason to re-read it on every request afterwards.
+	//
+	// authLocked means the password in auth is a random one nobody can
+	// present, set because the config names an environment variable that
+	// is not set. It is tracked separately so that a lock does not read as
+	// an owner: claimed keeps re-reading the file while it is set, which
+	// is what lets a real password written afterwards take effect without
+	// a restart.
 	authMu       sync.RWMutex
 	auth         webui.Auth
 	claimSettled bool
+	authLocked   bool
 	sessions     *webui.SessionStore
 
 	// configMu serialises writeAndApply end to end: reading the previous
