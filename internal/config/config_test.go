@@ -283,3 +283,25 @@ func TestControlWithoutAPasswordIsAllowedWhenSaidExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAConfigWithNoCamerasIsValid(t *testing.T) {
+	// Correct for a daemon configured by hand, and exactly wrong for one
+	// that configures itself: a fresh install has no cameras yet and must
+	// still start, serve its page, and let somebody add one.
+	cfg := Config{Listen: "0.0.0.0:8560"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an empty fleet was rejected: %v", err)
+	}
+}
+
+func TestACameraWithNoStreamsIsStillRejected(t *testing.T) {
+	// Zero cameras is a starting state. A camera that pulls nothing is a
+	// mistake, and the distinction must survive.
+	cfg := Config{
+		Listen:  "0.0.0.0:8560",
+		Cameras: []Camera{{Name: "a", Address: "192.0.2.10"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a camera with no streams was accepted")
+	}
+}

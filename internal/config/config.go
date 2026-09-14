@@ -197,6 +197,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("control: listen is set with no password; set one or set allow_no_password = true")
 	}
 
+	// An empty Cameras list is deliberately not rejected here: the loop
+	// below simply does not run, and Validate returns nil. A fresh install
+	// has no cameras configured yet and must still start, serve its setup
+	// page, and let somebody add the first one -- see cmd/reostream's
+	// first-run handling. Do not add a len(c.Cameras) == 0 check back as a
+	// tidiness fix; it would make that first run impossible.
 	seenNames := make(map[string]bool, len(c.Cameras))
 	// seenAddrStreams tracks, per normalised address, which stream names
 	// are already claimed by which camera, so two differently named

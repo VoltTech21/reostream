@@ -261,6 +261,22 @@ func TestStopEntryWaitsForTheStreamToReturn(t *testing.T) {
 	}
 }
 
+func TestRunWithNoStreamsServesAndStops(t *testing.T) {
+	s := New(nil, func(ctx context.Context, cfg stream.Config, h *hub.Hub) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run with an empty fleet did not return")
+	}
+}
+
 // waitFor polls cond for up to a second, which is long enough for a
 // goroutine to be scheduled and short enough to fail a hung test quickly.
 func waitFor(t *testing.T, cond func() bool) {
