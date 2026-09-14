@@ -125,10 +125,10 @@ func readFloodlightDoc(ctx context.Context, c *cgi.Client) (map[string]any, erro
 		WhiteLed map[string]any `json:"WhiteLed"`
 	}
 	if err := json.Unmarshal(value, &v); err != nil {
-		return nil, fmt.Errorf("camctl: parsing GetWhiteLed: %w", err)
+		return nil, fmt.Errorf("control: parsing GetWhiteLed: %w", err)
 	}
 	if v.WhiteLed == nil {
-		return nil, fmt.Errorf("camctl: GetWhiteLed carried no WhiteLed document")
+		return nil, fmt.Errorf("control: GetWhiteLed carried no WhiteLed document")
 	}
 	return v.WhiteLed, nil
 }

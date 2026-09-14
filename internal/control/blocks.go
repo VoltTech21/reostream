@@ -131,7 +131,7 @@ func (s *Server) readBlocks(ctx context.Context, cam Camera) ([]Block, error) {
 
 	conn, err := s.dial(ctx, cam)
 	if err != nil {
-		return nil, fmt.Errorf("camctl: reading blocks for %q: %w", cam.Name, err)
+		return nil, fmt.Errorf("control: reading blocks for %q: %w", cam.Name, err)
 	}
 	// See probeCamera's identical comment: conn is reassigned on redial, so
 	// this must close whichever connection is current at return time, not
@@ -153,13 +153,13 @@ func (s *Server) readBlocks(ctx context.Context, cam Camera) ([]Block, error) {
 
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
-				return out, fmt.Errorf("camctl: reading blocks for %q: %w", cam.Name, ctx.Err())
+				return out, fmt.Errorf("control: reading blocks for %q: %w", cam.Name, ctx.Err())
 			}
 			out = append(out, Block{Name: name, ID: id, HungUp: true})
 			conn.Close()
 			conn, err = s.dial(ctx, cam)
 			if err != nil {
-				return out, fmt.Errorf("camctl: reading blocks for %q: reconnect after %s: %w", cam.Name, name, err)
+				return out, fmt.Errorf("control: reading blocks for %q: reconnect after %s: %w", cam.Name, name, err)
 			}
 			continue
 		}

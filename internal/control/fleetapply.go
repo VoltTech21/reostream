@@ -200,7 +200,7 @@ func readFullTime(ctx context.Context, c *cgi.Client) (map[string]any, error) {
 		Time map[string]any `json:"Time"`
 	}
 	if err := json.Unmarshal(value, &v); err != nil {
-		return nil, fmt.Errorf("camctl: parsing GetTime: %w", err)
+		return nil, fmt.Errorf("control: parsing GetTime: %w", err)
 	}
 	return v.Time, nil
 }
@@ -213,12 +213,12 @@ func readFullTime(ctx context.Context, c *cgi.Client) (map[string]any, error) {
 func (s *Server) setTimeZone(ctx context.Context, cam Camera, tz int) (WriteResult, error) {
 	c, err := s.cgiDial(cam)
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: connecting to %q for the timezone: %w", cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: connecting to %q for the timezone: %w", cam.Name, err)
 	}
 
 	cur, err := readFullTime(ctx, c)
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: reading the clock for %q before writing: %w", cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: reading the clock for %q before writing: %w", cam.Name, err)
 	}
 	before := fmt.Sprintf("timezone %v", cur["timeZone"])
 

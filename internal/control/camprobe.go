@@ -92,7 +92,7 @@ func (s *Server) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, err
 
 	conn, err := s.dial(ctx, cam)
 	if err != nil {
-		return nil, fmt.Errorf("camctl: probing %q: %w", cam.Name, err)
+		return nil, fmt.Errorf("control: probing %q: %w", cam.Name, err)
 	}
 	// conn is reassigned on every redial below, so this cannot be
 	// `defer conn.Close()`: that would bind to the connection conn holds
@@ -122,7 +122,7 @@ func (s *Server) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, err
 				// The whole probe's budget is gone, not just this one
 				// read's. Report what was learned rather than losing it
 				// to a caller that only sees the error.
-				return out, fmt.Errorf("camctl: probing %q: %w", cam.Name, ctx.Err())
+				return out, fmt.Errorf("control: probing %q: %w", cam.Name, ctx.Err())
 			}
 			// ReadConfig's error does not say whether the camera dropped
 			// the connection or just stayed silent past readTimeout: both
@@ -134,7 +134,7 @@ func (s *Server) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, err
 			conn.Close()
 			conn, err = s.dial(ctx, cam)
 			if err != nil {
-				return out, fmt.Errorf("camctl: probing %q: reconnect after %s: %w", cam.Name, name, err)
+				return out, fmt.Errorf("control: probing %q: reconnect after %s: %w", cam.Name, name, err)
 			}
 			continue
 		}

@@ -41,10 +41,10 @@ func readNTPDoc(ctx context.Context, c *cgi.Client) (map[string]any, error) {
 		Ntp map[string]any `json:"Ntp"`
 	}
 	if err := json.Unmarshal(value, &v); err != nil {
-		return nil, fmt.Errorf("camctl: parsing GetNtp: %w", err)
+		return nil, fmt.Errorf("control: parsing GetNtp: %w", err)
 	}
 	if v.Ntp == nil {
-		return nil, fmt.Errorf("camctl: GetNtp carried no Ntp document")
+		return nil, fmt.Errorf("control: GetNtp carried no Ntp document")
 	}
 	return v.Ntp, nil
 }
@@ -113,7 +113,7 @@ func readTimeZone(ctx context.Context, c *cgi.Client) (int, error) {
 	}
 	var v timeParam
 	if err := json.Unmarshal(value, &v); err != nil {
-		return 0, fmt.Errorf("camctl: parsing GetTime: %w", err)
+		return 0, fmt.Errorf("control: parsing GetTime: %w", err)
 	}
 	return v.Time.TimeZone, nil
 }
@@ -132,12 +132,12 @@ func readTimeZone(ctx context.Context, c *cgi.Client) (int, error) {
 func (s *Server) setNTP(ctx context.Context, cam Camera, server string, enabled bool) (WriteResult, error) {
 	c, err := s.cgiDial(cam)
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: connecting to %q for NTP: %w", cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: connecting to %q for NTP: %w", cam.Name, err)
 	}
 
 	cur, err := readNTPDoc(ctx, c)
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: reading NTP for %q before writing: %w", cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: reading NTP for %q before writing: %w", cam.Name, err)
 	}
 	curEnabled, curServer := ntpEnableServer(cur)
 	before := ntpState(curEnabled, curServer)

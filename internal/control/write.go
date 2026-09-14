@@ -106,7 +106,7 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 
 	pair, ok := pairForSet(id)
 	if !ok {
-		return WriteResult{}, fmt.Errorf("camctl: %d is not a known writable pair for %q", id, cam.Name)
+		return WriteResult{}, fmt.Errorf("control: %d is not a known writable pair for %q", id, cam.Name)
 	}
 
 	// UnsafeToRewrite is about this codebase's own evidence, from
@@ -132,7 +132,7 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 
 	conn, err := s.dial(ctx, cam)
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: writing %s for %q: %w", pair.Name, cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: writing %s for %q: %w", pair.Name, cam.Name, err)
 	}
 	// conn is reassigned below when verify redials onto a fresh connection,
 	// so this cannot be `defer conn.Close()`: that binds to whatever conn
@@ -151,14 +151,14 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 	before, _, err := baichuan.ReadConfig(readCtx, conn, pair.Get)
 	readCancel()
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: reading %s before writing for %q: %w", pair.Name, cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: reading %s before writing for %q: %w", pair.Name, cam.Name, err)
 	}
 
 	writeCtx, writeCancel := context.WithTimeout(ctx, readTimeout)
 	status, err := baichuan.WriteConfig(writeCtx, conn, id, body)
 	writeCancel()
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("camctl: writing %s for %q: %w", pair.Name, cam.Name, err)
+		return WriteResult{}, fmt.Errorf("control: writing %s for %q: %w", pair.Name, cam.Name, err)
 	}
 
 	result = outcomeFor(status, body, nil, false)

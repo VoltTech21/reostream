@@ -191,18 +191,18 @@ func pairForName(name string) (baichuan.ConfigPair, bool) {
 // thing this function exists to avoid.
 func setField(doc []byte, xpath, value string) ([]byte, error) {
 	if xpath == "" {
-		return nil, fmt.Errorf("camctl: setField: empty xpath")
+		return nil, fmt.Errorf("control: setField: empty xpath")
 	}
 	segs := strings.Split(xpath, "/")
 
 	start, end, err := locateLeaf(doc, segs)
 	if err != nil {
-		return nil, fmt.Errorf("camctl: setField %q: %w", xpath, err)
+		return nil, fmt.Errorf("control: setField %q: %w", xpath, err)
 	}
 
 	var esc bytes.Buffer
 	if err := xml.EscapeText(&esc, []byte(value)); err != nil {
-		return nil, fmt.Errorf("camctl: setField %q: escaping value: %w", xpath, err)
+		return nil, fmt.Errorf("control: setField %q: escaping value: %w", xpath, err)
 	}
 
 	out := make([]byte, 0, len(doc)+esc.Len())
