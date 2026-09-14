@@ -39,14 +39,6 @@ func writeTestConfig(t *testing.T, names ...string) string {
 	return path
 }
 
-// noCGIDial is package control_test's own copy of cgistub_test.go's
-// stub, needed for the same reason: serveCamera reads the floodlight over
-// CGI on every visit, so any test hitting that page needs a double or it
-// tries a real network dial against the documentation-range address.
-func noCGIDial(control.Camera) (*cgi.Client, error) {
-	return nil, fmt.Errorf("cgi not available in this test")
-}
-
 // getBody performs the request through the server and returns the body as
 // a string, failing the test on a non-200.
 func getBody(t *testing.T, s *httptest.Server, path string) string {
@@ -69,10 +61,9 @@ func getBody(t *testing.T, s *httptest.Server, path string) string {
 // The constants and helpers below (through buildProbeFixture and
 // replaceReply) are package control_test's own copies of camprobe_test.go
 // and blocks_test.go's fixture builders, needed for the same reason
-// writeTestConfig and noCGIDial are duplicated in this file: those
-// packages' own copies are unexported and this file lives in a different
-// test package (control_test, not control), so they are unreachable from
-// here.
+// writeTestConfig is duplicated in this file: those packages' own copies
+// are unexported and this file lives in a different test package
+// (control_test, not control), so they are unreachable from here.
 
 const testXMLHeader = `<?xml version="1.0" encoding="UTF-8"?>`
 const testProbeNonce = "camerapage-test-nonce-0000000000"
