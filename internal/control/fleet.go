@@ -18,17 +18,15 @@ type Camera struct {
 
 // fleet reads the camera list from reostream's config.
 //
-// config.LoadForDialing, not config.Load and not config.LoadRaw: this
-// program dials cameras, so it needs camera passwords resolved from the
-// environment rather than "$NAME" references. But it never dials
-// reostream's own control listener, so unlike the streaming daemon it has
-// no business requiring [control].password to resolve too, and in the real
-// deployment that variable lives in reostream's container, not this one's.
-// config.Load requiring it made every page 500 on startup; see
-// LoadForDialing's own comment. The operator page's camera form needs a
-// third thing again, LoadRaw, because it re-encodes the config and writes
-// it back, and resolving there would write every camera's real password
-// into the file. This program never writes that file.
+// config.Load, not config.LoadRaw: this process dials cameras, so it needs
+// camera passwords resolved from the environment rather than left as
+// "$NAME" references, and Load is also what resolves [control]'s own
+// password to start this same process's control listener -- there is only
+// one process now, and it needs both. The config editor uses LoadRaw
+// instead, separately, precisely because it re-encodes the config and
+// writes it back: resolving there would bake every camera's real password
+// into the file in place of the "$NAME" reference that was deliberately
+// keeping it out.
 func (s *Server) fleet() ([]Camera, error) {
 	return loadFleet(s.opts.ConfigPath)
 }
@@ -36,7 +34,7 @@ func (s *Server) fleet() ([]Camera, error) {
 // loadFleet is fleet's free-function core, split out so the sidebar's
 // "fleet" template function can load the same list without a *Server.
 func loadFleet(configPath string) ([]Camera, error) {
-	cfg, err := config.LoadForDialing(configPath)
+	cfg, err := config.Load(configPath)
 	// No config file at all is not a failure, it is a fresh install: there
 	// is no config until something claims it, and every page rendered
 	// before then -- the claim screen first of all -- draws the sidebar,
@@ -47,7 +45,7 @@ func loadFleet(configPath string) ([]Camera, error) {
 		return []Camera{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("camctl: reading the fleet: %w", err)
+		return nil, fmt.Errorf("control: reading the fleet: %w", err)
 	}
 	out := make([]Camera, 0, len(cfg.Cameras))
 	for _, c := range cfg.Cameras {
@@ -71,5 +69,5 @@ func (s *Server) byName(name string) (Camera, error) {
 			return c, nil
 		}
 	}
-	return Camera{}, fmt.Errorf("camctl: no camera named %q in the config", name)
+	return Camera{}, fmt.Errorf("control: no camera named %q in the config", name)
 }
