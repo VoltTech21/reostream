@@ -41,12 +41,11 @@ import (
 // the process for no gain -- the log line is regenerated at every startup
 // anyway.
 //
-// One consequence of printing it to the log is that it also lands in the
-// in-memory buffer the Logs page serves. That is not a leak: the Logs page
-// is behind the auth wrapper, and while the install is unclaimed claimGate
-// sends every route except /claim itself to the claim screen, so nothing
-// can read that buffer until the install has an owner -- by which time the
-// token has been spent and matches nothing.
+// It is printed straight to stderr and NOT through the log package, which
+// tees into the in-memory buffer the Logs page serves. See printFirstRun in
+// cmd/reostream: the reasoning for why a token in that buffer would
+// probably still be safe exists, and it is thin enough that keeping the
+// secret out of the buffer altogether is the better answer.
 
 // claimTokenAlphabet has no visually ambiguous characters: no 0 or O, no 1,
 // I or L. The token exists to be read off a terminal and typed into a

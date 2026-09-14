@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-// fakeClock lets a test step over the lockout window without sleeping
+// fakeClock lets a test step over the failure window without sleeping
 // through five real minutes.
 type fakeClock struct {
 	mu sync.Mutex
@@ -31,77 +32,199 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
+// newFakeThrottle is a throttle with a clock a test drives and a base delay
+// short enough that a test which really waits one out does not cost a
+// second.
 func newFakeThrottle() (*throttle, *fakeClock) {
 	c := &fakeClock{t: time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)}
 	th := newThrottle()
 	th.now = c.now
+	th.base = time.Millisecond
 	return th, c
 }
 
-func TestTheThrottleLocksOutAfterRepeatedFailures(t *testing.T) {
+// The delay doubles per consecutive failure and stops at the cap. It is a
+// delay and not a lockout on purpose: behind docker-proxy every request
+// shares one key, so a refusal would let any passer-by lock the operator
+// out of their own page.
+func TestTheDelayGrowsWithFailuresAndCaps(t *testing.T) {
 	th, clock := newFakeThrottle()
-	for i := 0; i < throttleFailures-1; i++ {
+	th.base = throttleBaseDelay
+
+	if d := th.delay("10.0.0.1"); d != 0 {
+		t.Fatalf("a source that has never failed waits %v, want 0", d)
+	}
+
+	want := throttleBaseDelay
+	for i := 0; i < 20; i++ {
 		th.fail("10.0.0.1")
-		if _, blocked := th.blocked("10.0.0.1"); blocked {
-			t.Fatalf("locked out after %d failures, want %d", i+1, throttleFailures)
+		got := th.delay("10.0.0.1")
+		if want > throttleMaxDelay {
+			want = throttleMaxDelay
 		}
+		if got != want {
+			t.Fatalf("after %d failures the delay is %v, want %v", i+1, got, want)
+		}
+		want *= 2
 	}
-	th.fail("10.0.0.1")
-	left, blocked := th.blocked("10.0.0.1")
-	if !blocked {
-		t.Fatalf("not locked out after %d failures", throttleFailures)
+	if d := th.delay("10.0.0.1"); d != throttleMaxDelay {
+		t.Fatalf("the delay settled at %v, want the cap %v", d, throttleMaxDelay)
 	}
-	if left <= 0 || left > throttleWindow {
-		t.Fatalf("lockout has %v left, want between 0 and %v", left, throttleWindow)
+	// Another source is unaffected: the delay is per source, not global.
+	if d := th.delay("10.0.0.2"); d != 0 {
+		t.Fatalf("an unrelated source waits %v, want 0", d)
 	}
-	// Somebody else is unaffected: the lockout is per source, not global,
-	// or one attacker would lock the operator out of their own page.
-	if _, blocked := th.blocked("10.0.0.2"); blocked {
-		t.Fatal("one source's failures locked out another")
-	}
-	// And it ends.
+	// And failures expire.
 	clock.advance(throttleWindow + time.Second)
-	if _, blocked := th.blocked("10.0.0.1"); blocked {
-		t.Fatal("the lockout outlived its window")
+	if d := th.delay("10.0.0.1"); d != 0 {
+		t.Fatalf("after the window the delay is %v, want 0", d)
 	}
 	if th.len() != 0 {
 		t.Fatalf("an expired entry was kept: %d entries", th.len())
 	}
 }
 
-func TestASuccessClearsTheThrottle(t *testing.T) {
+func TestASuccessClearsTheDelay(t *testing.T) {
 	th, _ := newFakeThrottle()
-	for i := 0; i < throttleFailures-1; i++ {
+	for i := 0; i < 4; i++ {
 		th.fail("10.0.0.1")
 	}
 	th.clear("10.0.0.1")
 	if th.len() != 0 {
 		t.Fatal("a success left the failures behind")
 	}
-	// The count really is back to zero, not merely hidden: another full run
-	// of failures short of the limit still does not lock out.
-	for i := 0; i < throttleFailures-1; i++ {
-		th.fail("10.0.0.1")
-	}
-	if _, blocked := th.blocked("10.0.0.1"); blocked {
-		t.Fatal("the cleared failures were still being counted")
+	th.fail("10.0.0.1")
+	if got := th.delay("10.0.0.1"); got != th.base {
+		t.Fatalf("after a success the next failure costs %v, want the first-failure delay %v", got, th.base)
 	}
 }
 
-// The map is keyed by an attacker-controlled value, so it is a
-// memory-growth vector unless it is bounded: a flood of distinct sources
-// (trivial from one IPv6 /64) would otherwise grow it forever, and a
-// brute-force fix would have bought a memory-exhaustion hole.
+// One attacker holding a /64 -- which is what an ISP hands a single
+// customer -- must not get 2^64 independent delay budgets, nor 2^64 keys to
+// push everyone else's entry out of the table with.
+func TestOneIPv6PrefixIsOneSource(t *testing.T) {
+	a := throttleKey("[2001:db8:1:2::1]:5000")
+	b := throttleKey("[2001:db8:1:2:ffff:ffff:ffff:ffff]:5000")
+	if a != b {
+		t.Fatalf("two addresses in one /64 keyed as %q and %q, want one key", a, b)
+	}
+	// A different /64 is a different source.
+	if c := throttleKey("[2001:db8:1:3::1]:5000"); c == a {
+		t.Fatalf("a different /64 shares the key %q", c)
+	}
+	// IPv4 is charged per address, and the ephemeral port never counts.
+	if x, y := throttleKey("192.168.1.10:5000"), throttleKey("192.168.1.10:41234"); x != y {
+		t.Fatalf("two connections from one IPv4 address keyed as %q and %q", x, y)
+	}
+	if x, y := throttleKey("192.168.1.10:5000"), throttleKey("192.168.1.11:5000"); x == y {
+		t.Fatalf("two IPv4 addresses share the key %q", x)
+	}
+	// An IPv4-mapped IPv6 peer is the IPv4 address, not a /64 of them.
+	if got, want := throttleKey("[::ffff:192.168.1.10]:5000"), "192.168.1.10"; got != want {
+		t.Fatalf("an IPv4-mapped peer keyed as %q, want %q", got, want)
+	}
+	// Unparseable sources are charged as themselves rather than skipped.
+	if got := throttleKey("not-an-address"); got != "not-an-address" {
+		t.Fatalf("an unparseable source keyed as %q", got)
+	}
+}
+
+// The map is keyed by an attacker-controlled value, so it has to be
+// bounded: a flood of distinct sources would otherwise grow it forever, and
+// a brute-force fix would have bought a memory-exhaustion hole.
 func TestTheThrottleMapStaysBoundedUnderAFloodOfSources(t *testing.T) {
 	th, _ := newFakeThrottle()
 	for i := 0; i < throttleMax*3; i++ {
-		th.fail(fmt.Sprintf("2001:db8::%x", i))
+		th.fail(fmt.Sprintf("2001:db8:%x::/64", i))
 		if n := th.len(); n > throttleMax {
 			t.Fatalf("after %d distinct sources the table holds %d entries, cap is %d", i+1, n, throttleMax)
 		}
 	}
-	if th.len() > throttleMax {
-		t.Fatalf("table holds %d entries, cap is %d", th.len(), throttleMax)
+}
+
+// Past throttleMaxSleepers, an attempt is refused immediately rather than
+// queued: each sleeper holds a goroutine and a connection, so queueing
+// would turn the delay into the connection exhaustion it is guarding
+// against.
+func TestTheSleeperCapFailsFastRatherThanQueueing(t *testing.T) {
+	th, _ := newFakeThrottle()
+	th.base = time.Hour // long enough that nothing finishes on its own
+	th.fail("10.0.0.1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	started := make(chan struct{}, throttleMaxSleepers)
+	for i := 0; i < throttleMaxSleepers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			started <- struct{}{}
+			th.wait(ctx, "10.0.0.1")
+		}()
+	}
+	for i := 0; i < throttleMaxSleepers; i++ {
+		<-started
+	}
+	// Wait for the slots to actually be taken, without sleeping blind.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		th.mu.Lock()
+		n := th.sleepers
+		th.mu.Unlock()
+		if n == throttleMaxSleepers {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d sleepers ever started", n, throttleMaxSleepers)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The next one must come back at once, with the busy error, rather than
+	// joining the queue.
+	done := make(chan error, 1)
+	go func() { done <- th.wait(ctx, "10.0.0.1") }()
+	select {
+	case err := <-done:
+		if err != errThrottleBusy {
+			t.Fatalf("the attempt past the sleeper cap returned %v, want errThrottleBusy", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the attempt past the sleeper cap queued instead of failing fast")
+	}
+
+	// A client that gives up releases its slot rather than pinning a
+	// goroutine for the whole delay.
+	cancel()
+	wg.Wait()
+	th.mu.Lock()
+	n := th.sleepers
+	th.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d sleepers survived their cancelled requests", n)
+	}
+}
+
+// A cancelled request stops waiting immediately: a client that gives up
+// must not leave a goroutine asleep on its behalf.
+func TestACancelledRequestStopsWaiting(t *testing.T) {
+	th, _ := newFakeThrottle()
+	th.base = time.Hour
+	th.fail("10.0.0.1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- th.wait(ctx, "10.0.0.1") }()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a cancelled wait reported success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled wait kept sleeping")
 	}
 }
 
@@ -116,7 +239,8 @@ func TestTheThrottleIsRaceFree(t *testing.T) {
 			for j := 0; j < 200; j++ {
 				key := fmt.Sprintf("10.0.%d.%d", i, j%7)
 				th.fail(key)
-				th.blocked(key)
+				th.delay(key)
+				th.wait(context.Background(), key)
 				if j%5 == 0 {
 					th.clear(key)
 				}
@@ -126,89 +250,85 @@ func TestTheThrottleIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-// End to end on the route that matters: the token is the only thing between
-// a stranger who can reach the port and an install that can write to
-// cameras, so guessing it has to stop being free.
-func TestRepeatedWrongTokensLockOutTheClaimRoute(t *testing.T) {
-	s, tok := unclaimedServer(t)
-	for i := 0; i < throttleFailures; i++ {
-		if rec := postClaimFrom(t, s, "203.0.113.5:5000", "WRNG-TKEN-WRNG-TKEN", "pw"); rec.Code != http.StatusForbidden {
-			t.Fatalf("wrong token %d answered %d, want 403", i+1, rec.Code)
-		}
-	}
-	rec := postClaimFrom(t, s, "203.0.113.5:5000", "WRNG-TKEN-WRNG-TKEN", "pw")
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("the attempt past the limit answered %d, want 429", rec.Code)
-	}
-	// Even the RIGHT token is refused while the lockout stands: a guesser
-	// who stumbles onto it on attempt six must not be let in, and the check
-	// runs before the compare so there is nothing to time either.
-	if rec := postClaimFrom(t, s, "203.0.113.5:5000", tok, "pw"); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("a locked-out source with the right token answered %d, want 429", rec.Code)
-	}
-	// Another source is unaffected, and claims.
-	if rec := postClaimFrom(t, s, "192.168.1.10:5000", tok, "correct-horse"); rec.Code != http.StatusSeeOther {
-		t.Fatalf("an unrelated source answered %d, want 303", rec.Code)
-	}
+// postLogin submits a password from a chosen source.
+func postLogin(t *testing.T, s *Server, remoteAddr, pw string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/login",
+		strings.NewReader(url.Values{"password": {pw}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = remoteAddr
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec
 }
 
-// One mistyped password must not cost an operator their next four.
-func TestTheLoginThrottleLocksOutAndASuccessClearsIt(t *testing.T) {
+// The property the whole redesign turns on: however many times a source has
+// failed, the RIGHT password still works. Behind docker-proxy that source
+// is everybody, so a refusal here would be a denial of service any
+// passer-by could impose on the operator.
+func TestTheRightPasswordStillWorksAfterManyFailures(t *testing.T) {
 	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "one")})
+	s.throttle.base = time.Millisecond
 
-	login := func(pw string) *httptest.ResponseRecorder {
-		t.Helper()
-		req := httptest.NewRequest("POST", "/login",
-			strings.NewReader(url.Values{"password": {pw}}.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.RemoteAddr = "203.0.113.7:5000"
-		rec := httptest.NewRecorder()
-		s.Handler().ServeHTTP(rec, req)
-		return rec
-	}
-
-	// Short of the limit, then right: the failures are forgotten.
-	for i := 0; i < throttleFailures-1; i++ {
-		if rec := login("wrong"); rec.Code != http.StatusUnauthorized {
+	for i := 0; i < 4; i++ {
+		if rec := postLogin(t, s, "172.17.0.1:5000", "wrong"); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("wrong password %d answered %d, want 401", i+1, rec.Code)
 		}
 	}
-	if rec := login("hunter2"); rec.Code != http.StatusSeeOther {
+	// Straight to the cap from here, rather than spending the real seconds
+	// it would take to walk up to it through the handler.
+	key := throttleKey("172.17.0.1:5000")
+	for s.throttle.delay(key) < throttleMaxDelay {
+		s.throttle.fail(key)
+	}
+	// The operator, arriving through the same shared hop, still gets in.
+	if rec := postLogin(t, s, "172.17.0.1:5000", "hunter2"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("the right password answered %d, want 303", rec.Code)
 	}
 	if s.throttle.len() != 0 {
 		t.Fatal("a successful login left failures behind")
 	}
+}
 
-	// Past the limit, locked out -- and the right password does not get in
-	// while it stands.
-	for i := 0; i < throttleFailures; i++ {
-		if rec := login("wrong"); rec.Code != http.StatusUnauthorized {
-			t.Fatalf("wrong password %d answered %d, want 401", i+1, rec.Code)
-		}
+// A failed login costs the next attempt from that source a delay, and it is
+// charged before the password is looked at, so a wrong guess cannot be
+// compared and retried at full speed.
+func TestAFailedLoginChargesTheNextAttempt(t *testing.T) {
+	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "one")})
+	s.throttle.base = time.Millisecond
+
+	key := throttleKey("203.0.113.7:5000")
+	if d := s.throttle.delay(key); d != 0 {
+		t.Fatalf("a first attempt is charged %v, want 0", d)
 	}
-	if rec := login("wrong"); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("the attempt past the limit answered %d, want 429", rec.Code)
+	postLogin(t, s, "203.0.113.7:5000", "wrong")
+	if d := s.throttle.delay(key); d != s.throttle.base {
+		t.Fatalf("after one failure the next attempt is charged %v, want %v", d, s.throttle.base)
 	}
-	if rec := login("hunter2"); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("a locked-out source with the right password answered %d, want 429", rec.Code)
+	postLogin(t, s, "203.0.113.7:5000", "wrong")
+	if d := s.throttle.delay(key); d != 2*s.throttle.base {
+		t.Fatalf("after two failures the next attempt is charged %v, want %v", d, 2*s.throttle.base)
 	}
 }
 
-// One throttle, shared, so a guesser cannot collect a fresh allowance per
-// route. The two routes cannot both be reached in one state of the install
-// -- an unclaimed one redirects /login to the claim screen, a claimed one
-// 404s /claim -- so what is asserted here is that the claim route's
-// failures land in the same table serveLogin consults.
-func TestTheClaimAndTheLoginShareOneThrottle(t *testing.T) {
+// The claim token is 79.3 bits, so throttling it buys nothing and would
+// hand a passer-by a way to slow the operator's own claim. Wrong tokens
+// must therefore cost nothing at all.
+func TestAWrongTokenCostsNoDelay(t *testing.T) {
 	s := newTestServer(t, Options{
 		AllowNoPassword: true,
 		ConfigPath:      filepath.Join(t.TempDir(), "config.toml"),
 	})
-	for i := 0; i < throttleFailures; i++ {
-		postClaimFrom(t, s, "203.0.113.9:5000", "WRNG-TKEN-WRNG-TKEN", "pw")
+	for i := 0; i < 10; i++ {
+		if rec := postClaimFrom(t, s, "172.17.0.1:5000", "WRNG-TKEN-WRNG-TKEN", "pw"); rec.Code != http.StatusForbidden {
+			t.Fatalf("wrong token %d answered %d, want 403", i+1, rec.Code)
+		}
 	}
-	if _, blocked := s.throttle.blocked("203.0.113.9"); !blocked {
-		t.Fatal("wrong tokens did not lock the source out of the shared throttle")
+	if s.throttle.len() != 0 {
+		t.Fatalf("the claim route recorded %d throttle entries; it must record none", s.throttle.len())
+	}
+	// And the real token still claims, immediately, from that same source.
+	if rec := postClaimFrom(t, s, "172.17.0.1:5000", s.claimToken(), "correct-horse"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the right token answered %d after ten wrong ones, want 303", rec.Code)
 	}
 }

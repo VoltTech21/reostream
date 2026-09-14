@@ -271,7 +271,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 			controlListen = cfg.Control.Listen
 		}
 		msg := firstRunMessage(configPath, controlListen, claimToken)
-		log.Print(msg)
+		printFirstRun(msg)
 		go firstRunLoop(supCtx, configPath, msg)
 	}
 
@@ -304,9 +304,11 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 // firstRunMessage is the log block startup prints, and firstRunLoop
 // repeats, while the daemon is running on a synthesized first-run config.
 //
-// It carries the one-time claim token, and the log is the ONLY place that
-// token appears: it is never written to disk, never put in a response body
-// or a URL, and never returned in an error. That is the whole design --
+// It carries the one-time claim token, and the daemon's stderr is the ONLY
+// place that token appears: it is never written to disk, never put in a
+// response body or a URL, never returned in an error, and never teed into
+// the log buffer the Logs page serves (see printFirstRun). That is the
+// whole design --
 // what the token proves is that whoever has it can read this daemon's
 // logs, which is what controlling the deployment actually looks like,
 // unlike a source address (see internal/control/claimtoken.go).
@@ -360,6 +362,27 @@ func claimURL(controlListen string) string {
 	return fmt.Sprintf("http://%s:%s/claim", host, port)
 }
 
+// printFirstRun writes the first-run block to stderr DIRECTLY, bypassing
+// the log package.
+//
+// log's output is a tee: stderr, and the in-memory buffer the Logs page
+// serves to anyone the auth wrapper lets through. The block carries the
+// claim token, and a secret that reaches that buffer is one HTTP route away
+// from being readable. Today no route reaches it with a live token -- the
+// claim screen 404s on a claimed install, so a token that is still unspent
+// has nowhere to be used -- but that is a thin argument to leave a
+// credential sitting in a buffer behind: an allow_no_password config
+// appearing under a running first-run process flips the install to claimed,
+// opens the gate and serves /logs with no credentials at all, while the
+// token is still set, because only a successful claim clears it. Keeping
+// the secret out of the buffer removes the need for the argument.
+//
+// Stderr still gets it, which is where `docker logs` and journald read
+// from, and that is the whole delivery mechanism the token depends on.
+func printFirstRun(msg string) {
+	fmt.Fprintln(os.Stderr, msg)
+}
+
 // firstRunLoop repeats msg every firstRunLogInterval, loud
 // enough that it turns up in `docker logs` without anyone going looking for
 // it, until ctx is cancelled (the daemon is shutting down) or configPath
@@ -385,7 +408,7 @@ func firstRunLoop(ctx context.Context, configPath, msg string) {
 			if firstRunClaimed(configPath) {
 				return
 			}
-			log.Print(msg)
+			printFirstRun(msg)
 		}
 	}
 }

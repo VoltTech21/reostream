@@ -1,18 +1,20 @@
 package control
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
-// loginPage is what login.html renders. Failed and TooMany are separate
+// loginPage is what login.html renders. Failed and Busy are separate
 // because they are different instructions: one says type it again, the
-// other says stop typing for a while.
+// other says the page is under a flood and this attempt was not judged at
+// all.
 type loginPage struct {
-	Title   string
-	Failed  bool
-	TooMany string
+	Title  string
+	Failed bool
+	Busy   string
 }
 
 func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
@@ -20,14 +22,29 @@ func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
-	// The same throttle the claim token uses, keyed the same way. This page
-	// has no password-strength rule on purpose -- an operator picks what
-	// they pick -- so an unthrottled login is a guess loop against whatever
-	// they picked, run by anyone who can reach the port.
-	who := hostOfAddr(r.RemoteAddr)
-	if left, blocked := s.throttle.blocked(who); blocked {
-		w.WriteHeader(http.StatusTooManyRequests)
-		s.render(w, "login.html", loginPage{Title: "Sign in", TooMany: tooManyMessage(left)})
+	// The password, unlike the claim token, is operator-chosen and subject
+	// to no strength rule on purpose, so this is the one real brute-force
+	// target on the page. The throttle makes each attempt wait out what the
+	// previous failures from this source earned -- before the check, so a
+	// wrong guess cannot be compared and retried at full speed -- and it
+	// never refuses: the right password still works, it just waits. See
+	// throttle.go for why a lockout would have been a denial of service
+	// anyone could trigger.
+	who := throttleKey(r.RemoteAddr)
+	if err := s.throttle.wait(r.Context(), who); err != nil {
+		if errors.Is(err, errThrottleBusy) {
+			// A flood is already in progress and every waiting slot is
+			// taken. Refusing now is the lesser of two evils: queueing is
+			// what would turn the delay into the connection exhaustion the
+			// cap exists to prevent.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			s.render(w, "login.html", loginPage{
+				Title: "Sign in",
+				Busy:  "Too many sign-in attempts are arriving at once, so this one was not checked. Try again in a moment.",
+			})
+			return
+		}
+		// The client gave up while waiting. Nothing to write to.
 		return
 	}
 

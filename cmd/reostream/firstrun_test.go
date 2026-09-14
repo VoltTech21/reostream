@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -93,9 +95,9 @@ func TestFirstRunClaimedTracksTheFile(t *testing.T) {
 	}
 }
 
-// The first-run log line is the ONLY place the claim token appears, so its
-// shape is load-bearing: a person has to find it in `docker logs` and type
-// it into a browser.
+// The first-run block on stderr is the ONLY place the claim token appears,
+// so its shape is load-bearing: a person has to find it in `docker logs` and
+// type it into a browser.
 func TestFirstRunMessageCarriesTheTokenAndTheURL(t *testing.T) {
 	msg := firstRunMessage("/data/config.toml", "0.0.0.0:8562", "K7M2-QX94-B3TD-9WFH")
 	for _, want := range []string{
@@ -116,6 +118,33 @@ func TestFirstRunMessageCarriesTheTokenAndTheURL(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the first-run message never says %q:\n%s", want, msg)
 		}
+	}
+}
+
+// The first-run block must not go through the log package: log's output is
+// teed into the in-memory buffer the Logs page serves, and the block carries
+// the claim token. Stderr still gets it, which is where `docker logs` reads.
+func TestTheFirstRunBlockDoesNotReachTheLogBuffer(t *testing.T) {
+	logs := control.NewLogBuffer(100)
+	saved := log.Writer()
+	log.SetOutput(io.MultiWriter(io.Discard, logs))
+	t.Cleanup(func() { log.SetOutput(saved) })
+
+	msg := firstRunMessage("/data/config.toml", "0.0.0.0:8562", "K7M2-QX94-B3TD-9WFH")
+	printFirstRun(msg)
+	// Something that DOES go through log, to prove the buffer is wired up
+	// and the absence above means something.
+	log.Print("reostream: a line that is not a secret")
+
+	var buffered string
+	for _, line := range logs.Lines() {
+		buffered += line + "\n"
+	}
+	if strings.Contains(buffered, "K7M2-QX94-B3TD-9WFH") {
+		t.Fatalf("the claim token reached the log buffer:\n%s", buffered)
+	}
+	if !strings.Contains(buffered, "not a secret") {
+		t.Fatalf("the log buffer never saw an ordinary log line, so this test proves nothing:\n%s", buffered)
 	}
 }
 

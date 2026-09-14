@@ -45,7 +45,7 @@ One binary serving three ports rather than four:
 | port | what |
 |---|---|
 | 8560 | streams, unauthenticated, what a recorder points at |
-| 8561 | RTSP, when `[rtsp]` is configured |
+| 8554 | RTSP, when `[rtsp]` is configured. No default: the operator sets `[rtsp].listen`, and 8554 is the conventional port the README and `internal/rtsp` use in every example |
 | 8562 | the page, behind a password |
 
 `internal/camctl` folds into `internal/control` as a section rather than a
@@ -87,7 +87,9 @@ What the token asks instead is "can you read this daemon's logs", because that
 is the question with an answer worth trusting: reading the logs means
 controlling the deployment, which is what owning an install should mean. It is
 generated at startup, held in memory only, never written to disk, printed in the
-first-run message and repeated with it, and spent by the claim it authorises. A
+first-run message and repeated with it -- straight to stderr, not through the
+log writer that tees into the buffer the Logs page serves -- and spent by the
+claim it authorises. A
 restart before the install is claimed prints a new one and says so. Sixteen
 characters from a 31-character alphabet with no visually ambiguous glyphs (no
 0/O, no 1/I/L) -- 79 bits -- compared in constant time, and accepted however it
@@ -112,13 +114,29 @@ No longer header list and no trusted-proxy knob fixes a wrong premise. A token
 works identically over a tailnet, behind a reverse proxy and behind an L4 hop,
 and is what Jupyter, Portainer and Home Assistant all do.
 
-**The claim and the login are throttled.** Both are now submittable by anyone who
-can reach the port, and there is deliberately no password-strength rule, so
-repeated failures from one source lock that source out for a few minutes. One
-shared table, keyed by source, failures only, cleared by a success -- and
-bounded, because a table keyed by an attacker-controlled value with no cap turns
-a brute-force fix into a memory-exhaustion hole: entries expire on a TTL and the
-oldest is evicted at the cap.
+**The login is delayed after failures, and never refused.** The password is
+operator-chosen and subject to no strength rule on purpose, so it is the one real
+brute-force target on the page. Each attempt first waits out what the previous
+failures from its source earned: 100ms, doubling, capped at 2s. Failures only,
+cleared by a success, and charged before the password is checked, so a wrong
+guess cannot be compared and immediately retried.
+
+A delay rather than a lockout, because `RemoteAddr` is exactly what this page
+cannot trust: behind `docker-proxy`, which is how this product ships, every
+request arrives from one address, so a lockout keyed by source would let any
+passer-by stop the operator's own correct password from working -- and on an
+unclaimed install, stop the owner from claiming it at all. A delay cannot do
+that. The claim token is not throttled at all: 79 bits cannot be guessed, and a
+delay there would only ever slow the operation this whole flow protects.
+
+Two bounds, both because a mitigation must not become the next hole. The table
+is capped with a TTL and random O(1) eviction, since it is keyed by the one
+value an attacker chooses; keys are the /64 for IPv6 and the address for IPv4,
+so one customer's prefix is one budget rather than 2^64 of them. And the number
+of requests that may be waiting out a delay at once is capped, since each holds
+a goroutine and a connection -- past it an attempt is refused immediately rather
+than queued, which is the only circumstance in which a correct password is
+turned away.
 
 The cross-site check on `POST /claim` stays. CSRF is a separate concern from the
 claim gate: the token blunts a forged claim but does not close it, since an
@@ -168,8 +186,11 @@ The claim flow needs its own tests, because it is the one path a new user cannot
 avoid: an unclaimed install serves the claim screen; a claimed one does not; a
 wrong token is refused and the right one claims; the token is single use and a
 restart while unclaimed yields a different one; the compare is constant time
-(asserted as a call, not as a timing measurement); the throttle triggers, clears
-on success, and keeps its table bounded under a flood of distinct sources; zero
+(asserted as a call, not as a timing measurement); the login delay grows, caps,
+clears on success, and never refuses a correct password however many failures
+came before it; two addresses in one /64 share one budget; the table stays
+bounded under a flood of distinct sources and the sleeper cap fails fast rather
+than queueing; zero
 cameras is valid; and the first save actually creates the file.
 
 Then a live pass, including a first run from genuinely nothing. Every live pass

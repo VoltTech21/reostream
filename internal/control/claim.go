@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -216,16 +215,6 @@ func (s *Server) settleClaim() bool {
 	return true
 }
 
-// hostOfAddr is the address half of a "host:port" remote address, for
-// showing an operator what was seen. It returns the input unchanged when
-// there is no port to strip, so a refusal always names something.
-func hostOfAddr(remoteAddr string) string {
-	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		return h
-	}
-	return remoteAddr
-}
-
 // validClaimPassword checks a submitted password for the two things that
 // would make it unusable in the file it is about to be written into, and
 // for being empty. It never returns the password in its message.
@@ -309,12 +298,17 @@ type claimPage struct {
 	// is worse than telling them up front.
 	Refused string
 
-	// Error is a submission that could not be used: a wrong token, too
-	// many wrong tokens, an empty password, a password the config file
-	// cannot hold, or a failed write. It never contains the password, and
-	// never the token either -- the token goes to the log and nowhere
-	// else, so a message here may say that one was wrong but must not
-	// repeat, echo or hint at the right one.
+	// Error is a submission that could not be used: a wrong token, an
+	// empty password, a password the config file cannot hold, or a failed
+	// write. It never contains the password, and never the token either --
+	// the token goes to the daemon's stderr and nowhere else, so a message
+	// here may say that one was wrong but must not repeat, echo or hint at
+	// the right one.
+	//
+	// There is deliberately no Token field on this struct, and claim.html
+	// has only an empty <input name="token">. The template is never handed
+	// the token in any form; anyone checking this page for a leak should be
+	// able to see that from the struct alone.
 	Error string
 }
 
@@ -399,22 +393,20 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The token, before anything else is looked at. A source that has
-	// already failed this too many times is refused without the compare
-	// even running: the token is the only thing standing between a
-	// stranger who can reach this port and an install that can write to
-	// cameras, so an unthrottled guess loop must not exist.
-	who := hostOfAddr(r.RemoteAddr)
-	if left, blocked := s.throttle.blocked(who); blocked {
-		w.WriteHeader(http.StatusTooManyRequests)
-		s.render(w, "claim.html", claimPage{
-			Title: "Claim this install",
-			Error: tooManyMessage(left),
-		})
-		return
-	}
+	// The token, before anything else is looked at.
+	//
+	// Deliberately NOT throttled, neither delayed nor refused. The token is
+	// 16 characters of crypto/rand from a 31-character alphabet, 79.3 bits:
+	// at a million guesses a second an attacker is through the space in
+	// rather more than the age of the universe, so a rate limit protects
+	// nothing here. What it would cost is real. A delay on this route is
+	// something any passer-by could impose on the operator's own claim --
+	// and behind docker-proxy, which is how this product ships, the
+	// passer-by and the operator are the same key -- so throttling the one
+	// operation this flow exists to protect would only ever slow the person
+	// it is protecting. See throttle.go, and serveLogin, which is where an
+	// operator-chosen password does need the delay.
 	if !claimTokenMatches(s.claimToken(), r.FormValue("token")) {
-		s.throttle.fail(who)
 		w.WriteHeader(http.StatusForbidden)
 		s.render(w, "claim.html", claimPage{
 			Title: "Claim this install",
@@ -463,7 +455,6 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 		s.auth.AllowNoPassword = false
 		s.claimTok = ""
 		s.authMu.Unlock()
-		s.throttle.clear(who)
 	}
 	s.configMu.Unlock()
 
@@ -493,7 +484,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	// goes to stderr, to `docker logs`, and to the in-memory log buffer
 	// the Logs page serves to anyone signed in.
 	log.Printf("reostream: control: this install was claimed from %s; the page now requires the password that was set, and the claim token is spent",
-		who)
+		hostOfAddr(r.RemoteAddr))
 
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
