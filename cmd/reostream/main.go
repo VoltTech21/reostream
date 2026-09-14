@@ -34,9 +34,12 @@ const defaultListen = "0.0.0.0:8560"
 // resolveConfigPath and the no-config branch in main). AllowNoPassword is
 // correct ONLY in that unclaimed state: there is no operator-set password
 // to check because nobody has configured anything yet, and the page must
-// still be reachable so someone can. A later task adds a claim screen and a
-// private-source-address gate that close this off; do not read this as a
-// general-purpose way to run the control page without a password.
+// still be reachable so someone can. The control page closes this off
+// itself: while no config exists it sends every route to its claim screen,
+// which only a private source address may submit, and claiming writes a
+// password into a real config and starts requiring it in this same process.
+// Do not read this as a general-purpose way to run the control page without
+// a password.
 const defaultControlListen = "0.0.0.0:8562"
 
 // firstRunLogInterval is how often main repeats the "not yet claimed"
@@ -292,10 +295,11 @@ func firstRunMessage(configPath string) string {
 // to write a real config while this loop is still running, and the message
 // must stop being true the moment that happens, not wait for a restart.
 //
-// This only silences the log; it does not touch the running control
-// server's AllowNoPassword, which was captured once in control.New and has
-// no way to notice a claim from here. Closing that gap is a later task's
-// claim-flow mechanism, not this loop's job.
+// This only silences the log. Making the claim real in the running process
+// -- requiring the new password on every route, with no restart -- is the
+// control page's own job, done where the claim is handled; see
+// internal/control/claim.go. This loop just stops saying something that has
+// stopped being true.
 func firstRunLoop(ctx context.Context, configPath string) {
 	t := time.NewTicker(firstRunLogInterval)
 	defer t.Stop()

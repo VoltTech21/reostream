@@ -15,7 +15,11 @@ func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	got := r.FormValue("password")
-	if !s.auth.Check(got) {
+	// authNow, not the Auth captured at construction: a password set by a
+	// claim in this same process has to be the one this login checks
+	// against, without a restart.
+	auth := s.authNow()
+	if !auth.Check(got) {
 		w.WriteHeader(http.StatusUnauthorized)
 		s.render(w, "login.html", struct {
 			Title  string
@@ -29,7 +33,7 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     s.auth.CookieName,
+		Name:     auth.CookieName,
 		Value:    tok,
 		Path:     "/",
 		HttpOnly: true,

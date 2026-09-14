@@ -103,6 +103,11 @@ const irLivesInImageWarning = "the infrared cut filter is changed from the Image
 // Lights and IR sets ConfirmReason because everything in it is an emitter:
 // nothing in Picture and OSD switches anything a person or a camera can
 // see happen, and this group is the opposite of that.
+// The ORDER of this list is load-bearing beyond the page's layout:
+// camerapage_test.go's fake camera replies to config reads in exactly this
+// order, and baichuan.Conn reads strictly forward with no rewind, so
+// reordering these groups makes that test time out rather than say what
+// changed.
 func groups() []Group {
 	return []Group{
 		{

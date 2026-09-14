@@ -41,12 +41,36 @@ streams = ["main"]
 	}
 }
 
-func TestFleetReportsAMissingConfigRatherThanServingAnEmptyFleet(t *testing.T) {
+// Absent and unparseable are two different things, and this is where they
+// part company. A config file that is not there is a fresh install that
+// nobody has claimed yet: it has no cameras, and every page rendered before
+// the claim -- the claim screen itself first of all -- draws the sidebar
+// from this list, so an error there would make the very first page a new
+// user sees fail. A config that exists and will not load is a broken file
+// somebody wrote, and reading it as an empty fleet would make every camera
+// look like it had vanished.
+func TestAMissingConfigIsAnEmptyFleetButABrokenOneIsAnError(t *testing.T) {
 	s, err := New(Options{AllowNoPassword: true, ConfigPath: "/nonexistent/config.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.fleet(); err == nil {
-		t.Fatal("a missing config read as an empty fleet, which looks like every camera vanished")
+	cams, err := s.fleet()
+	if err != nil {
+		t.Fatalf("a missing config errored, but a fresh install has no config yet: %v", err)
+	}
+	if len(cams) != 0 {
+		t.Fatalf("got %d cameras from a config that is not there", len(cams))
+	}
+
+	broken := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(broken, []byte("listen = \"unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bs, err := New(Options{AllowNoPassword: true, ConfigPath: broken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bs.fleet(); err == nil {
+		t.Fatal("a config that will not parse read as an empty fleet, which looks like every camera vanished")
 	}
 }

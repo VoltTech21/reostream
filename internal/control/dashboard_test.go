@@ -18,6 +18,11 @@ func (f fixedStatus) StreamStats() map[string]server.StreamStatus { return f }
 func TestDashboardShowsEveryStreamAndItsError(t *testing.T) {
 	ts := newTestServer(t, control.Options{
 		AllowNoPassword: true,
+		// A config, because an install with no config file at all is an
+		// unclaimed one and every route on it goes to the claim screen
+		// first. One camera, because a config with none is a first run and
+		// the dashboard sends that to setup.
+		ConfigPath: writeTestConfig(t, "driveway"),
 		Status: fixedStatus{
 			"driveway/main": {Connected: true, Streaming: true, FPS: 24.9},
 			"gate/sub":      {Connected: false, LastError: "dial tcp: refused"},
@@ -49,6 +54,7 @@ func TestDashboardNeverAutoplays(t *testing.T) {
 	hubs := server.StaticHubs(map[string]*hub.Hub{"gate/sub": h})
 	ts := newTestServer(t, control.Options{
 		AllowNoPassword: true,
+		ConfigPath:      writeTestConfig(t, "gate"),
 		Hubs:            hubs,
 		Status: fixedStatus{
 			"gate/sub": {Connected: true, Streaming: true},
@@ -93,6 +99,7 @@ func TestDashboardNeverAutoplays(t *testing.T) {
 func TestDashboardBitrateRendersAsMbps(t *testing.T) {
 	ts := newTestServer(t, control.Options{
 		AllowNoPassword: true,
+		ConfigPath:      writeTestConfig(t, "driveway"),
 		Status: fixedStatus{
 			"driveway/main": {Connected: true, Streaming: true, BitrateBps: 6231488},
 			"driveway/sub":  {Connected: true, Streaming: true, BitrateBps: 412000},

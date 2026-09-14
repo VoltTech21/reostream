@@ -14,6 +14,9 @@ import (
 func TestAddCameraReportsWhatTheProbeFound(t *testing.T) {
 	ts := newTestServer(t, control.Options{
 		AllowNoPassword: true,
+		// A config file, so this is a claimed install: an unclaimed one
+		// redirects every route to the claim screen.
+		ConfigPath: writeTestConfig(t),
 		Probe: func(ctx context.Context, addr, user, pass string) control.CameraReport {
 			return control.CameraReport{
 				Model: "RLC-810A",
@@ -42,6 +45,7 @@ func TestAddCameraReportsWhatTheProbeFound(t *testing.T) {
 func TestAddCameraReportsAFailureInPlainWords(t *testing.T) {
 	ts := newTestServer(t, control.Options{
 		AllowNoPassword: true,
+		ConfigPath:      writeTestConfig(t),
 		Probe: func(ctx context.Context, addr, user, pass string) control.CameraReport {
 			// A wrong password on these cameras reads as an empty login
 			// reply, which looks exactly like a camera holding a dead

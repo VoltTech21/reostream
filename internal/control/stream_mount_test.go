@@ -15,7 +15,7 @@ import (
 // listener does not, and must not, allow.
 func TestStreamMountServesAHubSameOrigin(t *testing.T) {
 	hubs := server.StaticHubs(map[string]*hub.Hub{"gate/main": hub.New(4)})
-	ts := newTestServer(t, control.Options{AllowNoPassword: true, Hubs: hubs})
+	ts := newTestServer(t, control.Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "gate"), Hubs: hubs})
 
 	resp, err := http.Head(ts.URL + "/stream/gate.ts")
 	if err != nil {
@@ -34,7 +34,7 @@ func TestStreamMountServesAHubSameOrigin(t *testing.T) {
 // listener's.
 func TestStreamMountRequiresAuth(t *testing.T) {
 	hubs := server.StaticHubs(map[string]*hub.Hub{"gate/main": hub.New(4)})
-	ts := newTestServer(t, control.Options{Password: "hunter2", Hubs: hubs})
+	ts := newTestServer(t, control.Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "gate"), Hubs: hubs})
 
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -54,7 +54,7 @@ func TestStreamMountRequiresAuth(t *testing.T) {
 // wiring) never panics on the route: the mount is only added when Hubs is
 // non-nil, and the route otherwise simply does not exist.
 func TestStreamMountAbsentWithNoHubs(t *testing.T) {
-	ts := newTestServer(t, control.Options{AllowNoPassword: true})
+	ts := newTestServer(t, control.Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "gate")})
 
 	resp, err := http.Head(ts.URL + "/stream/gate.ts")
 	if err != nil {

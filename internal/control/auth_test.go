@@ -77,7 +77,14 @@ func TestLoginWithTheWrongPasswordDoesNot(t *testing.T) {
 }
 
 func TestAllowNoPasswordServesWithoutLogin(t *testing.T) {
-	ts := newTestServer(t, control.Options{AllowNoPassword: true})
+	// With a config: an install with no config file at all is an
+	// unclaimed one, and every route on it redirects to the claim screen
+	// before auth is even consulted. What this test is about is the
+	// allow_no_password setting on a configured install.
+	ts := newTestServer(t, control.Options{
+		AllowNoPassword: true,
+		ConfigPath:      writeTestConfig(t, "one"),
+	})
 	resp, err := http.Get(ts.URL + "/")
 	if err != nil {
 		t.Fatal(err)

@@ -1,7 +1,9 @@
 package control
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/VoltTech21/reostream/internal/config"
 )
@@ -35,6 +37,15 @@ func (s *Server) fleet() ([]Camera, error) {
 // "fleet" template function can load the same list without a *Server.
 func loadFleet(configPath string) ([]Camera, error) {
 	cfg, err := config.LoadForDialing(configPath)
+	// No config file at all is not a failure, it is a fresh install: there
+	// is no config until something claims it, and every page rendered
+	// before then -- the claim screen first of all -- draws the sidebar,
+	// which calls this. Absent means no cameras yet, so an empty list. A
+	// config that exists and will not load still errors: that is a broken
+	// file, not an empty fleet, and showing it as one would hide it.
+	if errors.Is(err, fs.ErrNotExist) {
+		return []Camera{}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("camctl: reading the fleet: %w", err)
 	}

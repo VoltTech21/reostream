@@ -11,6 +11,7 @@ package control
 import (
 	"context"
 	"embed"
+	"errors"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -34,7 +35,7 @@ import (
 // renders with the wrong chrome. Any template added under templates/ must
 // be added to this list too.
 //
-//go:embed templates/accounts.html templates/blocks.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/fleetapply.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
+//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/fleetapply.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
 var templateFS embed.FS
 
 //go:embed assets
@@ -108,6 +109,21 @@ type Server struct {
 	// executes.
 	tmpl *template.Template
 
+	// auth is the live auth state, not a value frozen at construction.
+	// Claiming an install sets a password on a process that started with
+	// none, and every route has to start requiring it immediately: a claim
+	// that only took effect at the next restart would leave the "claimed"
+	// install serving unauthenticated until somebody noticed, which is the
+	// whole thing the claim exists to stop. So it is read per request
+	// through authNow, under authMu, rather than captured once by
+	// s.auth.Wrap at route registration time.
+	//
+	// authMu guards the two mutable fields, Password and AllowNoPassword.
+	// Routes read them concurrently on every request; the claim handler
+	// writes them once. Lock order: authMu is the innermost lock here --
+	// the claim handler holds configMu while taking it, and nothing under
+	// authMu ever reaches for configMu.
+	authMu   sync.RWMutex
 	auth     webui.Auth
 	sessions *webui.SessionStore
 
@@ -201,6 +217,25 @@ func (s *Server) Close() {
 	})
 }
 
+// authNow returns a snapshot of the live auth state. A copy, so a caller
+// can use Check, Wrap and CookieName without holding the lock while a
+// handler runs.
+func (s *Server) authNow() webui.Auth {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+	return s.auth
+}
+
+// wrap gates h on the auth state as it is at request time, which is what
+// makes a claim take effect without a restart. webui.Auth.Wrap is still
+// what decides; the only difference from calling it directly is that the
+// Auth it decides with is read now rather than at registration.
+func (s *Server) wrap(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.authNow().Wrap(h).ServeHTTP(w, r)
+	})
+}
+
 // Handler returns the routes for this page. Everything but the login
 // routes runs behind s.auth.Wrap: an unauthenticated route on this page
 // reaches camera credentials or a camera itself.
@@ -215,37 +250,44 @@ func (s *Server) Close() {
 // settings.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// The claim routes sit outside the auth wrapper on purpose. While the
+	// install is unclaimed there is no password for that wrapper to check,
+	// and once it is claimed both routes answer 404 for everyone, which is
+	// a better answer than a login redirect to a route that no longer
+	// exists.
+	mux.HandleFunc("GET /claim", s.serveClaimForm)
+	mux.HandleFunc("POST /claim", s.serveClaim)
 	mux.HandleFunc("GET /login", s.serveLoginForm)
 	mux.HandleFunc("POST /login", s.serveLogin)
-	mux.Handle("GET /{$}", s.auth.Wrap(http.HandlerFunc(s.serveDashboard)))
-	mux.Handle("GET /logs", s.auth.Wrap(http.HandlerFunc(s.serveLogsPage)))
-	mux.Handle("GET /logs/history", s.auth.Wrap(http.HandlerFunc(s.serveLogHistory)))
-	mux.Handle("GET /logs/stream", s.auth.Wrap(http.HandlerFunc(s.serveLogStream)))
-	mux.Handle("GET /config", s.auth.Wrap(http.HandlerFunc(s.serveConfigPage)))
-	mux.Handle("POST /config", s.auth.Wrap(http.HandlerFunc(s.saveConfigPage)))
-	mux.Handle("GET /cameras", s.auth.Wrap(http.HandlerFunc(s.serveCameras)))
-	mux.Handle("POST /cameras/add", s.auth.Wrap(http.HandlerFunc(s.saveCamera)))
-	mux.Handle("GET /cameras/{name}", s.auth.Wrap(http.HandlerFunc(s.serveCamera)))
-	mux.Handle("POST /cameras/{name}/settings", s.auth.Wrap(http.HandlerFunc(s.serveApplySetting)))
-	mux.Handle("POST /cameras/{name}/floodlight", s.auth.Wrap(http.HandlerFunc(s.serveApplyFloodlight)))
-	mux.Handle("GET /cameras/{name}/time", s.auth.Wrap(http.HandlerFunc(s.serveTime)))
-	mux.Handle("POST /cameras/{name}/time", s.auth.Wrap(http.HandlerFunc(s.serveApplyTime)))
+	mux.Handle("GET /{$}", s.wrap(http.HandlerFunc(s.serveDashboard)))
+	mux.Handle("GET /logs", s.wrap(http.HandlerFunc(s.serveLogsPage)))
+	mux.Handle("GET /logs/history", s.wrap(http.HandlerFunc(s.serveLogHistory)))
+	mux.Handle("GET /logs/stream", s.wrap(http.HandlerFunc(s.serveLogStream)))
+	mux.Handle("GET /config", s.wrap(http.HandlerFunc(s.serveConfigPage)))
+	mux.Handle("POST /config", s.wrap(http.HandlerFunc(s.saveConfigPage)))
+	mux.Handle("GET /cameras", s.wrap(http.HandlerFunc(s.serveCameras)))
+	mux.Handle("POST /cameras/add", s.wrap(http.HandlerFunc(s.saveCamera)))
+	mux.Handle("GET /cameras/{name}", s.wrap(http.HandlerFunc(s.serveCamera)))
+	mux.Handle("POST /cameras/{name}/settings", s.wrap(http.HandlerFunc(s.serveApplySetting)))
+	mux.Handle("POST /cameras/{name}/floodlight", s.wrap(http.HandlerFunc(s.serveApplyFloodlight)))
+	mux.Handle("GET /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveTime)))
+	mux.Handle("POST /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveApplyTime)))
 	// Accounts get a GET route only. No POST, PUT, PATCH or DELETE route
 	// exists for /cameras/{name}/accounts anywhere in this package; see
 	// accounts.go's top comment for why. Go's ServeMux answers 405 for a
 	// method-specific pattern's path with no matching method, which is
 	// what makes a request for any of those methods refuse itself without
 	// this handler ever having to notice or check.
-	mux.Handle("GET /cameras/{name}/accounts", s.auth.Wrap(http.HandlerFunc(s.serveAccounts)))
-	mux.Handle("GET /cameras/{name}/advanced", s.auth.Wrap(http.HandlerFunc(s.serveBlocks)))
-	mux.Handle("POST /cameras/{name}/write/{id}", s.auth.Wrap(http.HandlerFunc(s.serveWrite)))
-	mux.Handle("GET /fleet/apply", s.auth.Wrap(http.HandlerFunc(s.serveFleetApplyForm)))
-	mux.Handle("POST /fleet/apply/ntp", s.auth.Wrap(http.HandlerFunc(s.serveFleetApplyNTP)))
-	mux.Handle("POST /fleet/apply/timezone", s.auth.Wrap(http.HandlerFunc(s.serveFleetApplyTimezone)))
-	mux.Handle("GET /setup", s.auth.Wrap(http.HandlerFunc(s.serveSetup)))
-	mux.Handle("GET /setup/urls", s.auth.Wrap(http.HandlerFunc(s.serveURLs)))
-	mux.Handle("POST /setup/probe", s.auth.Wrap(http.HandlerFunc(s.serveProbe)))
-	mux.Handle("GET /assets/", s.auth.Wrap(http.StripPrefix("/assets/",
+	mux.Handle("GET /cameras/{name}/accounts", s.wrap(http.HandlerFunc(s.serveAccounts)))
+	mux.Handle("GET /cameras/{name}/advanced", s.wrap(http.HandlerFunc(s.serveBlocks)))
+	mux.Handle("POST /cameras/{name}/write/{id}", s.wrap(http.HandlerFunc(s.serveWrite)))
+	mux.Handle("GET /fleet/apply", s.wrap(http.HandlerFunc(s.serveFleetApplyForm)))
+	mux.Handle("POST /fleet/apply/ntp", s.wrap(http.HandlerFunc(s.serveFleetApplyNTP)))
+	mux.Handle("POST /fleet/apply/timezone", s.wrap(http.HandlerFunc(s.serveFleetApplyTimezone)))
+	mux.Handle("GET /setup", s.wrap(http.HandlerFunc(s.serveSetup)))
+	mux.Handle("GET /setup/urls", s.wrap(http.HandlerFunc(s.serveURLs)))
+	mux.Handle("POST /setup/probe", s.wrap(http.HandlerFunc(s.serveProbe)))
+	mux.Handle("GET /assets/", s.wrap(http.StripPrefix("/assets/",
 		http.FileServer(http.FS(assetSub)))))
 	// The live tiles need to fetch MPEG-TS from the same origin as this
 	// page: mpegts.js pulls the stream over XHR, the streaming listener is
@@ -258,9 +300,9 @@ func (s *Server) Handler() http.Handler {
 	// internal/control/tiles.go for the URLs this produces.
 	if s.opts.Hubs != nil {
 		streamSrv := server.New(s.opts.Hubs)
-		mux.Handle("GET /stream/", s.auth.Wrap(http.StripPrefix("/stream", streamSrv.StreamHandler())))
+		mux.Handle("GET /stream/", s.wrap(http.StripPrefix("/stream", streamSrv.StreamHandler())))
 	}
-	return mux
+	return s.claimGate(mux)
 }
 
 // render writes one page. data must carry a Title, which layout.html uses.
@@ -269,11 +311,22 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 }
 
 func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
-	// A config that loaded fine but lists no cameras is a first run: send
-	// the operator to setup rather than an empty table. A config that
-	// failed to load is a different situation entirely and must not be
-	// mistaken for "no cameras yet".
-	if cfg, err := config.LoadRaw(s.opts.ConfigPath); err == nil && len(cfg.Cameras) == 0 {
+	// Two ways to be a first run, and both belong at setup rather than an
+	// empty status table: a config that loaded fine and lists no cameras,
+	// and no config file at all. The second used to fall through to the
+	// table, because an absent config was once fatal at startup and so
+	// could not be seen here; it can now, since a fresh install starts
+	// with no file and a claim is what creates one. Absent and unparseable
+	// have split apart, and only unparseable keeps the old treatment: a
+	// config somebody wrote that will not load is a different situation
+	// entirely and must not be mistaken for "no cameras yet".
+	//
+	// Precedence against the claim screen is settled before this runs:
+	// claimGate wraps the whole route table, so an unclaimed install never
+	// reaches this handler at all. Anything arriving here is claimed, and
+	// "no cameras yet" is the only first-run question left to ask.
+	cfg, err := config.LoadRaw(s.opts.ConfigPath)
+	if (err == nil && len(cfg.Cameras) == 0) || errors.Is(err, fs.ErrNotExist) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
