@@ -5,13 +5,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -26,6 +29,21 @@ import (
 // defaultListen is used when neither the config file nor -listen sets one.
 const defaultListen = "0.0.0.0:8560"
 
+// defaultControlListen is the control page's listen address for a
+// synthesized first-run config, when no config file exists at all yet (see
+// resolveConfigPath and the no-config branch in main). AllowNoPassword is
+// correct ONLY in that unclaimed state: there is no operator-set password
+// to check because nobody has configured anything yet, and the page must
+// still be reachable so someone can. A later task adds a claim screen and a
+// private-source-address gate that close this off; do not read this as a
+// general-purpose way to run the control page without a password.
+const defaultControlListen = "0.0.0.0:8562"
+
+// firstRunLogInterval is how often main repeats the "not yet claimed"
+// message while the daemon is running on a synthesized config: loud enough
+// that it turns up in `docker logs` without anyone going looking for it.
+const firstRunLogInterval = 60 * time.Second
+
 // runStopGrace bounds how long shutdown waits for Supervisor.Run to return
 // after its context is cancelled. Run does not return until every stream's
 // stream-stop message has gone out, and that is what releases each camera's
@@ -37,27 +55,67 @@ const defaultListen = "0.0.0.0:8560"
 const runStopGrace = 5 * time.Second
 
 func main() {
-	configPath := flag.String("config", "", "path to the TOML config file")
+	configFlag := flag.String("config", "", "path to the TOML config file (default: <data>/config.toml)")
+	dataDir := flag.String("data", "/data", "data directory; holds config.toml when -config is not set")
 	listenOverride := flag.String("listen", "", "HTTP listen address, overriding the config file's")
 	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://10.0.0.2:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
 	flag.Parse()
 
-	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "reostream: -config is required")
-		os.Exit(2)
-	}
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "reostream: %v\n", err)
-		os.Exit(1)
-	}
+	configPath := resolveConfigPath(*dataDir, *configFlag)
 
 	// Tee, not redirect: stderr keeps everything it had, so docker logs and
 	// journald are unaffected, and the page reads the same lines from
-	// memory.
+	// memory. Set up logging before deciding whether a config exists, so
+	// the first-run message below reaches both.
 	logs := control.NewLogBuffer(2000)
 	log.SetOutput(io.MultiWriter(os.Stderr, logs))
+
+	// supCtx is created here, ahead of everything else that needs to stop
+	// when the daemon shuts down, so the first-run logging loop below can
+	// use it instead of inventing its own lifecycle.
+	supCtx, cancelSup := context.WithCancel(context.Background())
+
+	var cfg *config.Config
+	if _, statErr := os.Stat(configPath); errors.Is(statErr, fs.ErrNotExist) {
+		// No config file at all: this is a fresh install, not an error.
+		// Start with an empty fleet and a claimable control page instead of
+		// refusing to run, and keep saying so until something claims it,
+		// per resolveConfigPath's doc comment.
+		cfg = &config.Config{
+			Listen: defaultListen,
+			Control: &config.ControlConfig{
+				Listen:          defaultControlListen,
+				AllowNoPassword: true,
+			},
+		}
+		msg := fmt.Sprintf("reostream: no config at %s, serving the setup page, not yet claimed", configPath)
+		log.Print(msg)
+		go func() {
+			t := time.NewTicker(firstRunLogInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-supCtx.Done():
+					return
+				case <-t.C:
+					log.Print(msg)
+				}
+			}
+		}()
+	} else {
+		// The file exists (or Stat failed for some other reason, in which
+		// case Load below will surface it): load it normally. A file that
+		// exists and fails to parse or validate stays fatal here -- unlike
+		// an absent file, this is a config somebody wrote, and silently
+		// ignoring it in favor of defaults is how a fleet quietly runs
+		// unconfigured without anyone noticing.
+		c, err := config.Load(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "reostream: %v\n", err)
+			os.Exit(1)
+		}
+		cfg = c
+	}
 
 	listen := cfg.Listen
 	if *listenOverride != "" {
@@ -98,7 +156,7 @@ func main() {
 			Logs:            logs,
 			Hubs:            sup,
 			StreamBase:      *streamBase,
-			ConfigPath:      *configPath,
+			ConfigPath:      configPath,
 			Supervisor:      sup,
 		})
 		if err != nil {
@@ -121,7 +179,6 @@ func main() {
 
 	httpSrv := &http.Server{Addr: listen, Handler: srv.Handler()}
 
-	supCtx, cancelSup := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)
 	go func() {
 		runDone <- sup.Run(supCtx)
@@ -210,4 +267,18 @@ func runShutdown(cancel context.CancelFunc, runDone <-chan error, srv httpShutdo
 	ctx, cancelShutdown := context.WithTimeout(context.Background(), httpTimeout)
 	defer cancelShutdown()
 	return srv.Shutdown(ctx)
+}
+
+// resolveConfigPath decides which config file main should try to load. An
+// explicit -config override always wins: an existing deployment that
+// already passes -config must keep working exactly as before, unchanged by
+// any of this. Only when it is empty does a fresh install's convention
+// apply, <data>/config.toml, so starting the container with just -data (or
+// its default, /data) set is enough to find or create a config without
+// anyone having to know the flag exists.
+func resolveConfigPath(dataDir, override string) string {
+	if override != "" {
+		return override
+	}
+	return filepath.Join(dataDir, "config.toml")
 }
