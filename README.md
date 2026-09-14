@@ -104,6 +104,22 @@ measurement.
 
 ## Configuration
 
+There is nothing to write by hand before the first run. A fresh install starts with no
+config file at all:
+
+1. Start the container against an empty data directory (`docker compose up`, or `docker
+   run` with `-v data:/data`). It comes up serving no cameras and prints a one-time claim
+   token to its own log.
+2. Read the token with `docker logs` (or `docker compose logs`). It looks like
+   `XXXX-XXXX-XXXX-XXXX`, and the log line names the URL to open. The token lives in
+   memory only: restarting the container before it is claimed prints a new one and the
+   old one stops working.
+3. Open that URL, enter the token and a password of your own choosing. That writes
+   `/data/config.toml` inside the container and the page starts requiring the password
+   from then on.
+4. Add a camera from the page, or by editing the config directly, either by hand on the
+   mounted data volume or through the page's own editor:
+
 ```toml
 listen = "0.0.0.0:8560"
 
@@ -208,17 +224,18 @@ Verified on a live 8 camera fleet; see docs/measurements.md.
 
 Two things about deploying it matter more than they look:
 
-- **The container runs as a non-root user (uid 65532).** If the config file is owned by
-  root, or its directory is not writable by that user, a save from the page fails. The
-  daemon falls back to the system temp directory when the config's own directory is not
-  writable, so a save still succeeds, but the backup file lands in that temp directory
-  too and does not survive the container being recreated.
-- **Bind-mount the config's directory, not the config file itself.** A single-file mount
-  (`./config.toml:/etc/reostream/config.toml`, the pattern in docker-compose.yml above)
-  leaves that file's directory not writable from inside the container, so no temp file
-  can be created beside it and the atomic rename this daemon otherwise uses is
-  unavailable. Mounting the directory instead (`./config:/etc/reostream`) restores atomic
-  replacement and keeps the backup durably next to the config across restarts.
+- **The container runs as a non-root user (uid 65532).** If the data directory is owned
+  by root, or not writable by that user, the very first save fails: with no config yet,
+  that first save is the claim itself. The image creates `/data` owned by that user, and
+  a named volume (the pattern in docker-compose.yml) inherits that ownership on first
+  use; a bind mount to a host directory needs to be writable by uid 65532 yourself, for
+  example `chown -R 65532:65532` on that directory before the first run.
+- **Mount the data directory, not a single config file.** A single-file bind mount
+  (`./config.toml:/data/config.toml`) leaves the directory around it not writable from
+  inside the container, so no temp file can be created beside it and the atomic rename
+  this daemon otherwise uses is unavailable. Mounting the whole directory (`./data:/data`,
+  or the named volume in docker-compose.yml) restores atomic replacement and keeps the
+  backup durably next to the config across restarts.
 
 ## Camera control
 
@@ -288,9 +305,10 @@ the worked examples.
 ## Deployment
 
 A multi-stage `Dockerfile` builds a static binary and runs it from a minimal base image
-as a non-root user; see `docker-compose.yml` for an example that mounts the config file
-and passes a password through the environment. Neither the config nor any credential is
-baked into the image.
+as a non-root user; see `docker-compose.yml` for an example that mounts a data directory
+and publishes the streaming and control ports. Nothing is baked into the image: a fresh
+install has no config and no password until it is claimed through the control page, per
+the Configuration section above.
 
 For a plain Linux host, `contrib/reostream.service` is a systemd unit. Read the comment
 on `KillSignal` and `TimeoutStopSec` before changing either: a shutdown that does not

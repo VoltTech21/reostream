@@ -1,7 +1,8 @@
-# Example compose file for running reostream. Copy config.toml.example from
-# docs/ (or write your own) alongside this file as config.toml, and reference
-# the password as an environment variable rather than writing it into the
-# config or this file.
+# Example compose file for running reostream. There is nothing to prepare
+# beforehand: a fresh install has no config file. Bring the container up,
+# then read the claim token from `docker compose logs` and use it at
+# http://<host>:8562/ to set a password and write /data/config.toml. See
+# the README's Configuration section.
 #
 # GET /api/status is used as the health check, deliberately not a stream
 # endpoint: probing a stream costs a client slot and a keyframe wait, which
@@ -13,11 +14,13 @@ services:
     restart: unless-stopped
     ports:
       - "8560:8560"
+      - "8562:8562"
     volumes:
-      - ./config.toml:/etc/reostream/config.toml:ro
-    environment:
-      REOSTREAM_DRIVEWAY_PASSWORD: "${REOSTREAM_DRIVEWAY_PASSWORD}"
+      - data:/data
     # No container healthcheck is set here: the run stage is a distroless
     # image with no shell or curl to run one from inside the container.
     # Point your orchestrator's own HTTP healthcheck, or an external
     # monitor, at http://localhost:8560/api/status instead.
+
+volumes:
+  data:
