@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"fmt"
@@ -12,21 +12,22 @@ import (
 	"testing"
 )
 
-// newTestServer builds a camctl server for a test, failing the test rather
-// than returning an error, so callers read as tests and not as plumbing.
-func newTestServer(t *testing.T, opts Options) *Server {
+// newCameraTestServer builds a camera control server for a test, failing
+// the test rather than returning an error, so callers read as tests and not
+// as plumbing.
+func newCameraTestServer(t *testing.T, opts CameraOptions) *CameraServer {
 	t.Helper()
-	s, err := New(opts)
+	s, err := NewCameraServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
-// writeTestConfig writes a reostream config naming the given cameras and
+// writeCameraTestConfig writes a reostream config naming the given cameras and
 // returns its path. Addresses are from the documentation range, never a real
 // one, so a test that accidentally dials cannot reach anything.
-func writeTestConfig(t *testing.T, names ...string) string {
+func writeCameraTestConfig(t *testing.T, names ...string) string {
 	t.Helper()
 	var b strings.Builder
 	b.WriteString("listen = \"0.0.0.0:8560\"\n")
@@ -41,7 +42,7 @@ func writeTestConfig(t *testing.T, names ...string) string {
 }
 
 func TestUnauthenticatedRequestRedirectsToLogin(t *testing.T) {
-	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t)})
+	s := newCameraTestServer(t, CameraOptions{Password: "hunter2", ConfigPath: writeCameraTestConfig(t)})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -62,7 +63,7 @@ func TestUnauthenticatedRequestRedirectsToLogin(t *testing.T) {
 }
 
 func TestCorrectPasswordSetsASessionCookie(t *testing.T) {
-	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t)})
+	s := newCameraTestServer(t, CameraOptions{Password: "hunter2", ConfigPath: writeCameraTestConfig(t)})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -85,7 +86,7 @@ func TestCorrectPasswordSetsASessionCookie(t *testing.T) {
 }
 
 func TestWrongPasswordReturns401AndSetsNoUsableCookie(t *testing.T) {
-	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t)})
+	s := newCameraTestServer(t, CameraOptions{Password: "hunter2", ConfigPath: writeCameraTestConfig(t)})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -135,7 +136,7 @@ var protectedRoutes = []struct{ method, path string }{
 // shipped unnoticed. Every route in protectedRoutes must redirect an
 // unauthenticated request to /login exactly as GET / already does.
 func TestEveryNonLoginRouteRequiresAuth(t *testing.T) {
-	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "cam1")})
+	s := newCameraTestServer(t, CameraOptions{Password: "hunter2", ConfigPath: writeCameraTestConfig(t, "cam1")})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -164,8 +165,8 @@ func TestEveryNonLoginRouteRequiresAuth(t *testing.T) {
 	}
 }
 
-func TestAllowNoPasswordServesWithoutLogin(t *testing.T) {
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t)})
+func TestCameraAllowNoPasswordServesWithoutLogin(t *testing.T) {
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t)})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 

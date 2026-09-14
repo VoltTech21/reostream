@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"context"
@@ -9,16 +9,16 @@ import (
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
 
-// probeTimeout bounds one whole camera probe: baichuan.ConfigNames lists
+// cameraProbeTimeout bounds one whole camera probe: baichuan.ConfigNames lists
 // around a hundred reads, and a camera that hangs up partway through costs a
 // reconnect on top of each one it drops. Without an outer bound a camera
 // that keeps hanging up could hold this page open indefinitely; with it, a
 // slow model still gets a full sweep, because 100 reads at readTimeout each
 // fit comfortably inside it even in the worst case.
-const probeTimeout = 3 * time.Minute
+const cameraProbeTimeout = 3 * time.Minute
 
 // readTimeout bounds a single config read. This is the other half of the
-// bound above: probeTimeout stops the whole sweep from running forever, but
+// bound above: cameraProbeTimeout stops the whole sweep from running forever, but
 // without a per-read deadline too, one message a camera silently ignores
 // (as opposed to answering 405 for, which is instant) could by itself eat
 // the entire probe budget and starve every read after it.
@@ -65,7 +65,7 @@ func newBlockProbe(name string, id uint32, status int16, xml []byte) BlockProbe 
 
 // dial opens one connection to cam, using opts.Dial when the caller supplied
 // one so tests can substitute a fake camera, and baichuan.Dial otherwise.
-func (s *Server) dial(ctx context.Context, cam Camera) (*baichuan.Conn, error) {
+func (s *CameraServer) dial(ctx context.Context, cam Camera) (*baichuan.Conn, error) {
 	if s.opts.Dial != nil {
 		return s.opts.Dial(ctx, cam)
 	}
@@ -86,8 +86,8 @@ func (s *Server) dial(ctx context.Context, cam Camera) (*baichuan.Conn, error) {
 // answer and the loop redials and continues, because the rest of the sweep
 // is still worth having and a camera that drops one connection over one
 // message has still told us something real about that message.
-func (s *Server) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, error) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+func (s *CameraServer) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, error) {
+	ctx, cancel := context.WithTimeout(ctx, cameraProbeTimeout)
 	defer cancel()
 
 	conn, err := s.dial(ctx, cam)

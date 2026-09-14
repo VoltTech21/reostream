@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"os"
@@ -25,7 +25,7 @@ password = "$CAM_PW"
 streams = ["main"]
 `), 0o600)
 
-	s, err := New(Options{AllowNoPassword: true, ConfigPath: path})
+	s, err := NewCameraServer(CameraOptions{AllowNoPassword: true, ConfigPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ streams = ["main"]
 }
 
 func TestFleetReportsAMissingConfigRatherThanServingAnEmptyFleet(t *testing.T) {
-	s, err := New(Options{AllowNoPassword: true, ConfigPath: "/nonexistent/config.toml"})
+	s, err := NewCameraServer(CameraOptions{AllowNoPassword: true, ConfigPath: "/nonexistent/config.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}

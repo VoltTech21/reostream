@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func (p cameraPage) countWhere(match func(BlockProbe) bool) int {
 // serveCamera shows one camera: its own account of its hardware and
 // permissions, and the probe of every config message this program knows,
 // which is the only honest answer to what a model implements.
-func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveCamera(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

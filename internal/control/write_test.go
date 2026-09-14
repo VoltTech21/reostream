@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 
 // newTestHTTPServer starts s.Handler on an httptest server and returns its
 // base URL, closing it when the test ends.
-func newTestHTTPServer(t *testing.T, s *Server) string {
+func newTestHTTPServer(t *testing.T, s *CameraServer) string {
 	t.Helper()
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
@@ -120,7 +120,7 @@ func TestWriteBlockVerifiesOnAFreshConnectionNotTheWriteConnection(t *testing.T)
 			return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 		}
 
-		s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+		s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 		cam, err := s.byName("cam1")
 		if err != nil {
 			t.Fatal(err)
@@ -167,7 +167,7 @@ func TestWriteBlockVerifiesOnAFreshConnectionNotTheWriteConnection(t *testing.T)
 			return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 		}
 
-		s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+		s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 		cam, err := s.byName("cam1")
 		if err != nil {
 			t.Fatal(err)
@@ -196,7 +196,7 @@ func TestWriteBlockRefusedNeverDialsAFreshConnection(t *testing.T) {
 		return baichuan.Dial(ctx, writeCam.Addr(), baichuan.Options{Password: ""})
 	}
 
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	cam, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestWriteBlockRefusedNeverDialsAFreshConnection(t *testing.T) {
 }
 
 func TestServeWriteRejectsAnUnknownMessageID(t *testing.T) {
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1")})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1")})
 	ts := newTestHTTPServer(t, s)
 
 	resp, err := http.PostForm(ts+"/camera/cam1/write/999999999", url.Values{"body": {"<x/>"}})
@@ -233,7 +233,7 @@ func TestServeWriteRejectsAnUnknownMessageID(t *testing.T) {
 
 func TestServeWriteRejectsAnEmptyBody(t *testing.T) {
 	pair := pickTestPair(t)
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1")})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1")})
 	ts := newTestHTTPServer(t, s)
 
 	resp, err := http.PostForm(ts+"/camera/cam1/write/"+strconv.FormatUint(uint64(pair.Set), 10), url.Values{"body": {""}})
@@ -277,7 +277,7 @@ func TestUnsafeToRewriteWarningSurvivesAFailedFreshDial(t *testing.T) {
 		}
 		return baichuan.Dial(ctx, writeCam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	cam, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +317,7 @@ func TestUnsafeToRewriteWarningSurvivesAFailedReadBack(t *testing.T) {
 		}
 		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	cam, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +350,7 @@ func TestServeWriteEndToEndReportsConfirmed(t *testing.T) {
 		}
 		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	ts := newTestHTTPServer(t, s)
 
 	resp, err := http.PostForm(ts+"/camera/cam1/write/"+strconv.FormatUint(uint64(pair.Set), 10), url.Values{"body": {wrote}})

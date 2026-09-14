@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"context"
@@ -113,7 +113,7 @@ func TestReadBlocksCapturesXMLForA200AndNothingElse(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	camObj, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestServeBlocksRendersXMLAndConfidenceLabels(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -235,7 +235,7 @@ func TestBlocksPageEditorPostsToServeWrite(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 

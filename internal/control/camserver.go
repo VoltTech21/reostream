@@ -1,12 +1,14 @@
-// Package camctl serves the camera control page: what a camera is, what it
-// will tell you about itself, and what it will let you change.
+// camserver.go builds CameraServer: what a camera is, what it will tell you
+// about itself, and what it will let you change.
 //
-// It runs as its own process on its own port, not as more routes on the
-// streaming daemon's operator page. The split is by write target. The
-// operator page edits reostream's own config and never writes to a camera.
-// This writes to cameras, it is much larger, and a fault in it must never be
-// able to take video down.
-package camctl
+// This used to run as its own process on its own port, not as more routes
+// on the streaming daemon's operator page, because the split was by write
+// target: control.go's own server edits reostream's own config and never
+// writes to a camera, while this writes to cameras, is much larger, and a
+// fault in it must never be able to take video down. That split in
+// behaviour still holds; only the package boundary that used to enforce it
+// is gone.
+package control
 
 import (
 	"context"
@@ -21,14 +23,22 @@ import (
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
-//go:embed templates/*.html
-var templateFS embed.FS
+// Listed explicitly, not templates/*.html: this directory also holds
+// Server's own operator-page templates (see control.go's templateFS), and a
+// wildcard here would pull layout.html's "layout" definition into this
+// server's base template set alongside cameralayout.html's, with whichever
+// parses last silently winning. Naming exactly this server's own files
+// keeps the two template sets from ever touching.
+//
+//go:embed templates/accounts.html templates/blocks.html templates/camera.html templates/cameralayout.html templates/cameralogin.html templates/fleet.html templates/fleetapply.html templates/result.html templates/settings.html templates/time.html
+var cameraTemplateFS embed.FS
 
 //go:embed assets
-var assetFS embed.FS
+var cameraAssetFS embed.FS
 
-// assetSub drops the "assets" prefix so the URL and the file path match.
-var assetSub, _ = fs.Sub(assetFS, "assets")
+// cameraAssetSub drops the "assets" prefix so the URL and the file path
+// match.
+var cameraAssetSub, _ = fs.Sub(cameraAssetFS, "assets")
 
 // cameraOf finds a field named Camera on whatever page data v is, and
 // returns it as a *Camera, or nil when the page has no such field. The
@@ -53,8 +63,8 @@ func cameraOf(v any) *Camera {
 	return &cam
 }
 
-// Options is everything the camera control server needs.
-type Options struct {
+// CameraOptions is everything the camera control server needs.
+type CameraOptions struct {
 	Password        string
 	AllowNoPassword bool
 	ConfigPath      string
@@ -74,19 +84,19 @@ type Options struct {
 	CGIDial func(cam Camera) (*cgi.Client, error)
 }
 
-// Server serves the camera control page.
-type Server struct {
-	opts     Options
+// CameraServer serves the camera control page.
+type CameraServer struct {
+	opts     CameraOptions
 	rend     *webui.Renderer
 	auth     webui.Auth
 	sessions *webui.SessionStore
 }
 
-// New builds a camera control server. It returns an error rather than
-// panicking on a template parse failure so a caller can report it cleanly,
-// rather than this package crashing a process that has not opened a
-// listener yet.
-func New(opts Options) (*Server, error) {
+// NewCameraServer builds a camera control server. It returns an error
+// rather than panicking on a template parse failure so a caller can report
+// it cleanly, rather than this package crashing a process that has not
+// opened a listener yet.
+func NewCameraServer(opts CameraOptions) (*CameraServer, error) {
 	// The sidebar needs the fleet on every page, not just serveFleet's own,
 	// so it is a template function bound to this daemon's config path
 	// rather than a field every page struct would otherwise have to carry.
@@ -102,12 +112,12 @@ func New(opts Options) (*Server, error) {
 		},
 		"cameraOf": cameraOf,
 	}
-	rend, err := webui.NewRenderer(templateFS, "templates/*.html", funcs)
+	rend, err := webui.NewRenderer(cameraTemplateFS, "templates/*.html", funcs)
 	if err != nil {
 		return nil, err
 	}
 	sessions := webui.NewSessionStore()
-	return &Server{
+	return &CameraServer{
 		opts: opts,
 		rend: rend,
 		auth: webui.Auth{
@@ -115,10 +125,10 @@ func New(opts Options) (*Server, error) {
 			Password:        opts.Password,
 			AllowNoPassword: opts.AllowNoPassword,
 			LoginPath:       "/login",
-			// Distinct from internal/control's own cookie name: the two
-			// surfaces run on one host with independent SessionStores, and
-			// a shared name would mean logging into one silently logs the
-			// other out. See webui.Auth's own comment.
+			// Distinct from Server's own cookie name: the two pages still
+			// run their own independent SessionStores, and a shared name
+			// would mean logging into one silently logs the other out. See
+			// webui.Auth's own comment.
 			CookieName: "reostream_camctl_session",
 		},
 		sessions: sessions,
@@ -127,7 +137,7 @@ func New(opts Options) (*Server, error) {
 
 // Handler returns the routes for this page. Everything but the login routes
 // runs behind auth.Wrap.
-func (s *Server) Handler() http.Handler {
+func (s *CameraServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", s.serveLoginForm)
 	mux.HandleFunc("POST /login", s.serveLogin)
@@ -151,11 +161,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /camera/{name}/accounts", s.auth.Wrap(http.HandlerFunc(s.serveAccounts)))
 	mux.Handle("POST /camera/{name}/write/{id}", s.auth.Wrap(http.HandlerFunc(s.serveWrite)))
 	mux.Handle("GET /assets/", s.auth.Wrap(http.StripPrefix("/assets/",
-		http.FileServer(http.FS(assetSub)))))
+		http.FileServer(http.FS(cameraAssetSub)))))
 	return mux
 }
 
-// render writes one page. data must carry a Title, which layout.html uses.
-func (s *Server) render(w http.ResponseWriter, name string, data any) {
+// render writes one page. data must carry a Title, which cameralayout.html
+// uses.
+func (s *CameraServer) render(w http.ResponseWriter, name string, data any) {
 	s.rend.Render(w, "templates/"+name, data)
 }

@@ -12,7 +12,7 @@
 // Accounts share this file's route wiring in camctl.go but not this file:
 // they get their own, accounts.go, because they are read only for a
 // different and much sharper reason than "no message id was recovered".
-package camctl
+package control
 
 import (
 	"context"
@@ -27,7 +27,7 @@ import (
 // rather than a fixed four-field struct.
 //
 // Port and Interval exist on the wire and this code offers no control for
-// either: composing a SetNtp body from a struct that only knows Server and
+// either: composing a SetNtp body from a struct that only knows CameraServer and
 // Enable would send zeros for every field this code has never modelled,
 // exactly the mistake setField's own comment in settings.go warns against
 // for XML. setNTP changes only server and enable on top of whatever this
@@ -127,9 +127,9 @@ func readTimeZone(ctx context.Context, c *cgi.Client) (int, error) {
 // GetNtp back rather than trusting the write's own reply.
 //
 // It reads the camera's current NTP document first through readNTPDoc and
-// changes only Server and Enable on top of it, never composing Port or
+// changes only CameraServer and Enable on top of it, never composing Port or
 // Interval from nothing; see readNTPDoc's own comment for why.
-func (s *Server) setNTP(ctx context.Context, cam Camera, server string, enabled bool) (WriteResult, error) {
+func (s *CameraServer) setNTP(ctx context.Context, cam Camera, server string, enabled bool) (WriteResult, error) {
 	c, err := s.cgiDial(cam)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("camctl: connecting to %q for NTP: %w", cam.Name, err)
@@ -195,7 +195,7 @@ type timePage struct {
 // read fresh over CGI, seeding the NTP form the same way serveSettings
 // seeds a curated Baichuan field: from what the camera actually holds, not
 // a guess.
-func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveTime(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {
@@ -234,7 +234,7 @@ func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
 
 // serveApplyTime is the NTP form's POST: setNTP, reported the same way
 // every other write on this page is reported.
-func (s *Server) serveApplyTime(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveApplyTime(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

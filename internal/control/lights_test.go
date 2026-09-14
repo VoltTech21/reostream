@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"context"
@@ -123,7 +123,7 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -165,7 +165,7 @@ func TestServeApplyFloodlightRefusesAnUnknownOption(t *testing.T) {
 		dialed = true
 		return nil, nil
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -231,7 +231,7 @@ func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cgiCam.addr(), "admin", "")
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -295,7 +295,7 @@ func TestSetFloodlightPreservesEveryOtherField(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
 	camera, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)

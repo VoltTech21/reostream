@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import "github.com/VoltTech21/reostream/internal/baichuan"
 

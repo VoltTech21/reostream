@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"context"
@@ -24,9 +24,9 @@ import (
 // with the other six about most things. A single summary line over a
 // partial apply is the same lie as reporting a 200 as proof.
 func TestApplyAllReportsEveryCameraSeparately(t *testing.T) {
-	s := newTestServer(t, Options{
+	s := newCameraTestServer(t, CameraOptions{
 		AllowNoPassword: true,
-		ConfigPath:      writeTestConfig(t, "one", "two", "three"),
+		ConfigPath:      writeCameraTestConfig(t, "one", "two", "three"),
 	})
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
 		if cam.Name == "two" {
@@ -58,9 +58,9 @@ func TestApplyAllReportsEveryCameraSeparately(t *testing.T) {
 //
 // A camera that is unreachable must not prevent the rest being set.
 func TestApplyAllDoesNotStopAtTheFirstFailure(t *testing.T) {
-	s := newTestServer(t, Options{
+	s := newCameraTestServer(t, CameraOptions{
 		AllowNoPassword: true,
-		ConfigPath:      writeTestConfig(t, "first", "second"),
+		ConfigPath:      writeCameraTestConfig(t, "first", "second"),
 	})
 	var tried []string
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
@@ -97,9 +97,9 @@ func TestApplyAllDoesNotStopAtTheFirstFailure(t *testing.T) {
 // needs no sleep and no timing margin to do it, so it cannot go flaky on a
 // loaded machine the way a wall-clock comparison could.
 func TestApplyAllBoundsEachCameraSeparately(t *testing.T) {
-	s := newTestServer(t, Options{
+	s := newCameraTestServer(t, CameraOptions{
 		AllowNoPassword: true,
-		ConfigPath:      writeTestConfig(t, "first", "second"),
+		ConfigPath:      writeCameraTestConfig(t, "first", "second"),
 	})
 	var deadlines []time.Time
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
@@ -215,7 +215,7 @@ func TestServeFleetApplyNTPWritesEveryCameraAndReportsARow(t *testing.T) {
 		t.Fatalf("unexpected camera %q", cam.Name)
 		return nil, nil
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "one", "two"), CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "one", "two"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -256,7 +256,7 @@ func TestSetTimeZonePreservesEveryOtherField(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
 
 	camera, err := s.byName("cam1")
 	if err != nil {

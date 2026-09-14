@@ -13,7 +13,7 @@
 // accounts is a page that can lock an operator out of their own camera,
 // with no way back short of a factory reset, and that risk is not worth
 // taking until somebody deliberately establishes what message 59 does.
-package camctl
+package control
 
 import (
 	"context"
@@ -43,7 +43,7 @@ type accountsPage struct {
 // serveAccounts reads message 58 and renders it. There is no corresponding
 // POST handler in this file or anywhere else, and none should be added; see
 // this file's own top comment.
-func (s *Server) serveAccounts(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveAccounts(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

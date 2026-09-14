@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"net/http"
@@ -6,18 +6,18 @@ import (
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
-func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "login.html", struct {
+func (s *CameraServer) serveLoginForm(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "cameralogin.html", struct {
 		Title  string
 		Failed bool
 	}{Title: "Sign in"})
 }
 
-func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveLogin(w http.ResponseWriter, r *http.Request) {
 	got := r.FormValue("password")
 	if !s.auth.Check(got) {
 		w.WriteHeader(http.StatusUnauthorized)
-		s.render(w, "login.html", struct {
+		s.render(w, "cameralogin.html", struct {
 			Title  string
 			Failed bool
 		}{Title: "Sign in", Failed: true})

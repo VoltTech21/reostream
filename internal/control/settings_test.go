@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"bytes"
@@ -187,7 +187,7 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -321,7 +321,7 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 		}
 		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -381,7 +381,7 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -584,7 +584,7 @@ func TestUnavailableFieldRendersExplanationNotBlankInput(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cgiCam.addr(), "admin", "")
 	}
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
+	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 

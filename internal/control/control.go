@@ -20,7 +20,14 @@ import (
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
-//go:embed templates/*.html
+// Listed explicitly, not templates/*.html: this directory also holds the
+// camera control templates (see camserver.go's cameraTemplateFS), and a
+// wildcard here would pull cameralayout.html's "layout" definition into
+// this server's own base template set alongside layout.html's, with
+// whichever parses last silently winning. Naming exactly this server's own
+// files keeps the two template sets from ever touching.
+//
+//go:embed templates/cameras.html templates/config.html templates/dashboard.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/setup.html templates/urls.html
 var templateFS embed.FS
 
 //go:embed assets

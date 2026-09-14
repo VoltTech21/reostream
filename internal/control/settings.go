@@ -2,7 +2,7 @@
 // picked out of the raw blocks blocks.html already exposes wholesale, so
 // changing the camera's name or its timestamp overlay does not require
 // editing an XML document by hand.
-package camctl
+package control
 
 import (
 	"bytes"
@@ -409,7 +409,7 @@ func resolveGroupBlock(ctx context.Context, conn *baichuan.Conn, g Group) (pair 
 // serveSettings shows the curated Picture and OSD group: what a person
 // actually changes, seeded from the same reads the raw view uses, so this
 // page never shows a value it did not itself just read from the camera.
-func (s *Server) serveSettings(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveSettings(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {
@@ -514,7 +514,7 @@ func curatedField(block, xpath string) (Field, bool) {
 // The field seeded on the page and the field a write targets are found by
 // the identical rule on purpose: fieldValue and setField both resolve
 // XPath through locateLeaf, so what an operator sees is what gets changed.
-func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

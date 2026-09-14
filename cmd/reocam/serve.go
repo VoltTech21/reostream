@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/VoltTech21/reostream/internal/camctl"
+	"github.com/VoltTech21/reostream/internal/control"
 )
 
 // defaultServeListen and defaultServeConfig are the camera control page's
@@ -38,7 +38,7 @@ func runServe(args []string) {
 		os.Exit(2)
 	}
 
-	srv, err := camctl.New(camctl.Options{
+	srv, err := control.NewCameraServer(control.CameraOptions{
 		Password:        password,
 		AllowNoPassword: *allowNoPassword,
 		ConfigPath:      *configPath,

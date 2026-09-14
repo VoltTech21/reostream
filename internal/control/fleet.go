@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"fmt"
@@ -27,12 +27,12 @@ type Camera struct {
 // third thing again, LoadRaw, because it re-encodes the config and writes
 // it back, and resolving there would write every camera's real password
 // into the file. This program never writes that file.
-func (s *Server) fleet() ([]Camera, error) {
+func (s *CameraServer) fleet() ([]Camera, error) {
 	return loadFleet(s.opts.ConfigPath)
 }
 
 // loadFleet is fleet's free-function core, split out so the sidebar's
-// "fleet" template function can load the same list without a *Server.
+// "fleet" template function can load the same list without a *CameraServer.
 func loadFleet(configPath string) ([]Camera, error) {
 	cfg, err := config.LoadForDialing(configPath)
 	if err != nil {
@@ -50,7 +50,7 @@ func loadFleet(configPath string) ([]Camera, error) {
 
 // byName finds one camera. Handlers take a camera name in the URL rather
 // than an address, so a page cannot be pointed at an arbitrary host.
-func (s *Server) byName(name string) (Camera, error) {
+func (s *CameraServer) byName(name string) (Camera, error) {
 	cams, err := s.fleet()
 	if err != nil {
 		return Camera{}, err

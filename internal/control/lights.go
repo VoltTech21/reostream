@@ -4,7 +4,7 @@
 // confirms before acting, every time, not once per session, because a light
 // switching on in a shop at two in the morning should never be a stray
 // click.
-package camctl
+package control
 
 import (
 	"context"
@@ -92,14 +92,14 @@ func floodlightState(mode, state int) string {
 // so it needs its own transport and its own substitution point.
 //
 // This does not take ctx, on purpose, even though every caller now has one
-// in hand: Options.CGIDial is the substitution point every test in this
+// in hand: CameraOptions.CGIDial is the substitution point every test in this
 // package already builds against with the two-argument (cam Camera) shape,
 // and widening it to take ctx too would mean rewriting every one of those
 // test doubles for a dial that already carries its own 20 second timeout
 // and is not part of the repeated read/write/read-back chain the fleet
 // timeout actually needs to bound. See cgi.Client.Get and Set, which do
 // take ctx, for the calls that chain matters for.
-func (s *Server) cgiDial(cam Camera) (*cgi.Client, error) {
+func (s *CameraServer) cgiDial(cam Camera) (*cgi.Client, error) {
 	if s.opts.CGIDial != nil {
 		return s.opts.CGIDial(cam)
 	}
@@ -200,7 +200,7 @@ func setFloodlight(ctx context.Context, c *cgi.Client, mode, state int) error {
 // The confirmation dialog itself is not this handler's job. It runs
 // client-side, in the template, before the browser ever issues this
 // request; by the time this runs, the person has already been asked.
-func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

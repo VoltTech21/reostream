@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/VoltTech21/reostream/internal/camctl"
 	"github.com/VoltTech21/reostream/internal/control"
 )
 
@@ -19,7 +18,7 @@ import (
 // login route on neither surface touches the camera fleet config, so
 // neither server here needs a real one.
 func TestCamctlAndControlUseDifferentSessionCookies(t *testing.T) {
-	camctlSrv, err := camctl.New(camctl.Options{Password: "hunter2", ConfigPath: "/nonexistent"})
+	camctlSrv, err := control.NewCameraServer(control.CameraOptions{Password: "hunter2", ConfigPath: "/nonexistent"})
 	if err != nil {
 		t.Fatal(err)
 	}

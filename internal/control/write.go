@@ -1,4 +1,4 @@
-package camctl
+package control
 
 import (
 	"bytes"
@@ -96,7 +96,7 @@ func pairForSet(id uint32) (baichuan.ConfigPair, bool) {
 // this codebase has no right to make. Every effect docs/control.md records
 // as proven was confirmed on a connection opened after the write, not the
 // one that carried it.
-func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []byte, verify bool) (result WriteResult, err error) {
+func (s *CameraServer) writeBlock(ctx context.Context, cam Camera, id uint32, body []byte, verify bool) (result WriteResult, err error) {
 	// refused is checked before anything else here, not only in the UI
 	// that builds the write form, so it holds even for a route added
 	// later by someone who has not read why these ids are refused.
@@ -236,7 +236,7 @@ type writeResultPage struct {
 // actually happened. It is also how a restore runs: a caller resubmits the
 // Before bytes an earlier write returned, and it goes through this same
 // path, which is what gets it verified the same way an ordinary write is.
-func (s *Server) serveWrite(w http.ResponseWriter, r *http.Request) {
+func (s *CameraServer) serveWrite(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {
