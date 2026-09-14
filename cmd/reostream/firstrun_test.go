@@ -4,8 +4,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/VoltTech21/reostream/internal/control"
 )
 
 func TestConfigPathPrefersAnExplicitOverride(t *testing.T) {
@@ -87,5 +90,94 @@ func TestFirstRunClaimedTracksTheFile(t *testing.T) {
 	}
 	if !firstRunClaimed(path) {
 		t.Fatal("not claimed after the file was written")
+	}
+}
+
+// The first-run log line is the ONLY place the claim token appears, so its
+// shape is load-bearing: a person has to find it in `docker logs` and type
+// it into a browser.
+func TestFirstRunMessageCarriesTheTokenAndTheURL(t *testing.T) {
+	msg := firstRunMessage("/data/config.toml", "0.0.0.0:8562", "K7M2-QX94-B3TD-9WFH")
+	for _, want := range []string{
+		"reostream: not yet claimed",
+		// A bind address is not a hostname: only the operator knows which
+		// of this machine's addresses they can reach it on, but the port
+		// is exact.
+		"http://<host>:8562/claim",
+		"and enter this token:",
+		"K7M2-QX94-B3TD-9WFH",
+		"only shown here and only until claimed",
+		// Held in memory only, so a restart invalidates it. Saying so is
+		// what keeps an operator from typing a dead token at a screen that
+		// only tells them it is wrong.
+		"restarting reostream before it is claimed",
+		"/data/config.toml",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the first-run message never says %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestClaimURLNamesTheHostItCan(t *testing.T) {
+	cases := map[string]string{
+		"0.0.0.0:8562":       "http://<host>:8562/claim",
+		":8562":              "http://<host>:8562/claim",
+		"[::]:8562":          "http://<host>:8562/claim",
+		"192.168.1.5:8562":   "http://192.168.1.5:8562/claim",
+		"[2001:db8::1]:8562": "http://[2001:db8::1]:8562/claim",
+	}
+	for listen, want := range cases {
+		if got := claimURL(listen); got != want {
+			t.Errorf("claimURL(%q) = %q, want %q", listen, got, want)
+		}
+	}
+	// Not a host:port at all: say what was configured rather than invent a
+	// URL around it.
+	if got := claimURL("nonsense"); !strings.Contains(got, "nonsense") {
+		t.Errorf("claimURL(%q) = %q, want it to name what was configured", "nonsense", got)
+	}
+}
+
+// The token is held in memory only. A fresh install that starts, prints a
+// token and is restarted before anyone claims it must leave nothing behind
+// on disk for the next process to read -- and the next process must print a
+// different token.
+func TestTheClaimTokenIsNeverWrittenToDisk(t *testing.T) {
+	dir := t.TempDir()
+	tokens := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		ctl, err := control.New(control.Options{
+			AllowNoPassword: true,
+			ConfigPath:      filepath.Join(dir, "config.toml"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok := ctl.ClaimToken()
+		if tok == "" {
+			t.Fatal("an unclaimed install has no claim token")
+		}
+		tokens = append(tokens, tok)
+		ctl.Close()
+	}
+	if tokens[0] == tokens[1] {
+		t.Fatal("a restart while unclaimed reused the token")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tok := range tokens {
+			if strings.Contains(string(b), tok) ||
+				strings.Contains(string(b), strings.ReplaceAll(tok, "-", "")) {
+				t.Fatalf("%s holds a claim token", e.Name())
+			}
+		}
 	}
 }

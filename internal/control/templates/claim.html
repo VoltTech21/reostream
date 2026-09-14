@@ -5,13 +5,15 @@
 <p class="state-down">reostream did not accept this.</p>
 <p>{{.Refused}}</p>
 {{else}}
-<p>Nobody owns this reostream yet. Anyone who can reach this page can set the password, so set it now, from this machine, before anything else.</p>
+<p>Nobody owns this reostream yet. Claiming it takes two things: the one-time token reostream printed in its own log when it started, and the password you want to use from now on.</p>
+<p>The token is in the daemon's log &mdash; <code>docker logs</code> on the container, or <code>journalctl</code> on the service &mdash; in a line beginning &ldquo;reostream: not yet claimed&rdquo;. Capitals and dashes do not matter.</p>
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 <form method="post" action="/claim">
-<label>Password <input type="password" name="password" autofocus required></label>
+<label>Token <input type="text" name="token" autocomplete="off" spellcheck="false" autofocus required></label>
+<label>Password <input type="password" name="password" required></label>
 <button type="submit">Claim it</button>
 </form>
-<p>reostream writes this password into its config file and asks for it from then on. You will sign in with it on the next screen.</p>
+<p>reostream writes this password into its config file and asks for it from then on. You will sign in with it on the next screen. The token is used up once this works, and reostream stops printing it.</p>
 {{end}}
 </div>
 {{end}}

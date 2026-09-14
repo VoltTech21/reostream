@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -39,8 +38,8 @@ const (
 // "is this process still serving with the wide-open first-run default?"
 // is a property of this process. Answering both with a bare os.Stat was a
 // hole: a config file appearing by any route other than the claim handler
-// -- an operator following claimRefusal's own instructions to write a
-// password by hand and THEN restart, a bind mount attaching late, a
+// -- an operator following configPresentMessage's own instructions to
+// write a password by hand and THEN restart, a bind mount attaching late, a
 // config restored from backup -- dropped the gate, 404'd the claim screen
 // and silenced the first-run log, while this process went on serving every
 // route, including plaintext camera credentials and camera writes, with
@@ -217,55 +216,6 @@ func (s *Server) settleClaim() bool {
 	return true
 }
 
-// mayClaim reports whether a request from remoteAddr is allowed to claim
-// this install.
-//
-// The hazard this exists for: claiming on first visit means the first
-// person to arrive owns the install, and this install can write to cameras
-// -- credentials, accounts, time, every curated setting. If the control
-// port is exposed to the internet, whether by a port forward, a DMZ host,
-// or a container published on 0.0.0.0, then "the first person to arrive"
-// is a stranger with a scanner, and the install is theirs before the
-// operator ever opens the page. Requiring a private source address keeps
-// the claim to whoever is already inside the network.
-//
-// Loopback, link-local and the RFC1918 private ranges only. A source that
-// cannot be parsed is not private: fail closed.
-//
-// Deliberately NOT included: 100.64.0.0/10. netip's IsPrivate returns
-// false for it, and that is the behaviour kept here on purpose. It is
-// where every Tailscale address lives, so an operator reaching a fresh
-// install over a tailnet is refused on their own daemon -- an unhappy but
-// accepted cost, because the same range is also real ISP carrier-grade
-// NAT, shared with every other subscriber behind that CGNAT box. An
-// address out of 100.64/10 cannot tell a tailnet peer from an ISP
-// neighbour, so widening the rule to admit the first would admit the
-// second too. Do not "fix" this by adding the range; the refusal names the
-// two ways out instead (see claimRefusal).
-//
-// This function sees only the socket peer, which is the source of truth
-// for exactly one topology: a browser talking straight to this listener.
-// Behind a reverse proxy it is the proxy, and every request on earth then
-// arrives from 127.0.0.1 or a Docker bridge address -- both loopback or
-// private -- which inverts this whole rule into allow-all. A proxy is a
-// more common way to expose an admin page than the raw port forward named
-// above, and sameOriginPost's comment below says outright that this page
-// can sit behind one. A request that says it was forwarded is therefore
-// refused before this function is consulted at all -- see proxied, which
-// also documents the L4 hops that say nothing and so defeat this rule
-// entirely.
-func mayClaim(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return false
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return false
-	}
-	return addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsPrivate()
-}
-
 // hostOfAddr is the address half of a "host:port" remote address, for
 // showing an operator what was seen. It returns the input unchanged when
 // there is no port to strip, so a refusal always names something.
@@ -274,78 +224,6 @@ func hostOfAddr(remoteAddr string) string {
 		return h
 	}
 	return remoteAddr
-}
-
-// proxied reports whether a request carries any header saying it was
-// forwarded, which is proof that its socket peer is a hop rather than the
-// client, and so that mayClaim cannot be reading a real source address.
-//
-// The headers are not parsed and not trusted, only noticed. Trusting their
-// contents would be worse -- anyone can send one -- so the only safe
-// reading is that a forwarded request cannot be shown to be local, and a
-// claim that cannot be shown to be local is refused. A forged header on a
-// direct connection therefore costs an attacker a refusal, never an
-// approval, which is the right way round, and is why the list below can be
-// generous.
-//
-// What this does NOT detect, and cannot: a hop that forwards at the TCP
-// layer instead of the HTTP one. docker-proxy (a plain relay, which is what
-// a published port goes through), Docker Desktop's gateway (traffic arrives
-// from 192.168.65.1), a Kubernetes NodePort with externalTrafficPolicy
-// Cluster, nginx or HAProxy in stream/TCP mode, socat, and ssh -L all add
-// no headers whatsoever. In every one of those mayClaim sees a loopback or
-// private peer, this function sees nothing, and a stranger who can reach
-// the port passes the local-network rule.
-//
-// So: a private peer address is NOT proof of a private client, and this
-// check does not make it one. It closes the HTTP-proxy half only. The
-// durable fix is not a wider header list and not a trusted-proxy setting --
-// it is to stop deciding this from the address at all, which is a product
-// decision that has been put to the maintainer rather than guessed at here.
-func proxied(r *http.Request) bool {
-	// Presence-only, so a false positive costs a refusal and never an
-	// approval. X-Real-IP earns its place on that basis alone: the nginx
-	// snippet everyone copies sets it and nothing else.
-	for _, h := range []string{
-		"X-Forwarded-For",
-		"Forwarded",
-		"X-Real-IP",
-		"CF-Connecting-IP",
-		"X-Forwarded-Proto",
-	} {
-		if r.Header.Get(h) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// claimRefusal is what a refused claimer reads, or "" when this request
-// may claim. A bare 403 is a dead end for a non-coder on their first run,
-// so each refusal says what was seen, why it was refused, and what to do
-// instead.
-func claimRefusal(r *http.Request, configPath string) string {
-	where := configPath
-	if where == "" {
-		where = "reostream's config file"
-	}
-	byHand := fmt.Sprintf("write a [control] section with a password line into %s, then restart reostream.", where)
-
-	if proxied(r) {
-		return "This request arrived through a proxy -- it carries a forwarding header -- so reostream cannot tell where it really came from, " +
-			"and an install can only be claimed from the local network. " +
-			"Two ways forward. Reach this page directly rather than through the proxy, from a machine on the same network as reostream. " +
-			"Or set the password by hand: " + byHand
-	}
-	if !mayClaim(r.RemoteAddr) {
-		return fmt.Sprintf(
-			"This install can only be claimed from the local network, and this request came from %s, which is not a local address. "+
-				"Addresses in 100.64.0.0/10 count as not local too: that range is where Tailscale lives, but it is also shared ISP carrier-grade NAT, and an address alone cannot tell the two apart. "+
-				"Two ways forward. Open this page again from a machine on the same network as reostream, which will reach it from a 192.168.x.x, 10.x.x.x or 172.16-31.x.x address. "+
-				"Or set the password by hand: "+byHand,
-			hostOfAddr(r.RemoteAddr))
-	}
-	return ""
 }
 
 // validClaimPassword checks a submitted password for the two things that
@@ -424,15 +302,19 @@ func configPresentMessage(configPath string) string {
 type claimPage struct {
 	Title string
 
-	// Refused is the explanation shown instead of the form when the
-	// source address may not claim. Non-empty means no form is drawn:
+	// Refused is the explanation shown instead of the form when there is
+	// nothing this request can claim: a config file is already there, and
+	// it will not be overwritten. Non-empty means no form is drawn:
 	// inviting someone to type a password that will be refused on submit
 	// is worse than telling them up front.
 	Refused string
 
-	// Error is a submission that could not be used: an empty password, a
-	// password the config file cannot hold, or a failed write. It never
-	// contains the password.
+	// Error is a submission that could not be used: a wrong token, too
+	// many wrong tokens, an empty password, a password the config file
+	// cannot hold, or a failed write. It never contains the password, and
+	// never the token either -- the token goes to the log and nowhere
+	// else, so a message here may say that one was wrong but must not
+	// repeat, echo or hint at the right one.
 	Error string
 }
 
@@ -441,10 +323,14 @@ type claimPage struct {
 // POST /claim is the one state-changing route with no session behind it,
 // by definition: nobody has a password yet. That makes it the one route a
 // cross-site request forgery can reach -- an attacker's page can make the
-// operator's own browser POST to a private address, and mayClaim sees the
-// operator's LAN address and is satisfied, so the attacker would choose
-// the password for an install they cannot even see. The classic home
-// router attack, exactly.
+// operator's own browser POST to a private address it cannot itself
+// reach. The token blunts this -- an attacker's page does not have the
+// token either -- but it does not close it: an operator with the claim
+// screen open in one tab has just read the token out of their own logs,
+// and a page that can guess or trick them into pasting it would otherwise
+// choose the password for an install it cannot even see. The classic home
+// router attack, exactly. CSRF is a separate concern from the claim gate,
+// and this stays whatever the gate is.
 //
 // Every browser in use sends Origin on a cross-site form POST, so
 // requiring it to match this host closes that. A request with no Origin at
@@ -481,20 +367,17 @@ func (s *Server) serveClaimForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := claimPage{Title: "Claim this install"}
-	page.Refused = claimRefusal(r, s.opts.ConfigPath)
-	if page.Refused == "" {
-		// Unclaimed with a config file already there means a file this
-		// daemon could not read a password out of. The POST would refuse
-		// it; say so now rather than after a password has been typed.
-		if _, err := os.Stat(s.opts.ConfigPath); err == nil {
-			page.Refused = configPresentMessage(s.opts.ConfigPath)
-		}
+	// Unclaimed with a config file already there means a file this daemon
+	// could not read a password out of. The POST would refuse it; say so
+	// now rather than after a password has been typed.
+	if _, err := os.Stat(s.opts.ConfigPath); err == nil {
+		page.Refused = configPresentMessage(s.opts.ConfigPath)
 	}
 	s.render(w, "claim.html", page)
 }
 
-// serveClaim takes the password, writes the config that holds it, and
-// makes it live in this process.
+// serveClaim checks the one-time token, takes the password, writes the
+// config that holds it, and makes it live in this process.
 //
 // Order matters and is not incidental: the file is written first and the
 // running server's auth state is changed only after that write succeeds. A
@@ -507,19 +390,35 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if why := claimRefusal(r, s.opts.ConfigPath); why != "" {
-		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "claim.html", claimPage{
-			Title:   "Claim this install",
-			Refused: why,
-		})
-		return
-	}
 	if !sameOriginPost(r) {
 		w.WriteHeader(http.StatusForbidden)
 		s.render(w, "claim.html", claimPage{
 			Title: "Claim this install",
 			Error: "That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here.",
+		})
+		return
+	}
+
+	// The token, before anything else is looked at. A source that has
+	// already failed this too many times is refused without the compare
+	// even running: the token is the only thing standing between a
+	// stranger who can reach this port and an install that can write to
+	// cameras, so an unthrottled guess loop must not exist.
+	who := hostOfAddr(r.RemoteAddr)
+	if left, blocked := s.throttle.blocked(who); blocked {
+		w.WriteHeader(http.StatusTooManyRequests)
+		s.render(w, "claim.html", claimPage{
+			Title: "Claim this install",
+			Error: tooManyMessage(left),
+		})
+		return
+	}
+	if !claimTokenMatches(s.claimToken(), r.FormValue("token")) {
+		s.throttle.fail(who)
+		w.WriteHeader(http.StatusForbidden)
+		s.render(w, "claim.html", claimPage{
+			Title: "Claim this install",
+			Error: "That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- in a line that begins \"reostream: not yet claimed\". Copy it from there.",
 		})
 		return
 	}
@@ -557,10 +456,14 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		// Live, under the write lock every request's auth read takes, so
 		// the next request through the wrapper is challenged. No restart.
+		// The token is spent in the same breath: it exists to authorise
+		// exactly one claim, and this was it.
 		s.authMu.Lock()
 		s.auth.Password = password
 		s.auth.AllowNoPassword = false
+		s.claimTok = ""
 		s.authMu.Unlock()
+		s.throttle.clear(who)
 	}
 	s.configMu.Unlock()
 
@@ -589,8 +492,8 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	// That it was claimed, and from where. Never the password: this line
 	// goes to stderr, to `docker logs`, and to the in-memory log buffer
 	// the Logs page serves to anyone signed in.
-	log.Printf("reostream: control: this install was claimed from %s; the page now requires the password that was set",
-		hostOfAddr(r.RemoteAddr))
+	log.Printf("reostream: control: this install was claimed from %s; the page now requires the password that was set, and the claim token is spent",
+		who)
 
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

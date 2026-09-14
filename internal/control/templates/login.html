@@ -1,6 +1,7 @@
 {{define "body"}}
 <h1>reostream</h1>
 <div class="card">
+{{if .TooMany}}<p class="state-down">{{.TooMany}}</p>{{end}}
 {{if .Failed}}<p class="state-down">Wrong password.</p>{{end}}
 <form method="post" action="/login">
 <label>Password <input type="password" name="password" autofocus></label>

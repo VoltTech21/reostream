@@ -11,10 +11,12 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,10 +38,10 @@ const defaultListen = "0.0.0.0:8560"
 // to check because nobody has configured anything yet, and the page must
 // still be reachable so someone can. The control page closes this off
 // itself: while no config exists it sends every route to its claim screen,
-// which only a private source address may submit, and claiming writes a
-// password into a real config and starts requiring it in this same process.
-// Do not read this as a general-purpose way to run the control page without
-// a password.
+// which only accepts the one-time token printed below, and claiming writes
+// a password into a real config and starts requiring it in this same
+// process. Do not read this as a general-purpose way to run the control
+// page without a password.
 const defaultControlListen = "0.0.0.0:8562"
 
 // firstRunLogInterval is how often main repeats the "not yet claimed"
@@ -151,6 +153,11 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 	supCtx, cancelSup := context.WithCancel(context.Background())
 
 	var cfg *config.Config
+	// firstRun defers the "not yet claimed" logging until after the control
+	// server exists, because the message carries that server's one-time
+	// claim token and there is nowhere else to get one from. Everything
+	// else about this branch is unchanged.
+	firstRun := false
 	if _, statErr := os.Stat(configPath); errors.Is(statErr, fs.ErrNotExist) {
 		if explicitConfig {
 			// An explicit -config that names a file which is not there is
@@ -175,8 +182,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 				AllowNoPassword: true,
 			},
 		}
-		log.Print(firstRunMessage(configPath))
-		go firstRunLoop(supCtx, configPath)
+		firstRun = true
 	} else {
 		// The file exists (or Stat failed for some other reason, in which
 		// case Load below will surface it): load it normally. A file that
@@ -224,6 +230,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 	// streaming port stays unauthenticated because that is what a recorder
 	// points at; this one holds camera credentials.
 	var controlSrv *http.Server
+	var claimToken string
 	if cfg.Control != nil && cfg.Control.Listen != "" {
 		ctl, err := control.New(control.Options{
 			Password:        cfg.Control.Password,
@@ -239,6 +246,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 			cancelSup()
 			return nil, fmt.Errorf("control: %w", err)
 		}
+		claimToken = ctl.ClaimToken()
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits
 		// on active connections, which is exactly when a live log stream
@@ -252,6 +260,19 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 				log.Printf("reostream: control: %v", err)
 			}
 		}()
+	}
+
+	// After the control server, so the message can carry its claim token,
+	// and before anything blocks: a fresh install must say what it is and
+	// keep saying it until something claims it.
+	if firstRun {
+		controlListen := ""
+		if cfg.Control != nil {
+			controlListen = cfg.Control.Listen
+		}
+		msg := firstRunMessage(configPath, controlListen, claimToken)
+		log.Print(msg)
+		go firstRunLoop(supCtx, configPath, msg)
 	}
 
 	httpSrv := &http.Server{Addr: listen, Handler: srv.Handler()}
@@ -280,13 +301,66 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 	}, nil
 }
 
-// firstRunMessage is the log line startup prints, and firstRunLoop repeats,
-// while the daemon is running on a synthesized first-run config.
-func firstRunMessage(configPath string) string {
-	return fmt.Sprintf("reostream: no config at %s, serving the setup page, not yet claimed", configPath)
+// firstRunMessage is the log block startup prints, and firstRunLoop
+// repeats, while the daemon is running on a synthesized first-run config.
+//
+// It carries the one-time claim token, and the log is the ONLY place that
+// token appears: it is never written to disk, never put in a response body
+// or a URL, and never returned in an error. That is the whole design --
+// what the token proves is that whoever has it can read this daemon's
+// logs, which is what controlling the deployment actually looks like,
+// unlike a source address (see internal/control/claimtoken.go).
+//
+// The token is held in memory only, so restarting an install that has not
+// been claimed yet prints a different one and the old one stops working.
+// The message says so, because an operator who restarts the container
+// while following these instructions would otherwise be typing a dead
+// token at a screen that only tells them it is wrong.
+func firstRunMessage(configPath, controlListen, token string) string {
+	if token == "" {
+		// No control page was started, so there is nothing to claim and no
+		// token to print. The shipped daemon never reaches this -- the
+		// synthesized first-run config always names a control listener --
+		// but a config that names none must still say what it is doing.
+		return fmt.Sprintf("reostream: no config at %s, serving no control page, not yet claimed", configPath)
+	}
+	return fmt.Sprintf(`reostream: not yet claimed. To claim this install, open
+  %s
+and enter this token:
+
+      %s
+
+(The token is only shown here and only until claimed.)
+(It is held in memory only: restarting reostream before it is claimed
+prints a new one, and this one stops working. No config yet at %s.)`,
+		claimURL(controlListen), token, configPath)
 }
 
-// firstRunLoop repeats firstRunMessage every firstRunLogInterval, loud
+// claimURL is the address that message tells an operator to open. A listen
+// address is a bind address, not a hostname: 0.0.0.0 and :: mean "every
+// interface on this machine", and printing either back as something to type
+// into a browser would be sending somebody to an address that does not
+// exist. Those become a literal <host> placeholder, which is honest -- only
+// the operator knows which of this machine's addresses they can reach it on
+// -- while the port, the part they could not guess, is exact.
+func claimURL(controlListen string) string {
+	host, port, err := net.SplitHostPort(controlListen)
+	if err != nil {
+		// Not a host:port at all. Say what was configured rather than
+		// inventing a URL around it.
+		return fmt.Sprintf("the control page (listening on %s), at /claim", controlListen)
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "<host>"
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return fmt.Sprintf("http://%s:%s/claim", host, port)
+}
+
+// firstRunLoop repeats msg every firstRunLogInterval, loud
 // enough that it turns up in `docker logs` without anyone going looking for
 // it, until ctx is cancelled (the daemon is shutting down) or configPath
 // exists (something -- the setup page, or an operator by hand -- has
@@ -300,7 +374,7 @@ func firstRunMessage(configPath string) string {
 // control page's own job, done where the claim is handled; see
 // internal/control/claim.go. This loop just stops saying something that has
 // stopped being true.
-func firstRunLoop(ctx context.Context, configPath string) {
+func firstRunLoop(ctx context.Context, configPath, msg string) {
 	t := time.NewTicker(firstRunLogInterval)
 	defer t.Stop()
 	for {
@@ -311,7 +385,7 @@ func firstRunLoop(ctx context.Context, configPath string) {
 			if firstRunClaimed(configPath) {
 				return
 			}
-			log.Print(firstRunMessage(configPath))
+			log.Print(msg)
 		}
 	}
 }

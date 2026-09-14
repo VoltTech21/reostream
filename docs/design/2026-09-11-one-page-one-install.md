@@ -74,13 +74,56 @@ No config file. No environment variable. No password chosen in advance. The
 daemon starts, streams nothing, and serves a claim screen. Setting a password
 and adding a camera writes `/data/config.toml`.
 
-Three properties of that first run matter more than the convenience:
+Four properties of that first run matter more than the convenience:
 
-**The claim screen only answers a private source address.** An unclaimed install
-whose port is exposed to the internet refuses to be claimed rather than handing
-a stranger something that can write to cameras. On a local network this is never
-noticed. This is the mitigation for the obvious hazard in claim-on-first-visit,
-which is that the first person to arrive owns the install.
+**The claim screen only answers a one-time token printed to the log.** The
+hazard is unchanged and must stay explicit: claim-on-first-visit means the first
+person to arrive owns an install that can write to cameras -- credentials,
+accounts, time, every curated setting. If the control port is reachable by a
+stranger with a scanner, the install is theirs before the operator ever opens
+the page.
+
+What the token asks instead is "can you read this daemon's logs", because that
+is the question with an answer worth trusting: reading the logs means
+controlling the deployment, which is what owning an install should mean. It is
+generated at startup, held in memory only, never written to disk, printed in the
+first-run message and repeated with it, and spent by the claim it authorises. A
+restart before the install is claimed prints a new one and says so. Sixteen
+characters from a 31-character alphabet with no visually ambiguous glyphs (no
+0/O, no 1/I/L) -- 79 bits -- compared in constant time, and accepted however it
+is typed: any case, with the dashes or without.
+
+This replaces an earlier rule that only answered a private source address. That
+rule failed in both directions, from one wrong premise -- that a source address
+tells you who may own an install:
+
+- It refused legitimate operators. `netip`'s `IsPrivate` is false for
+  100.64.0.0/10, the CGNAT range, which is where every Tailscale address lives.
+  Reaching a fresh install over a tailnet, the normal way this fleet is reached,
+  was refused on the operator's own daemon.
+- It admitted strangers. `docker-proxy` is a plain TCP relay that adds no HTTP
+  headers, so a published container port makes every request arrive from
+  127.0.0.1 or 172.17.0.1 with nothing to notice. The same goes for Docker
+  Desktop's gateway, a Kubernetes NodePort with `externalTrafficPolicy: Cluster`,
+  nginx or HAProxy in stream mode, socat and `ssh -L`. This repo ships a
+  Dockerfile and a compose file, so that is the product's own deployment shape.
+
+No longer header list and no trusted-proxy knob fixes a wrong premise. A token
+works identically over a tailnet, behind a reverse proxy and behind an L4 hop,
+and is what Jupyter, Portainer and Home Assistant all do.
+
+**The claim and the login are throttled.** Both are now submittable by anyone who
+can reach the port, and there is deliberately no password-strength rule, so
+repeated failures from one source lock that source out for a few minutes. One
+shared table, keyed by source, failures only, cleared by a success -- and
+bounded, because a table keyed by an attacker-controlled value with no cap turns
+a brute-force fix into a memory-exhaustion hole: entries expire on a TTL and the
+oldest is evicted at the cap.
+
+The cross-site check on `POST /claim` stays. CSRF is a separate concern from the
+claim gate: the token blunts a forged claim but does not close it, since an
+operator with the claim screen open has just read the token out of their own
+logs.
 
 **Unclaimed is loud.** The log says, repeatedly, that there is no config, that
 the setup page is being served, and that nothing has claimed it yet. A half
@@ -123,8 +166,11 @@ real camera or scans a network.
 
 The claim flow needs its own tests, because it is the one path a new user cannot
 avoid: an unclaimed install serves the claim screen; a claimed one does not; a
-non private source address is refused; zero cameras is valid; and the first save
-actually creates the file.
+wrong token is refused and the right one claims; the token is single use and a
+restart while unclaimed yields a different one; the compare is constant time
+(asserted as a call, not as a timing measurement); the throttle triggers, clears
+on success, and keeps its table bounded under a flood of distinct sources; zero
+cameras is valid; and the first save actually creates the file.
 
 Then a live pass, including a first run from genuinely nothing. Every live pass
 run against this project so far has found something no unit test could, and the

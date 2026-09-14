@@ -3,46 +3,13 @@ package control
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 )
-
-func TestMayClaimOnlyFromAPrivateAddress(t *testing.T) {
-	// Claim on first visit means the first person to arrive owns the
-	// install, and this one can write to cameras. A private source keeps
-	// that to whoever is already on the network; a public one means the
-	// port is exposed and a stranger could take it.
-	cases := []struct {
-		addr string
-		want bool
-	}{
-		{"192.168.1.10:5000", true},
-		{"10.0.0.5:5000", true},
-		{"172.16.4.1:5000", true},
-		{"127.0.0.1:5000", true},
-		{"[::1]:5000", true},
-		{"[fd00::1]:5000", true},
-		{"8.8.8.8:5000", false},
-		{"[2606:4700::1111]:5000", false},
-		// Carrier-grade NAT, where every Tailscale address lives and where
-		// an ISP's shared NAT also lives. Refused on purpose: an address
-		// out of this range cannot say which of the two it is. See
-		// mayClaim's comment before widening it.
-		{"100.101.102.103:5000", false},
-		// Unparseable sources fail closed rather than open.
-		{"not-an-address", false},
-		{"", false},
-		{"192.168.1.10", false},
-	}
-	for _, tc := range cases {
-		if got := mayClaim(tc.addr); got != tc.want {
-			t.Errorf("mayClaim(%q) = %v, want %v", tc.addr, got, tc.want)
-		}
-	}
-}
 
 func TestAnUnclaimedInstallServesTheClaimScreen(t *testing.T) {
 	s := newTestServer(t, Options{ConfigPath: filepath.Join(t.TempDir(), "config.toml")})
@@ -67,24 +34,21 @@ func TestAClaimedInstallDoesNotOfferTheClaimScreen(t *testing.T) {
 	}
 }
 
-func TestClaimingFromAPublicAddressIsRefused(t *testing.T) {
-	s := newTestServer(t, Options{ConfigPath: filepath.Join(t.TempDir(), "config.toml")})
-	req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=hunter2"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.RemoteAddr = "8.8.8.8:5000"
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, req)
-	if rec.Code == http.StatusSeeOther {
-		t.Fatal("a public address was allowed to claim the install")
-	}
-}
-
-// postClaim submits a claim from a LAN address.
+// postClaim submits a claim carrying the token this server actually
+// printed, which is what an operator reading the log has.
 func postClaim(t *testing.T, s *Server, password string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("POST", "/claim", strings.NewReader("password="+password))
+	return postClaimFrom(t, s, "192.168.1.10:5000", s.claimToken(), password)
+}
+
+// postClaimFrom submits a claim from a chosen source address with a chosen
+// token, for the tests that care about one or the other.
+func postClaimFrom(t *testing.T, s *Server, remoteAddr, token, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := url.Values{"token": {token}, "password": {password}}.Encode()
+	req := httptest.NewRequest("POST", "/claim", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.RemoteAddr = "192.168.1.10:5000"
+	req.RemoteAddr = remoteAddr
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	return rec
@@ -173,12 +137,16 @@ func TestAnAlreadyClaimedInstallCannotBeClaimedAgain(t *testing.T) {
 }
 
 // A claim is the one state-changing route with no session behind it, so a
-// cross-site POST is the way to steal one: the victim's browser reaches the
-// LAN address the gate is happy with, and the attacker picks the password.
+// cross-site POST is the way to steal one: the victim's browser reaches an
+// address the attacker's own page cannot, and the attacker picks the
+// password. The token blunts this but does not replace it -- CSRF is a
+// separate concern from the claim gate -- so the check stays, and this test
+// hands the forgery the real token to prove the check is doing the work.
 func TestACrossSiteClaimIsRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
-	req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=attacker"))
+	req := httptest.NewRequest("POST", "/claim",
+		strings.NewReader(url.Values{"token": {s.claimToken()}, "password": {"attacker"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "https://evil.example")
 	req.RemoteAddr = "192.168.1.10:5000"
@@ -197,7 +165,8 @@ func TestACrossSiteClaimIsRefused(t *testing.T) {
 
 func TestAClaimFormFromThisPageIsAccepted(t *testing.T) {
 	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: filepath.Join(t.TempDir(), "config.toml")})
-	req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=correct-horse"))
+	req := httptest.NewRequest("POST", "/claim",
+		strings.NewReader(url.Values{"token": {s.claimToken()}, "password": {"correct-horse"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://"+req.Host)
 	req.RemoteAddr = "192.168.1.10:5000"
@@ -230,80 +199,6 @@ func TestAClaimNeverEchoesThePassword(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "correct-horse") ||
 		strings.Contains(rec.Header().Get("Location"), "correct-horse") {
 		t.Fatal("the claim response carried the password back")
-	}
-}
-
-// A refusal has to be actionable: a bare 403 on a first run is a dead end
-// for somebody who is not going to read the source.
-func TestARefusedClaimSaysWhatToDoInstead(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
-	req := httptest.NewRequest("GET", "/claim", nil)
-	// A tailnet address: the operator's own machine, refused all the same.
-	req.RemoteAddr = "100.101.102.103:5000"
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, req)
-	body := rec.Body.String()
-	for _, want := range []string{"100.101.102.103", "local network", path} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the refusal never mentions %q:\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, `type="password"`) {
-		t.Error("the refusal still offers a password form that cannot be submitted")
-	}
-}
-
-// A reverse proxy in front of this page makes every request arrive from
-// 127.0.0.1 or a Docker bridge address, both of which mayClaim calls
-// private, so the local-network rule inverts into allow-all and a stranger
-// on the internet can claim the install. A forwarding header is proof the
-// socket peer is a hop, not a claimer.
-func TestAClaimThroughAProxyIsRefused(t *testing.T) {
-	for _, h := range []struct{ name, value string }{
-		{"X-Forwarded-For", "203.0.113.9"},
-		{"Forwarded", "for=203.0.113.9;proto=https"},
-		// The nginx snippet everyone copies sets only this one.
-		{"X-Real-IP", "203.0.113.9"},
-		{"CF-Connecting-IP", "203.0.113.9"},
-		{"X-Forwarded-Proto", "https"},
-	} {
-		path := filepath.Join(t.TempDir(), "config.toml")
-		s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
-
-		req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=correct-horse"))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set(h.name, h.value)
-		// The proxy itself, which is exactly the address that makes this
-		// dangerous: it passes the private-address rule every time.
-		req.RemoteAddr = "127.0.0.1:5000"
-		rec := httptest.NewRecorder()
-		s.Handler().ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("a claim carrying %s answered %d, want 403", h.name, rec.Code)
-		}
-		if _, err := os.Stat(path); err == nil {
-			t.Errorf("a claim carrying %s wrote a config", h.name)
-		}
-		if s.claimed() {
-			t.Errorf("a claim carrying %s claimed the install", h.name)
-		}
-
-		// And the screen says so rather than offering a form that cannot
-		// be submitted.
-		get := httptest.NewRequest("GET", "/claim", nil)
-		get.Header.Set(h.name, h.value)
-		get.RemoteAddr = "127.0.0.1:5000"
-		grec := httptest.NewRecorder()
-		s.Handler().ServeHTTP(grec, get)
-		body := grec.Body.String()
-		if !strings.Contains(body, "proxy") || !strings.Contains(body, path) {
-			t.Errorf("the %s refusal does not say it was a proxy and what to do instead:\n%s", h.name, body)
-		}
-		if strings.Contains(body, `type="password"`) {
-			t.Errorf("the %s refusal still offers a password form", h.name)
-		}
 	}
 }
 
@@ -562,7 +457,8 @@ func TestAPasswordThatIsNotValidTextIsRefused(t *testing.T) {
 	// Not reachable from a browser; reachable from curl --data-binary.
 	// %q would write it as an escape TOML reads back as something else, so
 	// the password would work until the next restart and not after it.
-	req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=good\x92bad"))
+	req := httptest.NewRequest("POST", "/claim",
+		strings.NewReader("token="+url.QueryEscape(s.claimToken())+"&password=good\x92bad"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.RemoteAddr = "192.168.1.10:5000"
 	rec := httptest.NewRecorder()

@@ -12,6 +12,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -134,11 +135,26 @@ type Server struct {
 	// an owner: claimed keeps re-reading the file while it is set, which
 	// is what lets a real password written afterwards take effect without
 	// a restart.
+	//
+	// claimTok is the one-time token an unclaimed install will accept for
+	// a claim. It is generated once in New, printed to the log by main,
+	// and never written to disk -- a restart while the install is still
+	// unclaimed makes a new one. A successful claim clears it: it
+	// authorises exactly one claim. It lives under authMu with the rest of
+	// the claim state because a claim writes it from one request while
+	// other requests are reading it.
 	authMu       sync.RWMutex
 	auth         webui.Auth
 	claimSettled bool
 	authLocked   bool
+	claimTok     string
 	sessions     *webui.SessionStore
+
+	// throttle is the shared failure lockout in front of the two routes
+	// anyone who can reach this port may submit to without a session: the
+	// claim token and the login password. Both are guessable one attempt
+	// at a time and nothing else rate-limits them. See throttle.go.
+	throttle *throttle
 
 	// configMu serialises writeAndApply end to end: reading the previous
 	// config, validating, writing the file, and reloading the fleet all
@@ -205,6 +221,15 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 	sessions := webui.NewSessionStore()
+	// The token is generated for every process, not only for one that
+	// turns out to be unclaimed: New cannot tell yet, claimed() answers
+	// that from the config file at request time, and a token nobody needs
+	// costs 16 bytes and is never printed. Generating it lazily would mean
+	// deciding that question twice.
+	tok, err := newClaimToken()
+	if err != nil {
+		return nil, fmt.Errorf("claim token: %w", err)
+	}
 	return &Server{
 		opts: opts,
 		rend: rend,
@@ -216,7 +241,9 @@ func New(opts Options) (*Server, error) {
 			LoginPath:       "/login",
 			CookieName:      "reostream_control_session",
 		},
+		claimTok:       tok,
 		sessions:       sessions,
+		throttle:       newThrottle(),
 		done:           make(chan struct{}),
 		inFlightProbes: make(map[string]bool),
 	}, nil
