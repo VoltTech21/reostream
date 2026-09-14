@@ -17,7 +17,7 @@ type stubStatus map[string]server.StreamStatus
 
 func (s stubStatus) StreamStats() map[string]server.StreamStatus { return s }
 
-func writeTestConfig(t *testing.T, body string) string {
+func writeRawTestConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "reostream.toml")
@@ -42,8 +42,8 @@ streams = ["main", "sub"]
 // or triggering the same lockout as, whatever the daemon is already doing
 // with that camera.
 func TestAlreadyStreamingBlocksAConfiguredLiveCamera(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{
+	path := writeRawTestConfig(t, guardTestConfig)
+	s := newTestServer(t, Options{
 		ConfigPath: path,
 		Status: stubStatus{
 			"front/main": server.StreamStatus{Connected: true, Streaming: true},
@@ -69,8 +69,8 @@ func TestAlreadyStreamingBlocksAConfiguredLiveCamera(t *testing.T) {
 // unpredictable moment a probe would race rather than avoid. Blocking is a
 // config-membership decision now, specifically so this case is refused too.
 func TestAlreadyStreamingBlocksAConfiguredButDisconnectedCamera(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{
+	path := writeRawTestConfig(t, guardTestConfig)
+	s := newTestServer(t, Options{
 		ConfigPath: path,
 		Status: stubStatus{
 			"front/main": server.StreamStatus{Connected: false, Restarts: 4},
@@ -91,8 +91,8 @@ func TestAlreadyStreamingBlocksAConfiguredButDisconnectedCamera(t *testing.T) {
 // the match against a config entry written without a port, or the guard is
 // trivially bypassed by typing the address slightly differently.
 func TestAlreadyStreamingMatchesOnNormalizedAddress(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{ConfigPath: path})
+	path := writeRawTestConfig(t, guardTestConfig)
+	s := newTestServer(t, Options{ConfigPath: path})
 
 	if _, blocked := s.alreadyStreaming("192.0.2.50:9000"); !blocked {
 		t.Error("want the guard to match an explicit :9000 against a config entry with no port")
@@ -103,8 +103,8 @@ func TestAlreadyStreamingMatchesOnNormalizedAddress(t *testing.T) {
 // for a camera not yet added, which is the ordinary case this page exists
 // for.
 func TestAlreadyStreamingAllowsAnUnconfiguredAddress(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{
+	path := writeRawTestConfig(t, guardTestConfig)
+	s := newTestServer(t, Options{
 		ConfigPath: path,
 		Status:     stubStatus{"front/main": server.StreamStatus{Connected: true}},
 	})
@@ -120,13 +120,13 @@ func TestAlreadyStreamingAllowsAnUnconfiguredAddress(t *testing.T) {
 // to decide whether to block at all -- it only affects what the blocked
 // message says -- so a missing one alone must not block anything either.
 func TestAlreadyStreamingCannotAnswerWithoutConfig(t *testing.T) {
-	noConfig := New(Options{})
+	noConfig := newTestServer(t, Options{})
 	if _, blocked := noConfig.alreadyStreaming("192.0.2.50"); blocked {
 		t.Error("want blocked = false with no ConfigPath wired")
 	}
 
-	path := writeTestConfig(t, guardTestConfig)
-	noStatus := New(Options{ConfigPath: path})
+	path := writeRawTestConfig(t, guardTestConfig)
+	noStatus := newTestServer(t, Options{ConfigPath: path})
 	if _, blocked := noStatus.alreadyStreaming("192.0.2.50"); !blocked {
 		t.Error("want blocked = true for a configured camera even with no StatusSource wired; " +
 			"blocking is a config-membership decision, Status only affects the message")
@@ -140,8 +140,8 @@ func TestAlreadyStreamingCannotAnswerWithoutConfig(t *testing.T) {
 // The camera's streams are deliberately reported disconnected, since that
 // is now the case that most needs the guard to hold.
 func TestProbeGuardedNeverDialsWhenBlocked(t *testing.T) {
-	path := writeTestConfig(t, guardTestConfig)
-	s := New(Options{
+	path := writeRawTestConfig(t, guardTestConfig)
+	s := newTestServer(t, Options{
 		ConfigPath: path,
 		Status: stubStatus{
 			"front/main": server.StreamStatus{Connected: false},

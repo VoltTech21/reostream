@@ -169,7 +169,7 @@ func TestProbeCameraReconnectsAfterAHangupAndRecordsIt(t *testing.T) {
 		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 	}
 
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
 	cam, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)
@@ -264,11 +264,11 @@ func TestServeCameraRendersSupportAbilitiesAndProbeCounts(t *testing.T) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
 
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: noCGIDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1")
+	resp, err := http.Get(ts.URL + "/cameras/cam1")
 	if err != nil {
 		t.Fatal(err)
 	}

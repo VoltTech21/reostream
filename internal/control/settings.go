@@ -98,7 +98,7 @@ const irLivesInImageWarning = "the infrared cut filter is changed from the Image
 //
 // The status LED (message 209) is here because it is proven; the
 // floodlight is not a Field at all, because its write lives over CGI, not
-// a Baichuan block, and settingsPage carries it separately.
+// a Baichuan block, and cameraPage carries it separately.
 //
 // Lights and IR sets ConfirmReason because everything in it is an emitter:
 // nothing in Picture and OSD switches anything a person or a camera can
@@ -327,51 +327,6 @@ func fieldValue(doc []byte, xpath string) (string, bool) {
 	return string(doc[start:end]), true
 }
 
-// settingsPage is what settings.html renders.
-type settingsPage struct {
-	Title  string
-	Camera Camera
-	Groups []Group
-	// Values maps a Field's XPath to what the camera actually holds right
-	// now, seeded from the read each group's resolved block names. A field
-	// absent from Values is never rendered as an editable, blank input:
-	// see Unavailable.
-	Values map[string]string
-	// Unavailable maps a Field's XPath to why it has no entry in Values,
-	// for every field that is not: none of the group's Blocks answered, or
-	// the block answered but this XPath is not in the document it sent.
-	// settings.html renders this text where the control would be, in
-	// place of the input, so an operator sees a stated fact rather than an
-	// empty box that only fails once they try to use it. This is Finding
-	// 3: a blank editable field for a read that failed gave no indication
-	// anything was wrong until the write itself refused.
-	Unavailable map[string]string
-	// ResolvedBlock maps a Group's Title to whichever of its Blocks
-	// candidates this camera actually answered 200 for, so the form for
-	// each field posts the block that was actually read, not just the
-	// first candidate listed. Absent for a group where no candidate
-	// resolved.
-	ResolvedBlock map[string]string
-	// Err carries a failure that stopped part of this page from being
-	// filled in, the same discipline every other page in this package
-	// follows: text for a person, never inspected.
-	Err string
-
-	// FloodlightOptions, FloodlightCurrent and FloodlightErr seed the
-	// floodlight control. It is not a Field in Groups because its write
-	// goes over CGI, not a Baichuan block, so it cannot go through
-	// curatedField or writeBlock the way every other control here does; it
-	// gets its own section in the template and its own route,
-	// serveApplyFloodlight.
-	FloodlightOptions []floodlightOption
-	FloodlightCurrent string
-	FloodlightErr     string
-	// FloodlightConfirm is the same reason Lights and IR's ConfirmReason
-	// carries, repeated here because the floodlight form lives outside
-	// Groups and so cannot read it off a Group.
-	FloodlightConfirm string
-}
-
 // resolveGroupBlock tries each of g.Blocks against conn, in order, and
 // returns the first one that both names a real read/write pair and reads
 // back 200: this is what discovers, rather than assumes, which of two
@@ -404,78 +359,6 @@ func resolveGroupBlock(ctx context.Context, conn *baichuan.Conn, g Group) (pair 
 		lastReason = "no candidate block is configured for this group"
 	}
 	return baichuan.ConfigPair{}, nil, fmt.Sprintf("this camera did not answer any of %s (%s)", strings.Join(g.Blocks, ", "), lastReason)
-}
-
-// serveSettings shows the curated Picture and OSD group: what a person
-// actually changes, seeded from the same reads the raw view uses, so this
-// page never shows a value it did not itself just read from the camera.
-func (s *CameraServer) serveSettings(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	cam, err := s.byName(name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
-	page := settingsPage{
-		Title:             cam.Name + " settings",
-		Camera:            cam,
-		Groups:            groups(),
-		Values:            map[string]string{},
-		Unavailable:       map[string]string{},
-		ResolvedBlock:     map[string]string{},
-		FloodlightOptions: floodlightOptions,
-		FloodlightConfirm: lightsConfirmReason,
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
-	defer cancel()
-
-	conn, err := s.dial(ctx, cam)
-	if err != nil {
-		page.Err = fmt.Sprintf("could not connect: %v", err)
-		s.render(w, "settings.html", page)
-		return
-	}
-	defer conn.Close()
-
-	for _, g := range page.Groups {
-		pair, doc, failReason := resolveGroupBlock(ctx, conn, g)
-		if failReason != "" {
-			for _, f := range g.Fields {
-				if f.Kind != "warning" {
-					page.Unavailable[f.XPath] = failReason
-				}
-			}
-			continue
-		}
-		page.ResolvedBlock[g.Title] = pair.Name
-		for _, f := range g.Fields {
-			if f.Kind == "warning" {
-				continue
-			}
-			if v, ok := fieldValue(doc, f.XPath); ok {
-				page.Values[f.XPath] = v
-			} else {
-				page.Unavailable[f.XPath] = fmt.Sprintf("%s does not appear in %s on this camera", f.XPath, pair.Name)
-			}
-		}
-	}
-
-	// The floodlight is CGI only, an entirely separate transport and
-	// session from the Baichuan conn dialed above, so a failure reading it
-	// must not blank out the Baichuan groups this handler already filled
-	// in: it is reported on its own, in FloodlightErr, rather than through
-	// page.Err.
-	if c, cgiErr := s.cgiDial(cam); cgiErr != nil {
-		page.FloodlightErr = fmt.Sprintf("could not connect for the floodlight: %v", cgiErr)
-	} else if mode, state, readErr := readFloodlight(ctx, c); readErr != nil {
-		page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
-	} else {
-		page.FloodlightCurrent = floodlightState(mode, state)
-	}
-
-	s.render(w, "settings.html", page)
 }
 
 // curatedField reports whether block/xpath together name one of the fields
@@ -514,7 +397,7 @@ func curatedField(block, xpath string) (Field, bool) {
 // The field seeded on the page and the field a write targets are found by
 // the identical rule on purpose: fieldValue and setField both resolve
 // XPath through locateLeaf, so what an operator sees is what gets changed.
-func (s *CameraServer) serveApplySetting(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {
@@ -597,7 +480,7 @@ func (s *CameraServer) serveApplySetting(w http.ResponseWriter, r *http.Request)
 		After:   string(result.After),
 	}
 	if len(result.Before) > 0 {
-		page.RestoreAction = fmt.Sprintf("/camera/%s/write/%d", cam.Name, pair.Set)
+		page.RestoreAction = fmt.Sprintf("/cameras/%s/write/%d", cam.Name, pair.Set)
 		page.RestoreParam = "body"
 		page.RestoreValue = string(result.Before)
 		page.RestoreHidden = map[string]string{"verify": "true"}

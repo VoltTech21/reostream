@@ -113,7 +113,7 @@ func TestReadBlocksCapturesXMLForA200AndNothingElse(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
 	camObj, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)
@@ -170,11 +170,11 @@ func TestServeBlocksRendersXMLAndConfidenceLabels(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1/blocks")
+	resp, err := http.Get(ts.URL + "/cameras/cam1/advanced")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,11 +235,11 @@ func TestBlocksPageEditorPostsToServeWrite(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1/blocks")
+	resp, err := http.Get(ts.URL + "/cameras/cam1/advanced")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestBlocksPageEditorPostsToServeWrite(t *testing.T) {
 	}
 	html := string(raw)
 
-	wantAction := fmt.Sprintf(`action="/camera/cam1/write/%d"`, pair.Set)
+	wantAction := fmt.Sprintf(`action="/cameras/cam1/write/%d"`, pair.Set)
 	if !strings.Contains(html, wantAction) {
 		t.Fatalf("page does not carry a form posting to %s:\n%s", wantAction, html)
 	}

@@ -91,7 +91,7 @@ func main() {
 	// points at; this one holds camera credentials.
 	var controlSrv *http.Server
 	if cfg.Control != nil && cfg.Control.Listen != "" {
-		ctl := control.New(control.Options{
+		ctl, err := control.New(control.Options{
 			Password:        cfg.Control.Password,
 			AllowNoPassword: cfg.Control.AllowNoPassword,
 			Status:          srv,
@@ -101,6 +101,9 @@ func main() {
 			ConfigPath:      *configPath,
 			Supervisor:      sup,
 		})
+		if err != nil {
+			log.Fatalf("reostream: control: %v", err)
+		}
 		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits
 		// on active connections, which is exactly when a live log stream

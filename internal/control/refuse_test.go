@@ -78,12 +78,12 @@ func TestBatteryMessagesAreRefused(t *testing.T) {
 // TestWriteBlockHonoursTheRefusal proves the guard lives in the write
 // path, not only in whatever UI builds the write form. It calls
 // s.writeBlock directly against a refused id, using a camera address from
-// the documentation range (see writeCameraTestConfig): if refused() were only
+// the documentation range (see writeTestConfig): if refused() were only
 // consulted by a template, writeBlock would try to dial that unreachable
 // address and this test would hang until probeTimeout instead of
 // returning immediately with outcome "refused".
 func TestWriteBlockHonoursTheRefusal(t *testing.T) {
-	s := newCameraTestServer(t, CameraOptions{Password: "hunter2", ConfigPath: writeCameraTestConfig(t, "cam1")})
+	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "cam1")})
 	cam, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)

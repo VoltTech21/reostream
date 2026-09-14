@@ -43,7 +43,7 @@ type accountsPage struct {
 // serveAccounts reads message 58 and renders it. There is no corresponding
 // POST handler in this file or anywhere else, and none should be added; see
 // this file's own top comment.
-func (s *CameraServer) serveAccounts(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveAccounts(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

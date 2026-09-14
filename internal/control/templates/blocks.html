@@ -29,7 +29,7 @@ see docs/control.md.</p>
   nothing, so this form can only ever send what serveBlocks itself just
   read from the camera.
 */}}
-<form method="post" action="/camera/{{$.Camera.Name}}/write/{{.Set}}">
+<form method="post" action="/cameras/{{$.Camera.Name}}/write/{{.Set}}">
 <textarea name="body" rows="4" cols="60">{{.Seed}}</textarea><br>
 <input type="hidden" name="verify" value="true">
 <button type="submit">write</button>

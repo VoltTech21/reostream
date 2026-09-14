@@ -70,7 +70,7 @@ type FleetResult struct {
 //
 // The one call this ceiling still does not reach into is the initial
 // login s.cgiDial's cgi.Dial branch performs: that dial carries only its
-// own 20 second http.Client timeout, not camCtx, because CameraOptions.CGIDial's
+// own 20 second http.Client timeout, not camCtx, because Options.CGIDial's
 // test-double signature has no ctx parameter for a real dial to thread it
 // through. In practice this does not widen the worst case recorded above,
 // since 20 seconds is already inside the budget the four-call chain
@@ -87,7 +87,7 @@ const fleetApplyTimeout = 90 * time.Second
 // Each camera gets its own context, derived from ctx but carrying its own
 // fresh fleetApplyTimeout, so one camera's bound cannot be eaten by another
 // camera's turn ahead of it in the list.
-func (s *CameraServer) applyAll(ctx context.Context, apply func(context.Context, Camera) (WriteResult, error)) []FleetResult {
+func (s *Server) applyAll(ctx context.Context, apply func(context.Context, Camera) (WriteResult, error)) []FleetResult {
 	cams, err := s.fleet()
 	if err != nil {
 		return []FleetResult{{Outcome: "refused", Detail: fmt.Sprintf("could not read the fleet: %v", err)}}
@@ -131,14 +131,14 @@ type fleetApplyPage struct {
 // serveFleetApplyForm shows the two fleet-appliable forms with no results
 // yet: NTP server plus enabled, and timezone, the only two routes
 // Handler wires to applyAll.
-func (s *CameraServer) serveFleetApplyForm(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveFleetApplyForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "fleetapply.html", fleetApplyPage{Title: "Fleet apply"})
 }
 
 // serveFleetApplyNTP pushes one NTP server and enabled flag to every camera
 // in the fleet, through the same setNTP a single camera's time page already
 // uses, and renders one row per camera.
-func (s *CameraServer) serveFleetApplyNTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveFleetApplyNTP(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
@@ -159,7 +159,7 @@ func (s *CameraServer) serveFleetApplyNTP(w http.ResponseWriter, r *http.Request
 
 // serveFleetApplyTimezone pushes one timezone value to every camera in the
 // fleet, through setTimeZone below, and renders one row per camera.
-func (s *CameraServer) serveFleetApplyTimezone(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveFleetApplyTimezone(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
@@ -210,7 +210,7 @@ func readFullTime(ctx context.Context, c *cgi.Client) (map[string]any, error) {
 // actually happened using the same confirmed/accepted/refused vocabulary
 // setNTP already uses for the same reason: a 200 from SetTime is not
 // evidence the camera changed anything, only a fresh read-back is.
-func (s *CameraServer) setTimeZone(ctx context.Context, cam Camera, tz int) (WriteResult, error) {
+func (s *Server) setTimeZone(ctx context.Context, cam Camera, tz int) (WriteResult, error) {
 	c, err := s.cgiDial(cam)
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("camctl: connecting to %q for the timezone: %w", cam.Name, err)

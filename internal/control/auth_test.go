@@ -12,7 +12,11 @@ import (
 
 func newTestServer(t *testing.T, opts control.Options) *httptest.Server {
 	t.Helper()
-	ts := httptest.NewServer(control.New(opts).Handler())
+	s, err := control.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts
 }

@@ -125,7 +125,7 @@ type blocksPage struct {
 // probeCamera's own redial discipline: a message that gets no answer at all
 // is recorded as HungUp and the sweep continues on a fresh connection,
 // because the rest of the sweep is still worth having.
-func (s *CameraServer) readBlocks(ctx context.Context, cam Camera) ([]Block, error) {
+func (s *Server) readBlocks(ctx context.Context, cam Camera) ([]Block, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
@@ -203,7 +203,7 @@ func buildPairRows(blocks []Block) []PairRow {
 // not the camera; see docs/control.md for how each proven and known-inert
 // entry was established, and confidenceOf's own comment for what it takes
 // to move a pair between the tables.
-func (s *CameraServer) serveBlocks(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveBlocks(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cam, err := s.byName(name)
 	if err != nil {

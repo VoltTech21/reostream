@@ -14,9 +14,25 @@
 <li><a href="/">Status</a></li>
 <li><a href="/logs">Logs</a></li>
 <li><a href="/config">Config</a></li>
-<li><a href="/cameras">Cameras</a></li>
 <li><a href="/setup">Setup</a></li>
 </ul>
+<h2>Cameras</h2>
+<ul>
+<li><a href="/cameras">All cameras</a></li>
+<li><a href="/fleet/apply">Fleet apply</a></li>
+{{range fleet}}
+<li><a href="/cameras/{{.Name}}">{{.Name}}</a></li>
+{{end}}
+</ul>
+{{with cameraOf .}}
+<h2>{{.Name}}</h2>
+<ul>
+<li><a href="/cameras/{{.Name}}">Overview</a></li>
+<li><a href="/cameras/{{.Name}}/advanced">Advanced</a></li>
+<li><a href="/cameras/{{.Name}}/time">Time</a></li>
+<li><a href="/cameras/{{.Name}}/accounts">Accounts</a></li>
+</ul>
+{{end}}
 </nav>
 </div>
 <main>

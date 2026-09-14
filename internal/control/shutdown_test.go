@@ -14,7 +14,10 @@ func TestCloseReleasesALiveLogStream(t *testing.T) {
 	// their request contexts, so a subscriber to /logs/stream must be
 	// released by Close, not by the request context, or a live tab would
 	// hold shutdown open for its full timeout.
-	srv := control.New(control.Options{AllowNoPassword: true, Logs: control.NewLogBuffer(10)})
+	srv, err := control.New(control.Options{AllowNoPassword: true, Logs: control.NewLogBuffer(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/logs/stream", nil)
 	rec := httptest.NewRecorder()
 

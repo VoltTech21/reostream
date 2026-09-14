@@ -187,11 +187,11 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: noCGIDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1/settings")
+	resp, err := http.Get(ts.URL + "/cameras/cam1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,11 +321,11 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 		}
 		return baichuan.Dial(ctx, addr, baichuan.Options{Password: ""})
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/camera/cam1/settings", url.Values{
+	resp, err := http.PostForm(ts.URL+"/cameras/cam1/settings", url.Values{
 		"block": {"osd get"},
 		"xpath": {"OsdChannelName/name"},
 		"value": {"lounge"},
@@ -381,11 +381,11 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 	dial := func(ctx context.Context, c Camera) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cam.Addr(), baichuan.Options{Password: ""})
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/camera/cam1/settings", url.Values{
+	resp, err := http.PostForm(ts.URL+"/cameras/cam1/settings", url.Values{
 		"block": {"isp get"},
 		"xpath": {"InputAdvanceCfg/DayNight/IrcutMode"},
 		"value": {"ir"},
@@ -584,11 +584,11 @@ func TestUnavailableFieldRendersExplanationNotBlankInput(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cgiCam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1/settings")
+	resp, err := http.Get(ts.URL + "/cameras/cam1")
 	if err != nil {
 		t.Fatal(err)
 	}

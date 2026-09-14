@@ -9,7 +9,7 @@
 <section>
 <h2>NTP</h2>
 {{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
-<form method="post" action="/camera/{{.Camera.Name}}/time">
+<form method="post" action="/cameras/{{.Camera.Name}}/time">
 <table>
 <tr>
 <td>Enabled</td>

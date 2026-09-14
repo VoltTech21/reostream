@@ -123,11 +123,11 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/camera/cam1/floodlight", url.Values{"option": {"on"}})
+	resp, err := http.PostForm(ts.URL+"/cameras/cam1/floodlight", url.Values{"option": {"on"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,11 +165,11 @@ func TestServeApplyFloodlightRefusesAnUnknownOption(t *testing.T) {
 		dialed = true
 		return nil, nil
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/camera/cam1/floodlight", url.Values{"option": {"strobe"}})
+	resp, err := http.PostForm(ts.URL+"/cameras/cam1/floodlight", url.Values{"option": {"strobe"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,11 +231,11 @@ func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cgiCam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), Dial: dial, CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1/settings")
+	resp, err := http.Get(ts.URL + "/cameras/cam1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestSetFloodlightPreservesEveryOtherField(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 	camera, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)

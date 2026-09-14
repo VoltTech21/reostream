@@ -25,9 +25,9 @@ import (
 // accounts is a page that can lock an operator out of their own cameras,
 // with no way back short of a factory reset.
 func TestThereIsNoRouteThatWritesCameraAccounts(t *testing.T) {
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "lounge")})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "lounge")})
 	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
-		req := httptest.NewRequest(method, "/camera/lounge/accounts", nil)
+		req := httptest.NewRequest(method, "/cameras/lounge/accounts", nil)
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
@@ -105,7 +105,7 @@ func (f *fakeNTPCamera) addr() string { return strings.TrimPrefix(f.srv.URL, "ht
 
 // TestSetNTPGoesOverCGINotBaichuan pins the routing decision itself: NTP
 // has no Baichuan set-time message anywhere in the recovered table, so
-// setNTP must reach the camera through CameraOptions.CGIDial. CameraOptions.Dial is
+// setNTP must reach the camera through Options.CGIDial. Options.Dial is
 // left nil here, pointed at nothing real: if setNTP ever reached for a
 // Baichuan connection instead, this test would fail on that dial rather
 // than on any assertion below.
@@ -114,7 +114,7 @@ func TestSetNTPGoesOverCGINotBaichuan(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 
 	camera, err := s.byName("cam1")
 	if err != nil {
@@ -150,11 +150,11 @@ func TestServeApplyTimeWritesThroughCGI(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/camera/cam1/time", url.Values{"server": {"time.nist.gov"}, "enabled": {"1"}})
+	resp, err := http.PostForm(ts.URL+"/cameras/cam1/time", url.Values{"server": {"time.nist.gov"}, "enabled": {"1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +182,11 @@ func TestServeTimeRendersNTPAndTimezoneReadOnly(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/camera/cam1/time")
+	resp, err := http.Get(ts.URL + "/cameras/cam1/time")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestSetNTPPreservesEveryOtherField(t *testing.T) {
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
 	}
-	s := newCameraTestServer(t, CameraOptions{AllowNoPassword: true, ConfigPath: writeCameraTestConfig(t, "cam1"), CGIDial: cgiDial})
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "cam1"), CGIDial: cgiDial})
 	camera, err := s.byName("cam1")
 	if err != nil {
 		t.Fatal(err)

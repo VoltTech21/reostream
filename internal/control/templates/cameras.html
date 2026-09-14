@@ -1,12 +1,26 @@
 {{define "body"}}
 <h1>Cameras</h1>
+<p><a href="/fleet/apply">fleet apply: push the clock to every camera at once</a></p>
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 {{if .ReloadNote}}<p class="state-streaming">{{.ReloadNote}}</p>{{end}}
+{{if not .Cameras}}
+<p>No cameras are configured.</p>
+{{end}}
 {{range .Cameras}}
 <div class="card">
-<form method="post" action="/cameras">
+<h2><a href="/cameras/{{.Name}}">{{.Name}}</a></h2>
+{{$n := len .Group.Rows}}
+{{if eq $n 0}}
+<p class="pill state-unknown">no status yet</p>
+{{else}}
+{{range .Group.Rows}}
+<p><span class="pill state-{{.State}}">{{.State}}</span>
+<span class="metric">{{printf "%.1f" .FPS}} fps</span>
+<span class="metric">{{.MbpsBitrate}} Mbps</span></p>
+{{end}}
+{{end}}
+<form method="post" action="/cameras/add">
 <input type="hidden" name="name" value="{{.Name}}">
-<h2>{{.Name}}</h2>
 <label>Address <input name="address" value="{{.Address}}"></label>
 <label>Username <input name="username" value="{{.Username}}"></label>
 <label>Password <input type="password" name="password" value="{{$.Unchanged}}"
@@ -25,7 +39,7 @@
 
 <div class="card">
 <h2>Add a camera</h2>
-<form method="post" action="/cameras">
+<form method="post" action="/cameras/add">
 <label>Name <input name="name"></label>
 <label>Address <input name="address"></label>
 <label>Username <input name="username" value="admin"></label>

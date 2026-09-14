@@ -6,12 +6,6 @@ import (
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
-// authed wraps h so it is only reachable with a session, unless the
-// operator turned authentication off on purpose.
-func (s *Server) authed(h http.Handler) http.Handler {
-	return s.auth.Wrap(h)
-}
-
 func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "login.html", struct {
 		Title  string

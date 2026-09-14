@@ -64,9 +64,21 @@ func (c formCamera) HasStream(name string) bool {
 	return false
 }
 
+// cameraListEntry is one line of the camera list: a config.toml entry with
+// the template's form helpers (formCamera), joined by name with this
+// camera's dashboard group, so the same page that edits a camera's config
+// also shows whether it is actually streaming and links into its device
+// page. A camera cameraGroups has never heard from still gets an entry,
+// with a zero-value Group that renders as "no status yet" the same way the
+// dashboard does.
+type cameraListEntry struct {
+	formCamera
+	Group cameraGroup
+}
+
 type camerasPage struct {
 	Title      string
-	Cameras    []formCamera
+	Cameras    []cameraListEntry
 	AllStreams []string
 	Unchanged  string
 	Error      string
@@ -88,7 +100,10 @@ func (s *Server) camerasPage() camerasPage {
 		return page
 	}
 	for _, cam := range cfg.Cameras {
-		page.Cameras = append(page.Cameras, formCamera{Camera: cam})
+		page.Cameras = append(page.Cameras, cameraListEntry{
+			formCamera: formCamera{Camera: cam},
+			Group:      s.cameraGroupFor(cam.Name),
+		})
 	}
 	return page
 }

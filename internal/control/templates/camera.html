@@ -1,6 +1,67 @@
+{{/*
+  camera.html: one camera, one page, two aspects. cameraPage (camerapage.go)
+  renders the dashboard's own stream state and video for this camera
+  (Group), what GetSupport and GetAbilities say the camera is plus the
+  probe table (Support/Abilities/Probes), and then the curated settings a
+  person actually changes (Groups, from settings.go's groups()), including
+  the floodlight, which is not a Group field because its write goes over
+  CGI rather than a Baichuan block.
+*/}}
 {{define "body"}}
 <h1>{{.Camera.Name}}</h1>
 <p class="hint">{{.Camera.Address}}</p>
+
+<section>
+<h2>Live</h2>
+{{template "cameravideo" .Group}}
+{{if .Group.Rows}}
+<div class="card table-wrap">
+<table>
+<tr><th>Stream</th><th>State</th><th>FPS</th><th>Bitrate</th><th>Clients</th><th>Restarts</th></tr>
+{{range .Group.Rows}}
+<tr>
+<td>{{.Name}}</td>
+<td class="state-{{.State}}">{{.State}}</td>
+<td>{{printf "%.1f" .FPS}}</td>
+<td>{{.MbpsBitrate}} Mbps</td>
+<td>{{.Clients}}</td>
+<td>{{.Restarts}}</td>
+</tr>
+{{end}}
+</table>
+</div>
+{{end}}
+</section>
+
+<script src="/assets/mpegts.js"></script>
+<script>
+// Same discipline as the dashboard's own tile: nothing decodes until the
+// play button is clicked, so opening this page never starts a decode on
+// its own. See dashboard.html's own comment for why that matters at fleet
+// scale; a single camera page duplicates just enough of it to drive its
+// own one tile, since each page's body is rendered independently and
+// cannot call into the other's script.
+(function () {
+  var container = document.querySelector('.cam-video[data-src]');
+  if (!container) return;
+  var btn = container.querySelector('.play-btn');
+  var video = container.querySelector('video');
+  function start() {
+    if (!window.mpegts || !mpegts.isSupported()) return;
+    var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: container.dataset.src});
+    player.attachMediaElement(video);
+    player.load();
+    player.play();
+    video.setAttribute('controls', '');
+    btn.hidden = true;
+  }
+  btn.addEventListener('click', start);
+  video.addEventListener('click', function () {
+    if (!video.hasAttribute('controls')) start();
+  });
+})();
+</script>
+
 {{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
 
 {{if .Support}}
@@ -34,7 +95,8 @@
 <h2>What it answers</h2>
 <p class="hint">A message this model does not implement answers 405 rather than dropping the connection,
 which is what makes asking about every known message safe, and is the only honest way to
-find out what a model has: no table can say it in advance.</p>
+find out what a model has: no table can say it in advance. See
+<a href="/cameras/{{.Camera.Name}}/advanced">every block, as XML</a> for the raw documents.</p>
 <table>
 <tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>No answer</th></tr>
 <tr><td>{{.SupportedCount}}</td><td>{{.WantsParamsCount}}</td><td>{{.AbsentCount}}</td><td>{{.HungUpCount}}</td></tr>
@@ -52,4 +114,91 @@ find out what a model has: no table can say it in advance.</p>
 </table>
 </div>
 {{end}}
+
+{{/* Curated settings: Picture and OSD, and Lights and IR, from settings.go's groups(). */}}
+<h2>Settings</h2>
+{{if .SettingsErr}}<p class="outcome-refused">{{.SettingsErr}}</p>{{end}}
+{{range $group := .Groups}}
+<section>
+<h3>{{$group.Title}}</h3>
+{{if $group.ConfirmReason}}
+<p class="warning">{{$group.ConfirmReason}}</p>
+{{end}}
+<table>
+{{range $group.Fields}}
+{{if eq .Kind "warning"}}
+<tr><td colspan="2"><p class="warning">{{.Label}}</p></td></tr>
+{{else if index $.Unavailable .XPath}}
+{{/*
+  Finding 3: a curated field whose read failed, or whose path this camera's
+  document does not carry, must say so where the control would be, never
+  render as a blank editable input that only fails once someone submits it.
+*/}}
+<tr>
+<td>{{.Label}}</td>
+<td><p class="warning">not available: {{index $.Unavailable .XPath}}</p></td>
+</tr>
+{{else}}
+{{$current := index $.Values .XPath}}
+<tr>
+<td>{{.Label}}</td>
+<td>
+{{/*
+  Every form in a group that sets ConfirmReason asks before it submits,
+  every time, not once per session: this is the one place in the page
+  where a click has a physical effect a document can't be reasoned about
+  from afar, such as a light switching on in a shop at two in the
+  morning, and that must never be a stray click.
+*/}}
+<form method="post" action="/cameras/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
+<input type="hidden" name="block" value="{{index $.ResolvedBlock $group.Title}}">
+<input type="hidden" name="xpath" value="{{.XPath}}">
+{{if eq .Kind "toggle"}}
+<select name="value">
+<option value="0" {{if eq $current "0"}}selected{{end}}>off</option>
+<option value="1" {{if eq $current "1"}}selected{{end}}>on</option>
+</select>
+{{else if eq .Kind "number"}}
+<input type="number" name="value" value="{{$current}}">
+{{else}}
+<input type="text" name="value" value="{{$current}}">
+{{end}}
+<button type="submit">set</button>
+</form>
+</td>
+</tr>
+{{end}}
+{{end}}
+</table>
+</section>
+{{end}}
+
+{{/*
+  The floodlight, from settings.go's floodlightOptions. It is not a Group
+  field: its write goes over CGI (SetWhiteLed), never over a Baichuan
+  block, because message 288 (floodlight set) is known inert on this
+  firmware. Same confirm-every-time rule as Lights and IR, spelled out
+  again here because this form lives outside Groups.
+*/}}
+<section>
+<h3>Floodlight</h3>
+<p class="warning">{{.FloodlightConfirm}}</p>
+{{if .FloodlightErr}}<p class="outcome-refused">{{.FloodlightErr}}</p>{{end}}
+<table>
+<tr>
+<td>Floodlight</td>
+<td>
+<form method="post" action="/cameras/{{.Camera.Name}}/floodlight" onsubmit="return confirm('{{.FloodlightConfirm}}')">
+<select name="option">
+{{$currentFloodlight := .FloodlightCurrent}}
+{{range .FloodlightOptions}}
+<option value="{{.Value}}" {{if eq .Value $currentFloodlight}}selected{{end}}>{{.Value}}</option>
+{{end}}
+</select>
+<button type="submit">set</button>
+</form>
+</td>
+</tr>
+</table>
+</section>
 {{end}}

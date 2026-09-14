@@ -65,7 +65,7 @@ func newBlockProbe(name string, id uint32, status int16, xml []byte) BlockProbe 
 
 // dial opens one connection to cam, using opts.Dial when the caller supplied
 // one so tests can substitute a fake camera, and baichuan.Dial otherwise.
-func (s *CameraServer) dial(ctx context.Context, cam Camera) (*baichuan.Conn, error) {
+func (s *Server) dial(ctx context.Context, cam Camera) (*baichuan.Conn, error) {
 	if s.opts.Dial != nil {
 		return s.opts.Dial(ctx, cam)
 	}
@@ -86,7 +86,7 @@ func (s *CameraServer) dial(ctx context.Context, cam Camera) (*baichuan.Conn, er
 // answer and the loop redials and continues, because the rest of the sweep
 // is still worth having and a camera that drops one connection over one
 // message has still told us something real about that message.
-func (s *CameraServer) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, error) {
+func (s *Server) probeCamera(ctx context.Context, cam Camera) ([]BlockProbe, error) {
 	ctx, cancel := context.WithTimeout(ctx, cameraProbeTimeout)
 	defer cancel()
 
