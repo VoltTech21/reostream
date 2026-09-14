@@ -78,6 +78,17 @@ var renameConfig = os.Rename
 // disk just because it is well formed, or a restart is left unable to boot
 // from the very file it wrote.
 func saveConfig(path, text string, checkFleet func([]config.Camera) error) error {
+	// The very first save has nothing to put a temp file next to: the data
+	// directory is a fresh volume and may not exist yet. MkdirAll first so
+	// that case works; it is a harmless no-op every other time, when the
+	// directory is already there. 0700 because the directory exists only
+	// to hold config.toml, which is created at 0600 below and full of
+	// camera credentials — no group or other access to either.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+
 	// Prefer the target's own directory: a temp file there lives on the
 	// same filesystem as path, which is what keeps the atomic rename below
 	// available. But that directory is /etc/reostream in the shipped image,
@@ -87,7 +98,7 @@ func saveConfig(path, text string, checkFleet func([]config.Camera) error) error
 	// validation still has somewhere to put the candidate text, and note
 	// that the rename path is now unavailable since the fallback location
 	// is not guaranteed to share a filesystem with path.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".reostream-config-*")
+	tmp, err := os.CreateTemp(dir, ".reostream-config-*")
 	sameFS := true
 	if err != nil {
 		if !errors.Is(err, os.ErrPermission) {

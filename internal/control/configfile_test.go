@@ -96,6 +96,31 @@ func TestSaveConfigReportsTheRealPathNotTheTempFile(t *testing.T) {
 	}
 }
 
+func TestSaveCreatesTheConfigAndItsDirectory(t *testing.T) {
+	// First run has no file and may have no directory either: the data
+	// directory is a fresh volume.
+	dir := filepath.Join(t.TempDir(), "data")
+	path := filepath.Join(dir, "config.toml")
+
+	if err := saveConfig(path, validTOML, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("config was not created: %v", err)
+	}
+	if string(got) != validTOML {
+		t.Fatalf("config holds %q", got)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("new config created with mode %v, want 0600: it holds camera credentials", perm)
+	}
+}
+
 func TestSaveConfigPreservesTheTargetsExistingMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
