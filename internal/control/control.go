@@ -123,9 +123,14 @@ type Server struct {
 	// writes them once. Lock order: authMu is the innermost lock here --
 	// the claim handler holds configMu while taking it, and nothing under
 	// authMu ever reaches for configMu.
-	authMu   sync.RWMutex
-	auth     webui.Auth
-	sessions *webui.SessionStore
+	//
+	// claimSettled is the memo for claimed's config read: once the file
+	// has said this install has an owner, that answer cannot change back,
+	// so there is no reason to re-read it on every request afterwards.
+	authMu       sync.RWMutex
+	auth         webui.Auth
+	claimSettled bool
+	sessions     *webui.SessionStore
 
 	// configMu serialises writeAndApply end to end: reading the previous
 	// config, validating, writing the file, and reloading the fleet all

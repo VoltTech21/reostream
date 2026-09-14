@@ -2,6 +2,7 @@ package control_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/VoltTech21/reostream/internal/control"
@@ -39,6 +40,8 @@ func TestStreamMountRequiresAuth(t *testing.T) {
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
+	// The Location is checked below, not just the 303: a claim-gate
+	// redirect is also a 303, and this test is about the login one.
 	resp, err := c.Get(ts.URL + "/stream/gate.ts")
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +49,9 @@ func TestStreamMountRequiresAuth(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("unauthenticated GET /stream/gate.ts = %d, want a redirect to login", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "/login") {
+		t.Fatalf("unauthenticated GET /stream/gate.ts redirected to %q, want /login", loc)
 	}
 }
 

@@ -1,9 +1,9 @@
 package control
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -11,6 +11,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/VoltTech21/reostream/internal/config"
 )
 
 // The listen addresses a claim writes into the config it creates. They
@@ -28,30 +31,140 @@ const (
 	claimDefaultControlListen = "0.0.0.0:8562"
 )
 
-// claimed reports whether this install has an owner.
+// claimed reports whether this install has an owner, and brings the
+// running auth state into line with the answer on the way past.
 //
-// A password held by the running server is the primary answer, and it is
-// read from the live auth state, not from Options, so a claim takes effect
-// in this process the moment it is made rather than at the next restart.
+// It is deliberately not one fact answering two questions. "Should the
+// claim screen still be offered?" is a property of the config file;
+// "is this process still serving with the wide-open first-run default?"
+// is a property of this process. Answering both with a bare os.Stat was a
+// hole: a config file appearing by any route other than the claim handler
+// -- an operator following claimRefusal's own instructions to write a
+// password by hand and THEN restart, a bind mount attaching late, a
+// config restored from backup -- dropped the gate, 404'd the claim screen
+// and silenced the first-run log, while this process went on serving every
+// route, including plaintext camera credentials and camera writes, with
+// AllowNoPassword still set. The daemon's own advice opened that window.
 //
-// With no password the install is unclaimed only if there is also no config
-// file. An operator who wrote a config by hand -- including one that sets
-// allow_no_password = true, which is a deliberate choice this daemon has
-// always supported -- has already configured this install, and must not be
-// shown a claim screen over the top of it, nor have that file replaced by
-// whoever POSTs /claim first.
+// So the file is read, not stat'ed, and the auth state is adopted from
+// what it says:
 //
-// Fail closed on a stat error that is not "no such file": an unreadable
-// data directory makes the install unclaimable, never claimable.
+//   - a live password already held: claimed, nothing to read.
+//   - [control].password set: claimed, and adopted, so this process starts
+//     requiring it without a restart. Adoption is the half that actually
+//     closes the hole.
+//   - [control].allow_no_password: claimed. That is an operator's
+//     deliberate choice and the live state already matches it.
+//   - a config with no [control] section at all: claimed, because the file
+//     exists and says nothing about this page, so however this process was
+//     configured stands. The shipped daemon never reaches this -- it only
+//     starts the page when [control] names a listener, and config.Validate
+//     refuses such a listener with neither a password nor
+//     allow_no_password -- but a page left open by it is still worth
+//     saying out loud, so it logs.
+//   - no file: unclaimed. The gate stays shut, which is the whole point.
+//   - anything else -- unparseable, unreadable, a directory, a file caught
+//     half-written, a [control] with no answer in it -- NOT claimed.
+//     Stricter than the os.Stat it replaces, and it means a half-written
+//     config cannot drop the gate. serveClaim separately refuses to write
+//     over a file that is already there, so "unclaimed" never costs
+//     somebody their cameras.
+//
+// Adoption only ever tightens. Nothing here turns AllowNoPassword on, or
+// replaces a password already in hand; a config file is not allowed to
+// open up a process that is already closed.
 func (s *Server) claimed() bool {
 	s.authMu.RLock()
-	pw := s.auth.Password
+	settled := s.claimSettled || s.auth.Password != ""
 	s.authMu.RUnlock()
-	if pw != "" {
+	if settled {
 		return true
 	}
-	_, err := os.Stat(s.opts.ConfigPath)
-	return !errors.Is(err, fs.ErrNotExist)
+
+	// No lock held across the read: it touches the filesystem, and
+	// configMu (which callers such as serveClaim already hold) is the
+	// outer lock, authMu the inner one.
+	cfg, err := config.LoadRaw(s.opts.ConfigPath)
+	if err != nil {
+		return false
+	}
+	if cfg.Control == nil {
+		if s.settleClaim() && s.authNow().AllowNoPassword {
+			log.Printf("reostream: control: the config at %s has no [control] section, so this page is still serving with no password; add a password line under [control] to close it",
+				s.opts.ConfigPath)
+		}
+		return true
+	}
+	switch {
+	case cfg.Control.Password != "":
+		s.adoptPassword(cfg.Control.Password)
+		return true
+	case cfg.Control.AllowNoPassword:
+		s.settleClaim()
+		return true
+	}
+	return false
+}
+
+// adoptPassword makes a password found in the config file the one this
+// process requires, without a restart.
+//
+// raw is a value as written in the file, so it may be a "$NAME"
+// environment reference, which is how the shipped deployment keeps the
+// real password out of the file. An unset variable is not a reason to keep
+// serving unauthenticated: the install is claimed either way, so the page
+// locks instead, with a password nothing can match, until a restart reads
+// the config properly. Locked and wrong is recoverable; open is not.
+func (s *Server) adoptPassword(raw string) {
+	pw := raw
+	locked := false
+	if name, ok := strings.CutPrefix(raw, "$"); ok {
+		if v, set := os.LookupEnv(name); set {
+			pw = v
+		} else {
+			// rand.Text, not the empty string: an empty password would
+			// make Auth.Check("") succeed, which is the opposite of
+			// locking.
+			pw = rand.Text()
+			locked = true
+		}
+	}
+
+	s.authMu.Lock()
+	adopted := s.auth.Password == ""
+	if adopted {
+		s.auth.Password = pw
+		s.auth.AllowNoPassword = false
+		s.claimSettled = true
+	}
+	s.authMu.Unlock()
+
+	// Once, because the branch above cannot be taken twice: after it runs
+	// the password is no longer empty. Never the password itself.
+	if adopted {
+		if locked {
+			log.Printf("reostream: control: the config at %s sets [control].password from an environment variable that is not set; this page is locked until reostream is restarted",
+				s.opts.ConfigPath)
+			return
+		}
+		log.Printf("reostream: control: a config with a [control] password appeared at %s; this page now requires it",
+			s.opts.ConfigPath)
+	}
+}
+
+// settleClaim records that the config file has answered the question, so
+// claimed stops re-reading it on every request. Claiming is one way: an
+// install that has an owner does not lose one. It reports whether this
+// call was the one that settled it, which is what lets a caller log the
+// transition exactly once.
+func (s *Server) settleClaim() bool {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.claimSettled {
+		return false
+	}
+	s.claimSettled = true
+	return true
 }
 
 // mayClaim reports whether a request from remoteAddr is allowed to claim
@@ -79,6 +192,18 @@ func (s *Server) claimed() bool {
 // neighbour, so widening the rule to admit the first would admit the
 // second too. Do not "fix" this by adding the range; the refusal names the
 // two ways out instead (see claimRefusal).
+//
+// This function sees only the socket peer, which is the source of truth
+// for exactly one topology: a browser talking straight to this listener.
+// Behind a reverse proxy it is the proxy, and every request on earth then
+// arrives from 127.0.0.1 or a Docker bridge address -- both loopback or
+// private -- which inverts this whole rule into allow-all. A proxy is a
+// more common way to expose an admin page than the raw port forward named
+// above, and sameOriginPost's comment below says outright that this page
+// can sit behind one. So that case is not decided here, where there is no
+// evidence either way; it is decided in proxied, on the request, and a
+// request showing any sign of having been forwarded is refused. See
+// proxied.
 func mayClaim(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -101,20 +226,53 @@ func hostOfAddr(remoteAddr string) string {
 	return remoteAddr
 }
 
-// claimRefusal is what a refused claimer reads. A bare 403 is a dead end
-// for a non-coder on their first run, so this names the address that was
-// seen, says plainly why it was refused, and gives both ways forward.
-func claimRefusal(remoteAddr, configPath string) string {
+// proxied reports whether a request reached this daemon through something
+// that forwards, which makes its socket peer meaningless as evidence of
+// who sent it.
+//
+// The headers are not parsed and not trusted, only noticed. Their presence
+// alone is proof that mayClaim is looking at a hop rather than a claimer:
+// behind Caddy, nginx, Traefik, or a Docker port publish that goes through
+// the userland proxy, the peer is 127.0.0.1 or 172.17.0.1, so a stranger
+// on the internet passes the private-address rule and the whole rule
+// inverts into allow-all. Trusting the header's contents instead would be
+// worse -- anyone can send one -- so the only safe reading is that a
+// forwarded request cannot be shown to be local, and a claim that cannot
+// be shown to be local is refused.
+//
+// A forged header on a direct connection therefore costs an attacker a
+// refusal, never an approval, which is the right way round. The refusal
+// names two ways forward, and neither needs the proxy to cooperate.
+func proxied(r *http.Request) bool {
+	return r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != ""
+}
+
+// claimRefusal is what a refused claimer reads, or "" when this request
+// may claim. A bare 403 is a dead end for a non-coder on their first run,
+// so each refusal says what was seen, why it was refused, and what to do
+// instead.
+func claimRefusal(r *http.Request, configPath string) string {
 	where := configPath
 	if where == "" {
 		where = "reostream's config file"
 	}
-	return fmt.Sprintf(
-		"This install can only be claimed from the local network, and this request came from %s, which is not a local address. "+
-			"Addresses in 100.64.0.0/10 count as not local too: that range is where Tailscale lives, but it is also shared ISP carrier-grade NAT, and an address alone cannot tell the two apart. "+
-			"Two ways forward. Open this page again from a machine on the same network as reostream, which will reach it from a 192.168.x.x, 10.x.x.x or 172.16-31.x.x address. "+
-			"Or set the password by hand: write a [control] section with a password line into %s, then restart reostream.",
-		hostOfAddr(remoteAddr), where)
+	byHand := fmt.Sprintf("write a [control] section with a password line into %s, then restart reostream.", where)
+
+	if proxied(r) {
+		return "This request arrived through a proxy -- it carries a forwarding header -- so reostream cannot tell where it really came from, " +
+			"and an install can only be claimed from the local network. " +
+			"Two ways forward. Reach this page directly rather than through the proxy, from a machine on the same network as reostream. " +
+			"Or set the password by hand: " + byHand
+	}
+	if !mayClaim(r.RemoteAddr) {
+		return fmt.Sprintf(
+			"This install can only be claimed from the local network, and this request came from %s, which is not a local address. "+
+				"Addresses in 100.64.0.0/10 count as not local too: that range is where Tailscale lives, but it is also shared ISP carrier-grade NAT, and an address alone cannot tell the two apart. "+
+				"Two ways forward. Open this page again from a machine on the same network as reostream, which will reach it from a 192.168.x.x, 10.x.x.x or 172.16-31.x.x address. "+
+				"Or set the password by hand: "+byHand,
+			hostOfAddr(r.RemoteAddr))
+	}
+	return ""
 }
 
 // validClaimPassword checks a submitted password for the two things that
@@ -126,6 +284,14 @@ func validClaimPassword(pw string) error {
 	}
 	if strings.HasPrefix(pw, "$") {
 		return errors.New("a password cannot start with \"$\". In this config file a leading $ means \"read this from the environment variable of that name\", so reostream would go looking for a variable instead of using what you typed.")
+	}
+	// Before ranging: a byte that is not valid UTF-8 comes out of a range
+	// loop as U+FFFD, which passes every check below, and then %q writes
+	// it as an escape the TOML reader reads back as a different character
+	// entirely. The password would work until the next restart and not
+	// after it. No browser can send this; curl --data-binary can.
+	if !utf8.ValidString(pw) {
+		return errors.New("that password is not valid text. Type it again, using characters your keyboard produces.")
 	}
 	for _, r := range pw {
 		if r < 0x20 || r == 0x7f {
@@ -162,6 +328,14 @@ listen = %q
 password = %q
 `, claimDefaultListen, claimDefaultControlListen, password)
 }
+
+// errAlreadyClaimed is the re-check inside the claim's lock finding that
+// another claim got there first.
+var errAlreadyClaimed = errors.New("this install has already been claimed")
+
+// errConfigPresent is a claim on an install that is unclaimed but does have
+// a config file: a broken one. Writing would destroy it.
+var errConfigPresent = errors.New("a config file is already there")
 
 type claimPage struct {
 	Title string
@@ -223,9 +397,7 @@ func (s *Server) serveClaimForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := claimPage{Title: "Claim this install"}
-	if !mayClaim(r.RemoteAddr) {
-		page.Refused = claimRefusal(r.RemoteAddr, s.opts.ConfigPath)
-	}
+	page.Refused = claimRefusal(r, s.opts.ConfigPath)
 	s.render(w, "claim.html", page)
 }
 
@@ -243,11 +415,11 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !mayClaim(r.RemoteAddr) {
+	if why := claimRefusal(r, s.opts.ConfigPath); why != "" {
 		w.WriteHeader(http.StatusForbidden)
 		s.render(w, "claim.html", claimPage{
 			Title:   "Claim this install",
-			Refused: claimRefusal(r.RemoteAddr, s.opts.ConfigPath),
+			Refused: why,
 		})
 		return
 	}
@@ -276,7 +448,15 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	s.configMu.Lock()
 	err := func() error {
 		if s.claimed() {
-			return errors.New("this install has already been claimed.")
+			return errAlreadyClaimed
+		}
+		// Unclaimed does not always mean there is no file: a config that
+		// will not parse, or one whose [control] section answers neither
+		// question, leaves the gate shut on purpose. A claim writes a
+		// whole file, so writing one here would destroy whatever cameras
+		// that file holds. Refuse instead, and say what to do.
+		if _, statErr := os.Stat(s.opts.ConfigPath); statErr == nil {
+			return errConfigPresent
 		}
 		// checkFleet is nil: a claim writes no cameras, so there is no
 		// camera list for the supervisor to have an opinion about.
@@ -293,6 +473,23 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	s.configMu.Unlock()
 
 	if err != nil {
+		// A claim that lost a race with another claim gets the answer a
+		// late claim gets anywhere else on this route: the screen is gone,
+		// because the install now has an owner. Only a real write failure
+		// is a 500.
+		if errors.Is(err, errAlreadyClaimed) {
+			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, errConfigPresent) {
+			w.WriteHeader(http.StatusConflict)
+			s.render(w, "claim.html", claimPage{
+				Title: "Claim this install",
+				Error: fmt.Sprintf("There is already a config file at %s, but reostream cannot read a [control] password out of it -- it may not parse, or the section may be incomplete. "+
+					"It will not be overwritten. Fix that file by hand, give its [control] section a password line, and restart reostream.", s.opts.ConfigPath),
+			})
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		s.render(w, "claim.html", claimPage{Title: "Claim this install", Error: err.Error()})
 		return

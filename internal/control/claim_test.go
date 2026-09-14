@@ -254,6 +254,232 @@ func TestARefusedClaimSaysWhatToDoInstead(t *testing.T) {
 	}
 }
 
+// A reverse proxy in front of this page makes every request arrive from
+// 127.0.0.1 or a Docker bridge address, both of which mayClaim calls
+// private, so the local-network rule inverts into allow-all and a stranger
+// on the internet can claim the install. A forwarding header is proof the
+// socket peer is a hop, not a claimer.
+func TestAClaimThroughAProxyIsRefused(t *testing.T) {
+	for _, h := range []struct{ name, value string }{
+		{"X-Forwarded-For", "203.0.113.9"},
+		{"Forwarded", "for=203.0.113.9;proto=https"},
+	} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+
+		req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=correct-horse"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set(h.name, h.value)
+		// The proxy itself, which is exactly the address that makes this
+		// dangerous: it passes the private-address rule every time.
+		req.RemoteAddr = "127.0.0.1:5000"
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("a claim carrying %s answered %d, want 403", h.name, rec.Code)
+		}
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("a claim carrying %s wrote a config", h.name)
+		}
+		if s.claimed() {
+			t.Errorf("a claim carrying %s claimed the install", h.name)
+		}
+
+		// And the screen says so rather than offering a form that cannot
+		// be submitted.
+		get := httptest.NewRequest("GET", "/claim", nil)
+		get.Header.Set(h.name, h.value)
+		get.RemoteAddr = "127.0.0.1:5000"
+		grec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(grec, get)
+		body := grec.Body.String()
+		if !strings.Contains(body, "proxy") || !strings.Contains(body, path) {
+			t.Errorf("the %s refusal does not say it was a proxy and what to do instead:\n%s", h.name, body)
+		}
+		if strings.Contains(body, `type="password"`) {
+			t.Errorf("the %s refusal still offers a password form", h.name)
+		}
+	}
+}
+
+// writeHandConfig writes a config with a [control] section, the way an
+// operator following the refusal's advice would, and returns its path.
+func writeHandConfig(t *testing.T, control string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\n"+control+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The window the daemon's own advice opens: the refusal tells an operator
+// to write a password into the config and THEN restart. Between those two
+// steps the config exists, so the claim screen is gone and the first-run
+// log is silent -- and this process must not still be serving every route
+// with no password at all.
+func TestAPasswordWrittenByHandIsRequiredWithoutARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+
+	// Before: unclaimed, so the gate is shut and the claim screen is on.
+	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/claim" {
+		t.Fatalf("an install with no config sent / to %q, want /claim", rec.Header().Get("Location"))
+	}
+
+	if err := os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\npassword = \"by-hand\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := getFrom(t, s, "/")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("with a hand-written password on disk, / answered %d to %q, want 303 to /login: the running server is still unauthenticated",
+			rec.Code, rec.Header().Get("Location"))
+	}
+	if !s.authNow().Check("by-hand") {
+		t.Fatal("the hand-written password was not adopted into the live auth state")
+	}
+	if s.authNow().AllowNoPassword {
+		t.Fatal("the live auth state still allows no password")
+	}
+	if rec := getFrom(t, s, "/claim"); rec.Code != http.StatusNotFound {
+		t.Fatalf("/claim answered %d on a hand-claimed install, want 404", rec.Code)
+	}
+}
+
+// The shipped deployment writes password = "$REOSTREAM_CONTROL_PASSWORD"
+// and sets the variable in the container, so adoption has to resolve one.
+func TestAnAdoptedPasswordResolvesAnEnvironmentReference(t *testing.T) {
+	t.Setenv("TEST_ADOPT_CONTROL_PW", "from-the-environment")
+	s := newTestServer(t, Options{
+		AllowNoPassword: true,
+		ConfigPath:      writeHandConfig(t, `password = "$TEST_ADOPT_CONTROL_PW"`),
+	})
+	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/login" {
+		t.Fatalf("/ went to %q, want /login", rec.Header().Get("Location"))
+	}
+	if !s.authNow().Check("from-the-environment") {
+		t.Fatal("the environment reference was not resolved before adoption")
+	}
+	if s.authNow().Check("$TEST_ADOPT_CONTROL_PW") {
+		t.Fatal("the literal reference was adopted as the password")
+	}
+}
+
+// An unset variable means this process cannot know the password. It is
+// still a claimed install, so the page locks rather than staying open:
+// locked and wrong is recoverable by a restart, open is not.
+func TestAnUnresolvableAdoptedPasswordLocksThePage(t *testing.T) {
+	s := newTestServer(t, Options{
+		AllowNoPassword: true,
+		ConfigPath:      writeHandConfig(t, `password = "$TEST_ADOPT_UNSET_PW"`),
+	})
+	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/login" {
+		t.Fatalf("/ went to %q, want /login", rec.Header().Get("Location"))
+	}
+	auth := s.authNow()
+	if auth.AllowNoPassword {
+		t.Fatal("an unresolvable password left the page open")
+	}
+	for _, guess := range []string{"", "$TEST_ADOPT_UNSET_PW", "TEST_ADOPT_UNSET_PW"} {
+		if auth.Check(guess) {
+			t.Fatalf("the locked page accepted %q", guess)
+		}
+	}
+}
+
+// A config caught half-written, or one that will not parse, must not be
+// enough to drop the gate: that is how an install ends up with no claim
+// screen and no password at the same time.
+func TestABrokenConfigLeavesTheInstallUnclaimed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("listen = \"unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+	if s.claimed() {
+		t.Fatal("a config that will not parse counted as claimed")
+	}
+	if rec := getFrom(t, s, "/"); rec.Header().Get("Location") != "/claim" {
+		t.Fatalf("/ went to %q, want /claim", rec.Header().Get("Location"))
+	}
+
+	// And the claim must not write over it: unclaimed does not mean there
+	// is nothing there, and that file may be somebody's whole fleet.
+	rec := postClaim(t, s, "correct-horse")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("claiming over a broken config answered %d, want 409", rec.Code)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "listen = \"unterminated\n" {
+		t.Fatalf("the broken config was overwritten: %q, %v", b, err)
+	}
+	if !strings.Contains(rec.Body.String(), path) {
+		t.Fatalf("the refusal does not name the file to fix:\n%s", rec.Body.String())
+	}
+}
+
+// An operator's deliberate allow_no_password install is claimed, and stays
+// open, because that is what they asked for. Adoption never loosens
+// anything either: it cannot turn AllowNoPassword back on.
+func TestAnAllowNoPasswordConfigIsClaimedAndStaysOpen(t *testing.T) {
+	s := newTestServer(t, Options{
+		AllowNoPassword: true,
+		ConfigPath:      writeHandConfig(t, "allow_no_password = true"),
+	})
+	if !s.claimed() {
+		t.Fatal("a hand-written allow_no_password config did not count as claimed")
+	}
+	if rec := getFrom(t, s, "/claim"); rec.Code != http.StatusNotFound {
+		t.Fatalf("/claim answered %d, want 404", rec.Code)
+	}
+	if !s.authNow().AllowNoPassword {
+		t.Fatal("the live auth state stopped matching the operator's own config")
+	}
+}
+
+// Adding a password through the Config page is the other way an install
+// stops being open, and it has to take effect in the same breath: a
+// "saved" banner from a page that still serves without a password is worse
+// than no banner at all.
+func TestAPasswordSavedFromTheConfigPageIsRequiredWithoutARestart(t *testing.T) {
+	s := newTestServer(t, Options{
+		AllowNoPassword: true,
+		ConfigPath:      writeHandConfig(t, "allow_no_password = true"),
+	})
+	if _, err := s.writeAndApply("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\npassword = \"typed-in-the-editor\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.authNow().Check("typed-in-the-editor") {
+		t.Fatal("a password saved from the config page was not adopted")
+	}
+	rec := getFrom(t, s, "/")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("after saving a password, / answered %d to %q, want 303 to /login",
+			rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestAPasswordThatIsNotValidTextIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+	// Not reachable from a browser; reachable from curl --data-binary.
+	// %q would write it as an escape TOML reads back as something else, so
+	// the password would work until the next restart and not after it.
+	req := httptest.NewRequest("POST", "/claim", strings.NewReader("password=good\x92bad"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "192.168.1.10:5000"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("a password that is not valid UTF-8 was accepted")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a refused password was written anyway")
+	}
+}
+
 // Routes are read by many goroutines while the claim handler writes the
 // auth state. Run under -race; a field mutation without the lock fails here.
 func TestClaimIsRaceFreeAgainstConcurrentRequests(t *testing.T) {

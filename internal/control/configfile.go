@@ -285,6 +285,19 @@ func (s *Server) writeAndApply(text string) (string, error) {
 		return "", err
 	}
 
+	// A [control] password that appeared in this save has to become the one
+	// this process requires, right now. Exactly one write path used to make
+	// auth live -- the claim handler -- and that made this one a trap: an
+	// operator on an allow_no_password install who added a password here
+	// got a "saved" banner from a page that went on serving without one
+	// until somebody restarted the daemon. after comes from config.Load, so
+	// any "$NAME" reference in the file is already resolved. adoptPassword
+	// only ever tightens, and does nothing if this process already has a
+	// password of its own.
+	if after.Control != nil && after.Control.Password != "" {
+		s.adoptPassword(after.Control.Password)
+	}
+
 	var note string
 	if s.opts.Supervisor != nil {
 		res, err := s.opts.Supervisor.Reload(after.Cameras)
