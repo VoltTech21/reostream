@@ -218,42 +218,53 @@ func (s *Server) settleClaim() bool {
 // claimPasswordMinLength is the shortest password the claim screen accepts,
 // in characters.
 //
-// There was no length rule here until the controls around it were counted
-// honestly. The private-address gate that used to stand in front of this
+// This is the ONLY control on the login now, so the arithmetic below is
+// the whole security argument and is worth reading before changing the
+// number. The private-address gate that used to stand in front of this
 // page is gone -- it refused the operator over a tailnet and admitted
-// strangers behind any L4 hop, so it was never the control it looked like
-// -- and the login throttle meters rather than stops: one source gets one
-// check every throttleMaxDelay, however many connections it opens. That
-// leaves the password as a load-bearing control rather than a backstop.
+// strangers behind any L4 hop. The login throttle that replaced it is gone
+// too, because behind docker-proxy a source-keyed limit cannot tell the
+// attacker from the operator; serveLogin records the four designs that
+// were measured and how each one failed.
 //
-// The arithmetic, against the MEASURED rate rather than a hoped-for one.
-// TestTheLoginRateIsFlatAcrossWorkerCounts drives one source at 1, 4, 8, 64
-// and 512 concurrent workers; over a 30-second window it measures 0.67 to
-// 1.50 password comparisons a second, flat across all of them, converging
-// on the 0.5/s the delay cap sets. Take 2/s, comfortably above anything
-// measured:
+// The rate to size against is therefore the fastest one measured with no
+// limit in the way: ~8,400 password comparisons a second sustained from
+// one source, which is what the harness got out of the last two designs
+// and is bounded only by the HTTP server. That is 7.3e8 guesses a day and
+// 2.65e11 a year. Halving for the expected search, a password must be
+// worth about 2^39 to survive a year at that rate.
 //
-//   - 63 million guesses a year.
-//   - The form this screen actually recommends, three words a person will
-//     remember, is about 2^33 from an everyday vocabulary: 8.6 billion,
-//     half of it 4.3 billion, which at 2/s is roughly 68 years.
-//   - Even 2^30 -- a low estimate for any twelve characters that are not a
-//     dictionary word -- is 17 years.
-//   - And the floor that matters: to fall inside one year, a password
-//     would have to be under 2^27, which twelve characters of anything
-//     but a single common word is not.
+// Against it:
 //
-// The same arithmetic is why the earlier design mattered: at the 8,399
-// comparisons a second that a concurrent attacker got out of the
-// per-request delay, that three-word passphrase falls in about six days.
-// The throttle and this minimum are one control in two halves, and neither
-// should be changed without redoing this sum.
+//   - The GENERATED password this screen offers first is 16 characters of
+//     crypto/rand from a 31-character alphabet: 79.3 bits, 7.7e23. Half of
+//     that at 8,400/s is 4.6e11 years. Safe by a margin no rate limit
+//     could have bought, which is the point of offering it first.
+//   - Three words a person will remember is about 2^33 from an everyday
+//     vocabulary: 8.6 billion, half of it 4.3 billion, which at 8,400/s
+//     falls in about six DAYS. That is why this screen no longer
+//     recommends three words, and why the floor moved off the number that
+//     was derived from a throttled rate.
+//   - Four such words is about 2^44, which is roughly 33 years. Sixteen
+//     characters is about what four words costs to type, which is where
+//     the floor comes from.
+//
+// Be honest about what a length rule does and does not buy: sixteen
+// characters a person invents is not 79 bits, and nothing here measures
+// entropy. The floor pushes a hand-chosen password past 2^39 in the
+// typical case; the generated default is the only thing that guarantees
+// it. That is the whole reason the field arrives already filled in.
+//
+// And this is a default, not an invariant. It applies at claim time only:
+// a password written by hand into config.toml, or changed later through
+// the Config page, is never checked against it.
 //
 // Length only: no complexity classes, no strength meter, no dictionary of
 // common passwords. This is the first screen a person who does not code
-// ever sees, and a rule they satisfy by typing three words is worth more
-// than one they satisfy by adding "1!" to something short.
-const claimPasswordMinLength = 12
+// ever sees, and a rule they satisfy by accepting the password already in
+// the box is worth more than one they satisfy by adding "1!" to something
+// short.
+const claimPasswordMinLength = 16
 
 // validClaimPassword checks a submitted password for the two things that
 // would make it unusable in the file it is about to be written into, for
@@ -284,7 +295,7 @@ func validClaimPassword(pw string) error {
 	// one. Counted last, so the messages about what the file cannot hold
 	// come first -- they are about the password being unusable, not short.
 	if utf8.RuneCountInString(pw) < claimPasswordMinLength {
-		return fmt.Errorf("a password needs at least %d characters. Any %d will do -- a few words you will remember is the easiest way, and it does not need numbers or symbols.",
+		return fmt.Errorf("a password needs at least %d characters. Any %d will do -- the one already in the box is long enough, and you can use it exactly as it is.",
 			claimPasswordMinLength, claimPasswordMinLength)
 	}
 	return nil
@@ -359,6 +370,57 @@ type claimPage struct {
 	// the token in any form; anyone checking this page for a leak should be
 	// able to see that from the struct alone.
 	Error string
+
+	// Suggested is a password generated for this render and printed as
+	// readable text in the form. It is the one secret-shaped value that
+	// does reach a response body on this page, so it is worth saying
+	// exactly why that is not the leak it looks like.
+	//
+	// It is not a credential until somebody submits it. Every render calls
+	// newSuggestedPassword and gets an unrelated 79.3-bit string; nothing
+	// stores it, nothing logs it, nothing remembers it between requests,
+	// and the server has no idea which of them -- if any -- the operator
+	// will send back. An attacker who GETs /claim a thousand times
+	// collects a thousand random strings with no relationship to whatever
+	// the operator eventually types. What would let them claim the install
+	// is the token, which is printed to the daemon's log and to nowhere
+	// else, and this route 404s outright once the install is claimed.
+	//
+	// The containment that keeps that true: claimFormPage is the only
+	// thing that sets this field, it is used only on renders that actually
+	// draw the form, and claimPage is only ever passed to claim.html. It is
+	// never put in an error, never written to the config file, and never
+	// passed to log.Printf -- which matters here because the log package
+	// tees into the buffer the Logs page serves to anyone signed in.
+	//
+	// Empty when crypto/rand failed. The form then draws an empty field
+	// and the operator types their own, which is the right way for a
+	// suggestion to fail.
+	Suggested string
+}
+
+// claimFormPage is the claim screen with a freshly generated password in
+// it, for every render that draws the form: the first GET, and each
+// refusal that invites another try.
+//
+// Fresh every time, deliberately. Keeping one to re-show after a refusal
+// would mean storing a password the operator has not chosen, which is the
+// thing this must not do -- and it would give an attacker a value to
+// correlate across requests. A rand failure gives an empty suggestion
+// rather than an error page: the form still works, it is just not filled
+// in.
+func claimFormPage(errMsg string) claimPage {
+	// The error is dropped on purpose: a rand failure leaves pw empty, the
+	// template then draws an empty field, and the operator types their own.
+	// Refusing to render the claim screen because a suggestion could not be
+	// made would turn a convenience into a way to lock somebody out of
+	// their own install.
+	pw, _ := newSuggestedPassword()
+	return claimPage{
+		Title:     "Claim this install",
+		Error:     errMsg,
+		Suggested: pw,
+	}
 }
 
 // sameOriginPost reports whether a POST plausibly came from this page.
@@ -409,14 +471,19 @@ func (s *Server) serveClaimForm(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	page := claimPage{Title: "Claim this install"}
 	// Unclaimed with a config file already there means a file this daemon
 	// could not read a password out of. The POST would refuse it; say so
-	// now rather than after a password has been typed.
+	// now rather than after a password has been typed. No form is drawn,
+	// and so no password is generated: offering one on a page that cannot
+	// accept it is noise.
 	if _, err := os.Stat(s.opts.ConfigPath); err == nil {
-		page.Refused = configPresentMessage(s.opts.ConfigPath)
+		s.render(w, "claim.html", claimPage{
+			Title:   "Claim this install",
+			Refused: configPresentMessage(s.opts.ConfigPath),
+		})
+		return
 	}
-	s.render(w, "claim.html", page)
+	s.render(w, "claim.html", claimFormPage(""))
 }
 
 // serveClaim checks the one-time token, takes the password, writes the
@@ -435,39 +502,31 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	if !sameOriginPost(r) {
 		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "claim.html", claimPage{
-			Title: "Claim this install",
-			Error: "That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here.",
-		})
+		s.render(w, "claim.html", claimFormPage("That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here."))
 		return
 	}
 
 	// The token, before anything else is looked at.
 	//
-	// Deliberately NOT throttled, neither delayed nor refused. The token is
-	// 16 characters of crypto/rand from a 31-character alphabet, 79.3 bits:
-	// at a million guesses a second an attacker is through the space in
-	// rather more than the age of the universe, so a rate limit protects
-	// nothing here. What it would cost is real. A delay on this route is
-	// something any passer-by could impose on the operator's own claim --
-	// and behind docker-proxy, which is how this product ships, the
-	// passer-by and the operator are the same key -- so throttling the one
-	// operation this flow exists to protect would only ever slow the person
-	// it is protecting. See throttle.go, and serveLogin, which is where an
-	// operator-chosen password does need the delay.
+	// Not rate limited, and nothing on this page is: see serveLogin, which
+	// records the four source-keyed designs that were built and measured
+	// before that was accepted. It would have bought nothing here in any
+	// case. The token is 16 characters of crypto/rand from a 31-character
+	// alphabet, 79.3 bits: at a million guesses a second an attacker is
+	// through the space in rather more than the age of the universe. What
+	// it would cost is real -- a delay on this route is something any
+	// passer-by could impose on the operator's own claim, and behind
+	// docker-proxy the passer-by and the operator are the same key.
 	if !claimTokenMatches(s.claimToken(), r.FormValue("token")) {
 		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "claim.html", claimPage{
-			Title: "Claim this install",
-			Error: "That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- in a line that begins \"reostream: not yet claimed\". Copy it from there.",
-		})
+		s.render(w, "claim.html", claimFormPage("That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- in a line that begins \"reostream: not yet claimed\". Copy it from there."))
 		return
 	}
 
 	password := r.FormValue("password")
 	if err := validClaimPassword(password); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		s.render(w, "claim.html", claimPage{Title: "Claim this install", Error: err.Error()})
+		s.render(w, "claim.html", claimFormPage(err.Error()))
 		return
 	}
 
@@ -525,7 +584,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
-		s.render(w, "claim.html", claimPage{Title: "Claim this install", Error: err.Error()})
+		s.render(w, "claim.html", claimFormPage(err.Error()))
 		return
 	}
 

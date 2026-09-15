@@ -60,13 +60,13 @@ const claimTokenAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 //
 // The alphabet has 31 characters, so each one is log2(31) = 4.954 bits and
 // 16 of them is 79.3 bits of entropy -- comfortably past the 60-bit floor.
-// The entropy is the whole control here: the claim route is deliberately
-// NOT throttled (see serveClaim), so nothing slows a guesser down and
-// nothing needs to. At a million attempts a second, which no HTTP handler
-// will serve, the expected search is still longer than the age of the
-// universe by a wide margin. Three groups of four would have been 59.4
-// bits, just under that floor, which is why there are four groups and not
-// three.
+// The entropy is the whole control here: nothing on this page is rate
+// limited, and serveLogin records why nothing on it can be. Nothing slows
+// a guesser down and nothing needs to -- at a million attempts a second,
+// which no HTTP handler will serve, the expected search is still longer
+// than the age of the universe by a wide margin. Three groups of four
+// would have been 59.4 bits, just under that floor, which is why there are
+// four groups and not three.
 const (
 	claimTokenChars = 16
 	claimTokenGroup = 4
@@ -74,12 +74,30 @@ const (
 
 // newClaimToken returns a fresh token in its display form, dash-separated
 // for transcription: XXXX-XXXX-XXXX-XXXX.
+func newClaimToken() (string, error) {
+	return newGroupedCode()
+}
+
+// newSuggestedPassword returns a password for the claim screen to offer,
+// in the same readable dash-separated form and from the same generator as
+// the token: 16 characters of crypto/rand from the 31-character alphabet,
+// 79.3 bits. It is generated fresh on every render and is NEVER stored,
+// logged or reused; see claimFormPage, which is the only thing that calls
+// it, and claimPage.Suggested, which explains why rendering it into a
+// response body is safe.
+func newSuggestedPassword() (string, error) {
+	return newGroupedCode()
+}
+
+// newGroupedCode is the generator both of the above are: claimTokenChars
+// characters of crypto/rand from claimTokenAlphabet, grouped for reading.
 //
 // Rejection sampling, not a plain modulo: 256 is not a multiple of 31, so
 // mapping every byte with % would make the first 8 characters of the
 // alphabet slightly likelier than the rest. The bias is small, but the
-// cost of avoiding it is a loop, and this runs once per process.
-func newClaimToken() (string, error) {
+// cost of avoiding it is a loop, and this runs once per process for the
+// token and once per claim-screen render for the password.
+func newGroupedCode() (string, error) {
 	const limit = 256 - (256 % len(claimTokenAlphabet)) // 248
 	out := make([]byte, 0, claimTokenChars)
 	buf := make([]byte, claimTokenChars)

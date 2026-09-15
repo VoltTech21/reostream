@@ -150,15 +150,13 @@ type Server struct {
 	claimTok     string
 	sessions     *webui.SessionStore
 
-	// throttle meters how often one source may have a login password
-	// CHECKED: each attempt takes the next place in that source's queue and
-	// waits its turn, so the rate is one check per penalty whatever the
-	// concurrency. It never refuses -- a correct password always works,
-	// under any load -- and it is used by the LOGIN ONLY: the claim route
-	// does not consult it at all, because the claim token is 79.3 bits and
-	// metering it would only give a passer-by a way to slow the operator's
-	// own claim. See throttle.go, which carries the measured rates.
-	throttle *throttle
+	// There is no rate limit on POST /login, and none on POST /claim
+	// either. Behind docker-proxy every request arrives from one address,
+	// so a source-keyed limit cannot tell the attacker from the operator
+	// and can only refuse the operator, delay the operator, or bound
+	// nothing. Four of them were built and measured before that was
+	// accepted; serveLogin records what each one did. The password carries
+	// the security instead: see claimPasswordMinLength.
 
 	// configMu serialises writeAndApply end to end: reading the previous
 	// config, validating, writing the file, and reloading the fleet all
@@ -247,7 +245,6 @@ func New(opts Options) (*Server, error) {
 		},
 		claimTok:       tok,
 		sessions:       sessions,
-		throttle:       newThrottle(),
 		done:           make(chan struct{}),
 		inFlightProbes: make(map[string]bool),
 	}, nil

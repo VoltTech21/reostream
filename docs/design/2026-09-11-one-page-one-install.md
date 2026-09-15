@@ -114,83 +114,86 @@ No longer header list and no trusted-proxy knob fixes a wrong premise. A token
 works identically over a tailnet, behind a reverse proxy and behind an L4 hop,
 and is what Jupyter, Portainer and Home Assistant all do.
 
-**The login is metered per source, and never refused.** The password is the one
-real brute-force target on the page, so one source gets a fixed number of
-password comparisons a second however many connections it opens.
+**There is no rate limit on `POST /login`, and that is a decision.** A reader
+who goes looking for a throttle here will not find one, so the reasoning is
+written down rather than left to be inferred as an oversight.
 
-The mechanism is a per-key queue. Each arriving attempt takes the next place in
-its source's queue -- `deadline = max(now, next[key])`, and `next[key]` moves to
-`deadline + d`, both under one lock -- then waits until its own deadline and is
-checked. `d` is that source's penalty: 100ms after one failure, doubling, capped
-at 2s. Failures only, cleared by a success, forgotten after five idle minutes. N
-attempts that arrive together get deadlines `t`, `t+d`, `t+2d`, so the rate is
-`1/d` whatever the concurrency, and nobody is turned away: they wait their turn.
+A rate limit has to be keyed by something, and the only thing on offer is the
+request's source. That is exactly what this page cannot trust: `docker-proxy` is
+a plain TCP relay, so behind the Dockerfile and compose file this repo ships,
+every request arrives from 127.0.0.1 or 172.17.0.1. The attacker's key IS the
+operator's. Four designs were built and measured against that before it was
+accepted:
 
-A queue rather than a lockout, because `RemoteAddr` is exactly what this page
-cannot trust: behind `docker-proxy`, which is how this product ships, every
-request arrives from one address, so a lockout keyed by source lets any
-passer-by stop the operator's own correct password from working -- and on an
-unclaimed install, stop the owner from claiming it at all. And a queue rather
-than a per-request delay with an overflow path, because an overflow path is
-something the attacker creates at will: parking four requests to fill a per-key
-sleeping limit made every further guess skip the delay entirely.
+| round | mechanism | what it did |
+|---|---|---|
+| 1 | 5 failures then a 5 minute lockout | any passer-by refused the OPERATOR's correct password |
+| 2 | per-request delay, 64-sleeper cap, 503 past it | the correct password was refused at 32 req/s |
+| 3 | per-key sleeper limit, overflow checked at once | circular -- the attacker creates the overflow: **8,399 checks/sec** at 8 workers |
+| 4 | per-key leaky bucket, 4096 global guard | **8,355 checks/sec** at 4,200 connections, and 5s of ABANDONED requests pushed the operator's own queue 11h27m out |
 
-Measured, not argued. One source, wrong password, comparisons counted over 30
-seconds:
+That is one fact rather than four bugs. Rate limiting works by refusing or
+delaying. When the attacker is indistinguishable from the victim, both of those
+are weapons handed to the attacker, so a source-keyed limit can refuse the
+operator, delay the operator, or bound nothing. There is no fourth outcome, and
+no fifth round would have found one. Rounds 3 and 4 are the instructive pair:
+both were built specifically so that nothing could ever be refused, and both
+therefore had an escape the attacker could open at will.
 
-| workers | checks/sec |
-|---|---|
-| 1 | 0.67 |
-| 4 | 0.77 |
-| 8 | 0.87 |
-| 64 | 1.43 |
-| 512 | 1.50 |
+`serveLogin` now compares the password and answers, with nothing in front of it.
+The security moves to the one quantity an attacker cannot touch: the entropy of
+the password.
 
-Flat, converging on the 0.5/s the cap sets. The same harness measured the
-previous design at 0.5/s with one worker and **8,399/s with eight** -- which is
-why this is measured in a test that runs in CI rather than reasoned about in a
-paragraph. Two rounds of reasoning here were wrong by three orders of magnitude.
+**The claim screen generates a password, and offers it first.** Every render of
+the form calls `crypto/rand` and puts a fresh 16-character password from the
+token's 31-character unambiguous alphabet -- 79.3 bits -- into the field as
+readable text, with wording that says it can be used as it is or replaced.
 
-The residual slope is an opening burst: a source with no entry yet carries no
-penalty, so attempts arriving before its first failure is recorded are checked at
-once. That window is one password comparison wide and every claim serialises on
-the same lock, so it is a few dozen guesses, once, and again only after the
-source has been idle five minutes. Closing it would mean delaying every honest
-first sign-in, which is not worth it against 2^33.
+Printing a secret in a response body deserves a second look, and it survives
+one. It is not a credential until somebody submits it: nothing stores it,
+nothing logs it, nothing remembers it between requests, and the server does not
+know which of the strings it has handed out -- if any -- will come back. An
+attacker who GETs `/claim` a thousand times collects a thousand unrelated random
+strings that tell them nothing about what the operator eventually types. What
+would let them claim the install is the token, which reaches only the daemon's
+own stderr, and the route 404s outright once the install has an owner. The
+containment that keeps this true is narrow on purpose: the field is set only on
+renders that draw the form, `claimPage` is only ever passed to `claim.html`, and
+it never reaches a log line, an error, a URL or the config-page template.
 
-Three bounds, because a mitigation must not become the next hole. The failure
-table is capped with a TTL and random O(1) eviction, since it is keyed by the one
-value an attacker chooses; keys are the /64 for IPv6 and the address for IPv4, so
-one customer's prefix is one budget rather than 2^64 of them. A claim is spent
-even if its request is abandoned, so dropping connections does not buy the rate
-back. And 4096 waiting requests across all sources, as a guard on goroutines and
-nothing more -- about 30MB of stacks. That last one is the only escape from the
-queue: an attempt that cannot get a slot is checked rather than refused, which
-takes more than 4096 requests in flight at once to reach, an ordinary HTTP flood
-rather than anything credential-shaped. It relieves the operator too -- under a
-flood that large their own attempt is checked immediately rather than queued.
+**The typed minimum is 16 characters**, up from 12. Twelve was derived against a
+throttled rate that no longer exists, so the sum is redone against the fastest
+rate actually measured with nothing in the way: **~8,400 comparisons a second**
+sustained from one source, bounded only by the HTTP server. That is 7.3e8
+guesses a day and 2.65e11 a year, so surviving a year takes about 2^39.
 
-**The claim password must be at least 12 characters.** This reverses an earlier
-decision here that there should be no strength rule at all. That decision was
-made while the private-address gate was believed to be the control. The gate is
-gone, and the throttle meters rather than stops: at 2 comparisons a second --
-above anything measured above -- a source gets 63 million guesses a year. The
-password is the load-bearing control now, not a backstop.
+- The **generated** password is 2^79.3. Half that space at 8,400/s is 4.6e11
+  years. Safe by a margin no rate limit could have bought, which is the point of
+  offering it first.
+- **Three words** a person will remember is about 2^33 from an everyday
+  vocabulary, which falls in about **six days** at that rate. That is why this
+  screen no longer recommends three words, and why the floor moved.
+- **Four words** is about 2^44, roughly 33 years. Sixteen characters is about
+  what four words costs to type, which is where the floor comes from.
 
-Twelve, derived against that rate. The form this screen recommends, three words
-somebody will remember, is around 2^33: 8.6 billion, half of it 4.3 billion,
-about 68 years at 2/s. Even 2^30, a low estimate for twelve characters that are
-not one dictionary word, is 17 years. To fall inside a year a password would have
-to be under 2^27. For contrast, at the 8,399/s the previous design allowed, that
-three-word passphrase falls in about six days -- the throttle and this minimum
-are one control in two halves and neither survives alone.
+What a length rule buys is worth stating honestly: sixteen characters a person
+invents is not 79 bits, and nothing here measures entropy. The floor pushes a
+hand-chosen password past 2^39 in the typical case; the generated default is the
+only thing that guarantees it. That is why the field arrives already filled in
+rather than empty with advice next to it.
+
+And it is a default, not an invariant. It applies at claim time only. A password
+written by hand into `config.toml`, or changed later through the Config page, is
+never checked against it -- an operator who wants a four-character password on
+their own LAN can still have one, they just cannot get one by accident on the
+first screen.
 
 Length only: no complexity classes, no strength meter, no dictionary of common
 passwords. The rule is stated plainly on the screen and in the refusal, and it is
 counted in characters rather than bytes so a password in any script faces the
 same rule. This is the first screen a person who does not code will ever see, and
-a rule they satisfy by typing three words is worth more than one they satisfy by
-adding "1!" to something short.
+a rule they satisfy by leaving the box alone is worth more than one they satisfy
+by adding "1!" to something short.
 
 The cross-site check on `POST /claim` stays. CSRF is a separate concern from the
 claim gate: the token blunts a forged claim but does not close it, since an

@@ -60,7 +60,7 @@ func TestARestartWhileUnclaimedPrintsANewToken(t *testing.T) {
 	}
 	// And the first process's token is not accepted by the second, which is
 	// the operational half of the same fact.
-	if rec := postClaimFrom(t, second, "192.168.1.10:5000", first.claimToken(), "correct-horse"); rec.Code == http.StatusSeeOther {
+	if rec := postClaimFrom(t, second, "192.168.1.10:5000", first.claimToken(), "correct-horse-battery"); rec.Code == http.StatusSeeOther {
 		t.Fatal("a token from a previous process still claims this one")
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -87,7 +87,7 @@ func TestAWrongClaimTokenIsRefused(t *testing.T) {
 		case "suffix":
 			got = real + "9"
 		}
-		rec := postClaimFrom(t, s, "192.168.1.10:5000", got, "correct-horse")
+		rec := postClaimFrom(t, s, "192.168.1.10:5000", got, "correct-horse-battery")
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("token %q answered %d, want 403", got, rec.Code)
 		}
@@ -111,12 +111,12 @@ func TestTheRightTokenClaimsFromAnyAddress(t *testing.T) {
 		"127.0.0.1:5000",       // behind docker-proxy, which adds no headers
 	} {
 		s, tok := unclaimedServer(t)
-		rec := postClaimFrom(t, s, addr, tok, "correct-horse")
+		rec := postClaimFrom(t, s, addr, tok, "correct-horse-battery")
 		if rec.Code != http.StatusSeeOther {
 			t.Errorf("a claim from %s with the right token answered %d, want 303; body: %s",
 				addr, rec.Code, rec.Body.String())
 		}
-		if !s.authNow().Check("correct-horse") {
+		if !s.authNow().Check("correct-horse-battery") {
 			t.Errorf("a claim from %s did not take effect", addr)
 		}
 	}
@@ -127,7 +127,7 @@ func TestTheRightTokenClaimsFromAnyAddress(t *testing.T) {
 func TestAClaimThroughAProxyWithTheTokenSucceeds(t *testing.T) {
 	s, tok := unclaimedServer(t)
 	req := httptest.NewRequest("POST", "/claim",
-		strings.NewReader("token="+tok+"&password=correct-horse"))
+		strings.NewReader("token="+tok+"&password=correct-horse-battery"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("X-Forwarded-For", "203.0.113.9")
 	req.RemoteAddr = "127.0.0.1:5000"
@@ -142,7 +142,7 @@ func TestAClaimThroughAProxyWithTheTokenSucceeds(t *testing.T) {
 // it was for does not exist any more.
 func TestTheClaimTokenIsSingleUse(t *testing.T) {
 	s, tok := unclaimedServer(t)
-	if rec := postClaimFrom(t, s, "192.168.1.10:5000", tok, "correct-horse"); rec.Code != http.StatusSeeOther {
+	if rec := postClaimFrom(t, s, "192.168.1.10:5000", tok, "correct-horse-battery"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("the first claim answered %d, want 303", rec.Code)
 	}
 	if s.claimToken() != "" {
@@ -151,37 +151,36 @@ func TestTheClaimTokenIsSingleUse(t *testing.T) {
 	if rec := postClaimFrom(t, s, "192.168.1.10:5000", tok, "attacker"); rec.Code != http.StatusNotFound {
 		t.Fatalf("a second claim with the same token answered %d, want 404", rec.Code)
 	}
-	if !s.authNow().Check("correct-horse") {
+	if !s.authNow().Check("correct-horse-battery") {
 		t.Fatal("the second claim changed the password")
 	}
 }
 
-// The password is the load-bearing control now: there is no network gate in
-// front of this page, the login delay meters a concurrent attacker down to
-// a couple of guesses a second rather than to nothing, and a source-keyed
-// limit cannot be tightened without locking out an operator who shares a
-// hop with the attacker. So a short password is refused, and the refusal
-// says the rule plainly rather than judging what was typed.
+// The password is the ONLY control on the login now: there is no network
+// gate in front of this page and no rate limit behind it, because behind
+// docker-proxy a source-keyed limit cannot tell the attacker from the
+// operator (see serveLogin). So a short password is refused, and the
+// refusal states the rule rather than judging what was typed.
 func TestAShortClaimPasswordIsRefused(t *testing.T) {
-	const want = "a password needs at least 12 characters. Any 12 will do -- a few words you will remember is the easiest way, and it does not need numbers or symbols."
+	const want = "a password needs at least 16 characters. Any 16 will do -- the one already in the box is long enough, and you can use it exactly as it is."
 
 	if err := validClaimPassword("hunter2"); err == nil || err.Error() != want {
 		t.Fatalf("validClaimPassword(short) = %v, want %q", err, want)
 	}
 	// Exactly at the limit is fine, and one under is not.
-	if err := validClaimPassword("123456789012"); err != nil {
+	if err := validClaimPassword("1234567890123456"); err != nil {
 		t.Fatalf("a %d-character password was refused: %v", claimPasswordMinLength, err)
 	}
-	if err := validClaimPassword("12345678901"); err == nil {
+	if err := validClaimPassword("123456789012345"); err == nil {
 		t.Fatal("a password one character short was accepted")
 	}
 	// Characters, not bytes: a password in a script that does not fit in
 	// one byte per letter must not face a longer rule than an English one.
-	if err := validClaimPassword("ねこがすきです、とても"); err == nil {
-		t.Fatal("an 11-character password was accepted because its bytes were counted")
+	if err := validClaimPassword("ねこがすきです、とてもすきだ"); err == nil {
+		t.Fatal("a 14-character password was accepted because its bytes were counted")
 	}
-	if err := validClaimPassword("ねこがすきです、とてもね"); err != nil {
-		t.Fatalf("a 12-character non-ASCII password was refused: %v", err)
+	if err := validClaimPassword("ねこがすきです、とてもすきだよ、"); err != nil {
+		t.Fatalf("a 16-character non-ASCII password was refused: %v", err)
 	}
 
 	// And end to end: the claim is refused, nothing is written, the install
@@ -191,7 +190,7 @@ func TestAShortClaimPasswordIsRefused(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("a short password answered %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "at least 12 characters") {
+	if !strings.Contains(rec.Body.String(), "at least 16 characters") {
 		t.Fatalf("the refusal does not state the rule:\n%s", rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), "hunter2") {
@@ -297,7 +296,7 @@ func TestTheClaimTokenNeverReachesAResponse(t *testing.T) {
 		rec.Header().Get("Location") != "/claim" {
 		t.Fatalf("an unclaimed install answered %d to /logs/history, want a redirect to /claim", rec.Code)
 	}
-	seen(postClaimFrom(t, s, "192.168.1.10:5000", "WRNG-TKEN-WRNG-TKEN", "correct-horse"), "a refused claim")
+	seen(postClaimFrom(t, s, "192.168.1.10:5000", "WRNG-TKEN-WRNG-TKEN", "correct-horse-battery"), "a refused claim")
 	seen(postClaimFrom(t, s, "192.168.1.10:5000", tok, "$nope"), "a refused password")
-	seen(postClaimFrom(t, s, "192.168.1.10:5000", tok, "correct-horse"), "a successful claim")
+	seen(postClaimFrom(t, s, "192.168.1.10:5000", tok, "correct-horse-battery"), "a successful claim")
 }

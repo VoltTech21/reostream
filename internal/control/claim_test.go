@@ -78,7 +78,7 @@ func TestClaimingTakesEffectWithoutARestart(t *testing.T) {
 		t.Fatalf("unclaimed install answered %d for the claim screen, want 200 with no password", rec.Code)
 	}
 
-	if rec := postClaim(t, s, "correct-horse"); rec.Code != http.StatusSeeOther {
+	if rec := postClaim(t, s, "correct-horse-battery"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("claim returned %d, want 303; body: %s", rec.Code, rec.Body.String())
 	}
 
@@ -93,7 +93,7 @@ func TestClaimingTakesEffectWithoutARestart(t *testing.T) {
 
 	// And the login route checks the new password, not the empty one it
 	// was constructed with.
-	if !s.authNow().Check("correct-horse") {
+	if !s.authNow().Check("correct-horse-battery") {
 		t.Fatal("the live auth state does not hold the claimed password")
 	}
 }
@@ -101,7 +101,7 @@ func TestClaimingTakesEffectWithoutARestart(t *testing.T) {
 func TestClaimWritesTheConfigItPromises(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fresh", "config.toml")
 	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
-	if rec := postClaim(t, s, "correct-horse"); rec.Code != http.StatusSeeOther {
+	if rec := postClaim(t, s, "correct-horse-battery"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("claim returned %d; body: %s", rec.Code, rec.Body.String())
 	}
 	b, err := os.ReadFile(path)
@@ -109,7 +109,7 @@ func TestClaimWritesTheConfigItPromises(t *testing.T) {
 		t.Fatalf("claim did not leave a config behind: %v", err)
 	}
 	text := string(b)
-	if !strings.Contains(text, "[control]") || !strings.Contains(text, `password = "correct-horse"`) {
+	if !strings.Contains(text, "[control]") || !strings.Contains(text, `password = "correct-horse-battery"`) {
 		t.Fatalf("claimed config has no [control] password:\n%s", text)
 	}
 	info, err := os.Stat(path)
@@ -166,7 +166,7 @@ func TestACrossSiteClaimIsRefused(t *testing.T) {
 func TestAClaimFormFromThisPageIsAccepted(t *testing.T) {
 	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: filepath.Join(t.TempDir(), "config.toml")})
 	req := httptest.NewRequest("POST", "/claim",
-		strings.NewReader(url.Values{"token": {s.claimToken()}, "password": {"correct-horse"}}.Encode()))
+		strings.NewReader(url.Values{"token": {s.claimToken()}, "password": {"correct-horse-battery"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://"+req.Host)
 	req.RemoteAddr = "192.168.1.10:5000"
@@ -195,9 +195,9 @@ func TestAPasswordTheConfigCannotHoldIsRefused(t *testing.T) {
 // turn up in what the page says back, nor in the URL it redirects to.
 func TestAClaimNeverEchoesThePassword(t *testing.T) {
 	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: filepath.Join(t.TempDir(), "config.toml")})
-	rec := postClaim(t, s, "correct-horse")
-	if strings.Contains(rec.Body.String(), "correct-horse") ||
-		strings.Contains(rec.Header().Get("Location"), "correct-horse") {
+	rec := postClaim(t, s, "correct-horse-battery")
+	if strings.Contains(rec.Body.String(), "correct-horse-battery") ||
+		strings.Contains(rec.Header().Get("Location"), "correct-horse-battery") {
 		t.Fatal("the claim response carried the password back")
 	}
 }
@@ -397,7 +397,7 @@ func TestABrokenConfigLeavesTheInstallUnclaimed(t *testing.T) {
 
 	// And the claim must not write over it: unclaimed does not mean there
 	// is nothing there, and that file may be somebody's whole fleet.
-	rec := postClaim(t, s, "correct-horse")
+	rec := postClaim(t, s, "correct-horse-battery")
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("claiming over a broken config answered %d, want 409", rec.Code)
 	}
@@ -491,7 +491,7 @@ func TestClaimIsRaceFreeAgainstConcurrentRequests(t *testing.T) {
 			}
 		}()
 	}
-	if rec := postClaim(t, s, "correct-horse"); rec.Code != http.StatusSeeOther {
+	if rec := postClaim(t, s, "correct-horse-battery"); rec.Code != http.StatusSeeOther {
 		t.Errorf("claim returned %d", rec.Code)
 	}
 	close(stop)

@@ -10,8 +10,19 @@
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 <form method="post" action="/claim">
 <label>Token <input type="text" name="token" autocomplete="off" spellcheck="false" autofocus required></label>
-<label>Password <input type="password" name="password" minlength="12" required></label>
-<p>At least 12 characters. A few words you will remember is the easiest way; it does not need numbers or symbols.</p>
+<!-- The password field is type="text" on purpose. It arrives with a
+     generated password already in it, and a password nobody can read is
+     one nobody will keep -- they would clear it and type something short.
+     Nothing is hidden here that is not already on the screen: this is the
+     first-run screen of an install with no owner and no data in it yet.
+     See claimPage.Suggested for why printing a generated password in this
+     response body is not a leak. -->
+<label>Password <input type="text" name="password" value="{{.Suggested}}" minlength="16" autocomplete="off" spellcheck="false" required></label>
+{{if .Suggested}}
+<p>That password was generated for you. Use it as it is &mdash; copy it somewhere you will find it again &mdash; or replace it with one of your own, 16 characters or more.</p>
+{{else}}
+<p>At least 16 characters.</p>
+{{end}}
 <button type="submit">Claim it</button>
 </form>
 <p>reostream writes this password into its config file and asks for it from then on. You will sign in with it on the next screen. The token is used up once this works, and reostream stops printing it.</p>
