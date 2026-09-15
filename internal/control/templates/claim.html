@@ -17,11 +17,11 @@
      first-run screen of an install with no owner and no data in it yet.
      See claimPage.Suggested for why printing a generated password in this
      response body is not a leak. -->
-<label>Password <input type="text" name="password" value="{{.Suggested}}" minlength="16" autocomplete="off" spellcheck="false" required></label>
+<label>Password <input type="text" name="password" value="{{.Suggested}}" minlength="{{.MinLength}}" autocomplete="off" spellcheck="false" required></label>
 {{if .Suggested}}
-<p>That password was generated for you. Use it as it is &mdash; copy it somewhere you will find it again &mdash; or replace it with one of your own, 16 characters or more.</p>
+<p>That password was generated for you. Use it as it is &mdash; copy it somewhere you will find it again &mdash; or replace it with one of your own, {{.MinLength}} characters or more.</p>
 {{else}}
-<p>At least 16 characters.</p>
+<p>At least {{.MinLength}} characters.</p>
 {{end}}
 <button type="submit">Claim it</button>
 </form>

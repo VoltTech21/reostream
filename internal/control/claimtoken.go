@@ -81,7 +81,9 @@ func newClaimToken() (string, error) {
 // newSuggestedPassword returns a password for the claim screen to offer,
 // in the same readable dash-separated form and from the same generator as
 // the token: 16 characters of crypto/rand from the 31-character alphabet,
-// 79.3 bits. It is generated fresh on every render and is NEVER stored,
+// 79.3 bits. Grouped with dashes for transcription, so what is rendered and
+// submitted is 19 runes; the 16 is the entropy, not the field length, and
+// the dashes are part of the password rather than separators to strip. It is generated fresh on every render and is NEVER stored,
 // logged or reused; see claimFormPage, which is the only thing that calls
 // it, and claimPage.Suggested, which explains why rendering it into a
 // response body is safe.

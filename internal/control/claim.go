@@ -397,6 +397,12 @@ type claimPage struct {
 	// and the operator types their own, which is the right way for a
 	// suggestion to fail.
 	Suggested string
+
+	// MinLength is claimPasswordMinLength, passed through so the form's
+	// own minlength attribute cannot drift from the rule the server
+	// actually enforces. The server check is authoritative either way;
+	// this only keeps the browser telling the operator the same number.
+	MinLength int
 }
 
 // claimFormPage is the claim screen with a freshly generated password in
@@ -415,11 +421,18 @@ func claimFormPage(errMsg string) claimPage {
 	// Refusing to render the claim screen because a suggestion could not be
 	// made would turn a convenience into a way to lock somebody out of
 	// their own install.
-	pw, _ := newSuggestedPassword()
+	pw, err := newSuggestedPassword()
+	if err != nil {
+		// Named, not silent. The operator sees an empty box and would
+		// otherwise find nothing in the log explaining why. The value is
+		// not logged because there is no value -- only the failure.
+		log.Printf("control: could not generate a password to offer: %v", err)
+	}
 	return claimPage{
 		Title:     "Claim this install",
 		Error:     errMsg,
 		Suggested: pw,
+		MinLength: claimPasswordMinLength,
 	}
 }
 
