@@ -219,21 +219,39 @@ func (s *Server) settleClaim() bool {
 // in characters.
 //
 // There was no length rule here until the controls around it were counted
-// honestly, and the answer changed. The private-address gate that used to
-// stand in front of this page is gone -- it refused the operator over a
-// tailnet and admitted strangers behind any L4 hop, so it was never the
-// control it looked like. The login delay that replaced it delays but
-// cannot stop a CONCURRENT attacker: nothing serialises attempts, so the
-// rate is whatever the per-key sleeping limit allows, which is about two
-// guesses a second and not zero. And a limit keyed by source cannot be
-// tightened any further without becoming unfair, because behind
-// docker-proxy the attacker's source IS the operator's.
+// honestly. The private-address gate that used to stand in front of this
+// page is gone -- it refused the operator over a tailnet and admitted
+// strangers behind any L4 hop, so it was never the control it looked like
+// -- and the login throttle meters rather than stops: one source gets one
+// check every throttleMaxDelay, however many connections it opens. That
+// leaves the password as a load-bearing control rather than a backstop.
 //
-// That leaves the password itself as the load-bearing control rather than
-// a backstop, and twelve characters is where two guesses a second stops
-// mattering. Length only: no complexity classes, no strength meter, no
-// dictionary. This is the first screen a person who does not code ever
-// sees, and a rule they can satisfy by typing three words is worth more
+// The arithmetic, against the MEASURED rate rather than a hoped-for one.
+// TestTheLoginRateIsFlatAcrossWorkerCounts drives one source at 1, 4, 8, 64
+// and 512 concurrent workers; over a 30-second window it measures 0.67 to
+// 1.50 password comparisons a second, flat across all of them, converging
+// on the 0.5/s the delay cap sets. Take 2/s, comfortably above anything
+// measured:
+//
+//   - 63 million guesses a year.
+//   - The form this screen actually recommends, three words a person will
+//     remember, is about 2^33 from an everyday vocabulary: 8.6 billion,
+//     half of it 4.3 billion, which at 2/s is roughly 68 years.
+//   - Even 2^30 -- a low estimate for any twelve characters that are not a
+//     dictionary word -- is 17 years.
+//   - And the floor that matters: to fall inside one year, a password
+//     would have to be under 2^27, which twelve characters of anything
+//     but a single common word is not.
+//
+// The same arithmetic is why the earlier design mattered: at the 8,399
+// comparisons a second that a concurrent attacker got out of the
+// per-request delay, that three-word passphrase falls in about six days.
+// The throttle and this minimum are one control in two halves, and neither
+// should be changed without redoing this sum.
+//
+// Length only: no complexity classes, no strength meter, no dictionary of
+// common passwords. This is the first screen a person who does not code
+// ever sees, and a rule they satisfy by typing three words is worth more
 // than one they satisfy by adding "1!" to something short.
 const claimPasswordMinLength = 12
 

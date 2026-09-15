@@ -114,48 +114,76 @@ No longer header list and no trusted-proxy knob fixes a wrong premise. A token
 works identically over a tailnet, behind a reverse proxy and behind an L4 hop,
 and is what Jupyter, Portainer and Home Assistant all do.
 
-**The login is delayed after failures, and never refused.** The password is the
-one real brute-force target on the page. Each attempt first waits out what the
-previous failures from its source earned: 100ms, doubling, capped at 2s. Failures
-only, cleared by a success, and charged before the password is checked, so a
-wrong guess cannot be compared and immediately retried.
+**The login is metered per source, and never refused.** The password is the one
+real brute-force target on the page, so one source gets a fixed number of
+password comparisons a second however many connections it opens.
 
-A delay rather than a lockout, because `RemoteAddr` is exactly what this page
+The mechanism is a per-key queue. Each arriving attempt takes the next place in
+its source's queue -- `deadline = max(now, next[key])`, and `next[key]` moves to
+`deadline + d`, both under one lock -- then waits until its own deadline and is
+checked. `d` is that source's penalty: 100ms after one failure, doubling, capped
+at 2s. Failures only, cleared by a success, forgotten after five idle minutes. N
+attempts that arrive together get deadlines `t`, `t+d`, `t+2d`, so the rate is
+`1/d` whatever the concurrency, and nobody is turned away: they wait their turn.
+
+A queue rather than a lockout, because `RemoteAddr` is exactly what this page
 cannot trust: behind `docker-proxy`, which is how this product ships, every
-request arrives from one address, so a lockout keyed by source would let any
+request arrives from one address, so a lockout keyed by source lets any
 passer-by stop the operator's own correct password from working -- and on an
-unclaimed install, stop the owner from claiming it at all. A delay cannot do
-that, and nothing here may: an attempt that cannot get a sleeping slot skips the
-delay and is checked, rather than being turned away. There is no load, and no
-flood, under which a correct password fails. The claim token is not throttled at
-all: 79 bits cannot be guessed, and a delay there would only ever slow the
-operation this whole flow protects.
+unclaimed install, stop the owner from claiming it at all. And a queue rather
+than a per-request delay with an overflow path, because an overflow path is
+something the attacker creates at will: parking four requests to fill a per-key
+sleeping limit made every further guess skip the delay entirely.
 
-What the delay is worth, stated honestly, because the first version of this
-paragraph overstated it. Requests are concurrent and each sleeps on its own, so N
-attempts launched together all wait the same delay and are all judged against the
-same failure count. A delay curve therefore meters a serial attacker only. What
-meters a concurrent one is a cap on how many attempts from one source may be
-sleeping at once: at four, that is roughly two guesses a second from one key, not
-zero. Which is why the password has a length rule now (below) -- the two together
-are the control, and neither is on its own.
+Measured, not argued. One source, wrong password, comparisons counted over 30
+seconds:
+
+| workers | checks/sec |
+|---|---|
+| 1 | 0.67 |
+| 4 | 0.77 |
+| 8 | 0.87 |
+| 64 | 1.43 |
+| 512 | 1.50 |
+
+Flat, converging on the 0.5/s the cap sets. The same harness measured the
+previous design at 0.5/s with one worker and **8,399/s with eight** -- which is
+why this is measured in a test that runs in CI rather than reasoned about in a
+paragraph. Two rounds of reasoning here were wrong by three orders of magnitude.
+
+The residual slope is an opening burst: a source with no entry yet carries no
+penalty, so attempts arriving before its first failure is recorded are checked at
+once. That window is one password comparison wide and every claim serialises on
+the same lock, so it is a few dozen guesses, once, and again only after the
+source has been idle five minutes. Closing it would mean delaying every honest
+first sign-in, which is not worth it against 2^33.
 
 Three bounds, because a mitigation must not become the next hole. The failure
 table is capped with a TTL and random O(1) eviction, since it is keyed by the one
 value an attacker chooses; keys are the /64 for IPv6 and the address for IPv4, so
-one customer's prefix is one budget rather than 2^64 of them. Four sleeping
-attempts per source, as above. And 4096 sleeping attempts across all sources, as
-a guard on goroutines and nothing more -- a sleeping request's connection and its
-`net/http` goroutine exist whether the handler sleeps or not, so the marginal cost
-of a sleeper is one blocked goroutine for at most two seconds.
+one customer's prefix is one budget rather than 2^64 of them. A claim is spent
+even if its request is abandoned, so dropping connections does not buy the rate
+back. And 4096 waiting requests across all sources, as a guard on goroutines and
+nothing more -- about 30MB of stacks. That last one is the only escape from the
+queue: an attempt that cannot get a slot is checked rather than refused, which
+takes more than 4096 requests in flight at once to reach, an ordinary HTTP flood
+rather than anything credential-shaped. It relieves the operator too -- under a
+flood that large their own attempt is checked immediately rather than queued.
 
 **The claim password must be at least 12 characters.** This reverses an earlier
 decision here that there should be no strength rule at all. That decision was
-made while the private-address gate was believed to be the control; the gate is
-gone, the delay meters a concurrent attacker to a couple of guesses a second
-rather than to nothing, and no source-keyed limit can be tightened further
-without locking out an operator who shares a hop with the attacker. The password
-is the load-bearing control now, not a backstop.
+made while the private-address gate was believed to be the control. The gate is
+gone, and the throttle meters rather than stops: at 2 comparisons a second --
+above anything measured above -- a source gets 63 million guesses a year. The
+password is the load-bearing control now, not a backstop.
+
+Twelve, derived against that rate. The form this screen recommends, three words
+somebody will remember, is around 2^33: 8.6 billion, half of it 4.3 billion,
+about 68 years at 2/s. Even 2^30, a low estimate for twelve characters that are
+not one dictionary word, is 17 years. To fall inside a year a password would have
+to be under 2^27. For contrast, at the 8,399/s the previous design allowed, that
+three-word passphrase falls in about six days -- the throttle and this minimum
+are one control in two halves and neither survives alone.
 
 Length only: no complexity classes, no strength meter, no dictionary of common
 passwords. The rule is stated plainly on the screen and in the refusal, and it is
@@ -212,13 +240,15 @@ The claim flow needs its own tests, because it is the one path a new user cannot
 avoid: an unclaimed install serves the claim screen; a claimed one does not; a
 wrong token is refused and the right one claims; the token is single use and a
 restart while unclaimed yields a different one; the compare is constant time
-(asserted as a call, not as a timing measurement); the login delay grows, caps,
-clears on success, and never refuses a correct password -- however many failures
-came before it, and with the sleeping pool saturated; one source cannot hold more
-than its share of sleepers and its overflow is checked rather than refused; two
-addresses in one /64 share one budget; the table stays bounded under a flood of
-distinct sources; a short password is refused at claim time with the rule stated;
-zero
+(asserted as a call, not as a timing measurement); the login rate from one source
+is MEASURED flat at 1, 4, 8, 64 and 512 concurrent workers, since every previous
+design here passed at one worker and failed by three orders of magnitude at
+eight; concurrent attempts take different places in the queue; an abandoned
+attempt still spends its place; a queue decays with its window and a success
+clears it; a correct password is never refused, with a queue ahead of it or with
+the waiting pool saturated; two addresses in one /64 share one budget; the table
+stays bounded under a flood of distinct sources; a short password is refused at
+claim time with the rule stated; zero
 cameras is valid; and the first save actually creates the file.
 
 Then a live pass, including a first run from genuinely nothing. Every live pass

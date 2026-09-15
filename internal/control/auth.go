@@ -17,17 +17,15 @@ func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
-	// The password, unlike the claim token, is operator-chosen and subject
-	// to no strength rule on purpose, so this is the one real brute-force
-	// target on the page. The throttle makes each attempt wait out what the
-	// previous failures from this source earned -- before the check, so a
-	// wrong guess cannot be compared and retried at full speed -- and it
-	// never refuses: the right password still works, it just waits. See
-	// throttle.go for why a lockout would have been a denial of service
-	// anyone could trigger.
-	// wait never refuses: an attempt that cannot get a sleeping slot skips
-	// the delay and is checked here anyway, so a correct password works
-	// under any load. The only error it returns is a cancelled request.
+	// The password, unlike the claim token, is operator-chosen, so this is
+	// the one real brute-force target on the page. Every attempt takes its
+	// place in this source's queue and waits its turn before the check, so
+	// one source gets one check per penalty however many connections it
+	// opens -- and it is never refused: the right password always works, it
+	// just waits. wait's only error is a cancelled request; an attempt that
+	// cannot get one of the global waiting slots is checked here anyway.
+	// See throttle.go for the measured rates and for the two designs this
+	// replaced.
 	who := throttleKey(r.RemoteAddr)
 	if err := s.throttle.wait(r.Context(), who); err != nil {
 		// The client gave up while waiting, almost always. Answer

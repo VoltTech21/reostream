@@ -8,62 +8,95 @@ import (
 	"time"
 )
 
-// throttle makes guessing the login password expensive without ever
-// refusing the operator.
+// throttle meters how often one source may have a login password CHECKED,
+// without ever refusing a correct one.
 //
-// It is a DELAY, not a lockout, and that distinction is the whole design.
-// A lockout keyed by source looks right until you notice what RemoteAddr
-// is in this product's own deployment: docker-proxy is a plain TCP relay,
-// so behind the shipped Dockerfile and compose file every request arrives
-// from 172.17.0.1 and the table has exactly one key for everybody. A
-// refusal keyed like that is a denial of service anyone can trigger --
-// five wrong guesses from a passer-by and the operator's CORRECT password
-// stops working for minutes, repeatable forever. On an unclaimed install
-// it would be worse in kind: somebody who cannot claim the install could
-// still stop its owner from claiming it, which is the one operation this
-// whole flow exists to protect.
+// It is a per-key leaky bucket, and the shape matters more than any of the
+// numbers. Each arriving attempt claims the next slot in its source's
+// queue: under one lock it takes deadline = max(now, next[key]) and moves
+// next[key] to deadline + d, where d is that source's current penalty.
+// Then it sleeps until its OWN deadline and is checked. N attempts that
+// arrive together get deadlines t, t+d, t+2d, ..., so one source is capped
+// at 1/d checks a second whatever its concurrency, and nobody is turned
+// away -- they wait their turn.
 //
-// A delay has no such failure mode. A wrong guess costs the guesser the
-// delay; a correct credential is NEVER refused, only made to wait, so an
-// attacker sharing a hop with the operator can waste their seconds and
-// nothing more. There is no exception to that, and there must not be: if
-// any path here can turn a correct password away, the shared-hop attacker
-// is back in business by finding it.
+// Two earlier designs failed here, and both failures are worth keeping
+// written down.
 //
-// The delay is applied BEFORE the credential is checked, from the failures
-// already recorded. Checking first and only then consulting the throttle
-// would remove the protection entirely: a wrong guess would be compared,
-// recorded, and immediately retried at full speed.
+// A LOCKOUT after N failures, keyed by source, is a denial of service
+// anyone can trigger. docker-proxy is a plain TCP relay, so behind the
+// Dockerfile and compose file this repo ships, every request arrives from
+// one address and the attacker's key IS the operator's. Five wrong guesses
+// from a passer-by stopped the operator's correct password from working.
 //
-// What the delay is actually worth, stated honestly. Requests are
-// concurrent and each sleeps on its own, and failures are recorded after
-// the check, so N attempts launched together all wait the same delay and
-// are all judged against the same failure count. A delay curve alone
-// therefore meters a serial attacker only; against a concurrent one the
-// rate is set by how many attempts may be sleeping at once. That is what
-// throttleMaxSleepersPerKey is for, and it is the number that does the
-// metering: at the cap, four sleepers finishing every two seconds is about
-// two guesses a second from one key. Not zero, which is why the claim
-// screen now requires a password long enough that two guesses a second is
-// hopeless -- see validClaimPassword. The two together are the control;
-// neither is on its own.
+// A PER-REQUEST DELAY, with attempts past a per-key sleeping limit checked
+// immediately so that nothing is refused, meters nothing at all. The
+// overflow condition is created by the attacker: they park enough requests
+// to fill their own sleeping slots and every further guess skips the delay.
+// Measured, that was 0.5 checks a second at one worker and 8,399 at eight.
+// The four sleepers were the attacker's own doorstop. Worse, the flood drove
+// the shared key's penalty to the cap while the flooder paid none of it, so
+// the honest operator waited the full two seconds and the attacker waited
+// 0.43ms: the control inverted rather than merely weakened.
+//
+// Queueing is what has neither hole. There is no overflow condition for an
+// attacker to create, because there is no branch that skips the wait: the
+// only way to be checked sooner is for the queue in front of you to be
+// shorter, and every attempt lengthens it by exactly d.
+//
+// Measured rather than argued, because two rounds of reasoning about this
+// were wrong and a twenty-line harness caught both. One source, wrong
+// password, comparisons counted over a 30-second window
+// (TestTheLoginRateIsFlatAcrossWorkerCounts):
+//
+//	workers=1      0.67 /sec
+//	workers=4      0.77 /sec
+//	workers=8      0.87 /sec
+//	workers=64     1.43 /sec
+//	workers=512    1.50 /sec
+//
+// Flat, converging on the 0.5/s the delay cap sets, against 8,399/sec at
+// eight workers under the design this replaced.
+//
+// The residual slope from 0.67 to 1.50 is an opening burst, and it is worth
+// naming rather than rounding away: a source with no entry yet carries no
+// penalty, so every attempt that arrives before the first failure is
+// recorded is checked at once. That window is one password comparison wide,
+// and claims serialise on this mutex, so it is a few dozen guesses -- about
+// 25 of the checks in the 512-worker run above -- once, and again only
+// after the source has been idle for a whole throttleWindow. Charging a
+// penalty before anybody has failed would close it at the cost of delaying
+// every honest first sign-in, which is not a trade worth making for a few
+// dozen guesses against 2^33.
+//
+// The one escape is the global sleeper guard below, and it is deliberately
+// not per key, so nothing an attacker does to their own queue can open it.
 //
 // Only the login uses this. The claim token is 79.3 bits of crypto/rand,
-// so brute forcing it is arithmetically impossible and delaying it buys
+// so brute forcing it is arithmetically impossible and metering it buys
 // nothing -- while a delay on the claim route would hand a passer-by the
 // ability to slow the very operation this flow protects. See serveClaim.
 const (
-	// throttleBaseDelay is the first failure's cost, doubling with each
-	// consecutive failure after it.
+	// throttleBaseDelay is the first failure's penalty, doubling with each
+	// consecutive failure after it. It is also the spacing of the queue:
+	// one check per throttleBaseDelay per source until the penalty grows.
 	throttleBaseDelay = 100 * time.Millisecond
 
-	// throttleMaxDelay caps it. A couple of seconds is long enough that
-	// guessing is hopeless and short enough that an operator who mistyped
-	// their password does not think the page has hung.
+	// throttleMaxDelay caps the penalty, and so sets the floor on a
+	// sustained attack: one source gets at most one check every two
+	// seconds, 0.5 a second, 43,200 a day. That is the number the claim
+	// screen's password minimum is sized against; see
+	// claimPasswordMinLength, and change neither without the other.
+	//
+	// Two seconds rather than ten because it is also what an operator who
+	// mistyped their password waits, and a page that looks hung is a page
+	// somebody restarts.
 	throttleMaxDelay = 2 * time.Second
 
-	// throttleWindow is the entry's TTL: a source that has not failed for
-	// this long is forgotten, and its next attempt costs nothing.
+	// throttleWindow is the entry's TTL, and so how long a queue position
+	// and a penalty survive. A source that has not failed for this long is
+	// forgotten entirely: its next attempt is immediate, at no penalty.
+	// Without this a key flooded once would stay penalised forever.
 	throttleWindow = 5 * time.Minute
 
 	// throttleMax bounds the map.
@@ -72,57 +105,58 @@ const (
 	// attacker chooses. Without a bound, a flood of distinct sources grows
 	// it forever, and a fix for a brute-force hole would have bought a
 	// memory-exhaustion one. So the table is capped, and an insert at the
-	// cap evicts an existing entry.
+	// cap evicts an existing entry at random.
 	//
-	// Eviction is random, and deliberately not "oldest": finding the
-	// oldest means scanning the whole table on every insert, under the one
-	// mutex that also serialises every login, which is a far better denial
-	// of service than the one it was guarding against. Random eviction is
-	// O(1) and loses nothing that matters -- an attacker who floods the
-	// table to evict their own entry gets their delay reset, which is the
-	// same thing they get by waiting out the window, and the operator whose
-	// entry is evicted only ever gets a shorter wait.
+	// Eviction loses a key's queue position and penalty, which fails
+	// toward LESS delay, so it is worth being precise about what it costs
+	// an attacker to provoke. Eviction only happens on an insert, an
+	// insert only happens for a source not already in the table, and each
+	// one drops a uniformly random entry -- so shaking out one specific
+	// entry takes on the order of throttleMax inserts from throttleMax
+	// DISTINCT sources. An attacker who has that many distinct sources
+	// already has that many independent budgets and has no need of the
+	// trick; an attacker behind a shared hop, which is the case this whole
+	// design is about, has exactly one key and cannot insert a second.
+	//
+	// Random and not oldest-first: finding the oldest means scanning the
+	// whole table on every insert, under the one mutex that also
+	// serialises every login, which is a better denial of service than the
+	// one it guards against.
 	throttleMax = 4096
 
-	// throttleMaxSleepersPerKey is how many attempts from ONE source may be
-	// sleeping at once. This is the limit that actually meters a brute
-	// force, because a delay on its own does not: nothing serialises
-	// attempts, so a hundred concurrent guesses would otherwise all wait
-	// the same two seconds and all be judged, turning a two-second delay
-	// into fifty guesses a second.
-	//
-	// Four, and extras are NOT refused -- they skip the delay and are
-	// checked immediately. Refusing them would be the shared-hop denial of
-	// service all over again, since behind docker-proxy the attacker's key
-	// is the operator's key. Skipping the delay for the overflow costs
-	// nothing an attacker can use: their guess rate is already whatever
-	// their concurrency allows, and the four sleeping slots keep the
-	// average cost per attempt near the delay for as long as they keep the
-	// pressure on.
-	//
-	// At the cap this is roughly two guesses a second from one source,
-	// against a password the claim screen requires to be at least
-	// claimPasswordMinLength characters. That is the pair that has to hold,
-	// not either half.
-	throttleMaxSleepersPerKey = 4
-
-	// throttleMaxSleepers bounds how many requests may be sleeping across
-	// all sources, as a guard on goroutines and nothing more. A sleeping
+	// throttleMaxSleepers bounds how many requests may be waiting across
+	// all sources, as a guard on goroutines and nothing more. A waiting
 	// request's connection and its net/http goroutine exist whether the
-	// handler sleeps or not, so the marginal cost of a sleeper is one
-	// blocked goroutine for at most throttleMaxDelay.
+	// handler waits or not, so the marginal cost is one blocked goroutine;
+	// 4096 of them is on the order of 30MB of stacks.
 	//
-	// It is deliberately two orders of magnitude above the old value.
-	// Saturating it now takes roughly two thousand requests a second, which
-	// is an ordinary HTTP flood rather than anything credential-specific --
-	// and saturating it costs an attacker nothing anyway, because an
-	// attempt that cannot get a slot is CHECKED, never refused.
+	// An attempt that cannot get a slot is CHECKED, not refused -- nothing
+	// here may ever turn a correct password away. That is an escape from
+	// the queue, so it is worth saying exactly what it costs to reach.
+	// Every slot is held by a request that is waiting, so an attacker must
+	// keep more than 4096 requests in flight simultaneously to saturate it:
+	// several thousand open sockets, sustained, which is an ordinary HTTP
+	// flood rather than anything credential-shaped, and which is loud in
+	// every way a credential attack is not. It also cannot be reached by
+	// the cheap trick that broke the previous design, because the guard
+	// counts every source together: an attacker cannot fill it with their
+	// own key alone without also filling it against themselves.
+	//
+	// It has a second use. A flood that does saturate the pool relieves the
+	// operator as well: their attempt is checked at once rather than
+	// queued behind the attacker's, so the worst a small flood can do is
+	// make them wait, and a large one cannot even do that.
 	throttleMaxSleepers = 4096
 )
 
 type throttleEntry struct {
+	// fails is consecutive failures, which sets the penalty.
 	fails int
-	last  time.Time
+	// last is when the last failure was recorded, for the TTL.
+	last time.Time
+	// next is the head of this source's queue: the earliest moment the
+	// next arriving attempt may be checked.
+	next time.Time
 }
 
 type throttle struct {
@@ -130,34 +164,26 @@ type throttle struct {
 	at       map[string]throttleEntry
 	sleepers int
 
-	// perKey counts how many attempts are sleeping for each source right
-	// now. It is keyed by an attacker-controlled value like at, but it
-	// needs no cap of its own: an entry exists only while a request is
-	// sleeping, it is deleted when the count reaches zero, and the number
-	// of sleepers is already bounded by throttleMaxSleepers.
-	perKey map[string]int
-
 	// now is time.Now, and base is throttleBaseDelay, except in tests,
 	// which need to step over the window and to not spend real seconds
-	// asleep.
+	// waiting.
 	now  func() time.Time
 	base time.Duration
 }
 
 func newThrottle() *throttle {
 	return &throttle{
-		at:     make(map[string]throttleEntry),
-		perKey: make(map[string]int),
-		now:    time.Now,
-		base:   throttleBaseDelay,
+		at:   make(map[string]throttleEntry),
+		now:  time.Now,
+		base: throttleBaseDelay,
 	}
 }
 
-// throttleKey is the source a delay is charged to: the /64 for an IPv6
+// throttleKey is the source a penalty is charged to: the /64 for an IPv6
 // address, the whole address for IPv4.
 //
 // Not the full IPv6 address. A single interface is routinely handed a /64,
-// so keying on the address would give one attacker 2^64 independent delay
+// so keying on the address would give one attacker 2^64 independent
 // budgets -- and 2^64 table entries to push everyone else's out with. The
 // /64 is the smallest unit an operator is actually allocated, so it is the
 // smallest unit worth charging.
@@ -198,9 +224,23 @@ func hostOfAddr(remoteAddr string) string {
 	return remoteAddr
 }
 
-// delay is what the next attempt from key must wait: nothing for a source
-// with no recent failures, then base, doubling per consecutive failure, to
+// penalty is what one attempt from a source with n consecutive failures
+// adds to that source's queue: base, doubling per failure, to
 // throttleMaxDelay.
+func (t *throttle) penalty(n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	d := t.base
+	for i := 1; i < n && d < throttleMaxDelay; i++ {
+		d *= 2
+	}
+	return min(d, throttleMaxDelay)
+}
+
+// delay is the penalty a source is currently carrying, which is the spacing
+// of its queue. It is not how long the next attempt waits -- that depends
+// on how many are already queued in front of it; see claim.
 func (t *throttle) delay(key string) time.Duration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -209,36 +249,71 @@ func (t *throttle) delay(key string) time.Duration {
 		return 0
 	}
 	if t.now().Sub(e.last) >= throttleWindow {
-		// Expired: drop it here as well as in the sweep, so a source that
+		// Expired: drop it here as well as on insert, so a source that
 		// waits out its failures costs nothing afterwards.
 		delete(t.at, key)
 		return 0
 	}
-	d := t.base
-	for i := 1; i < e.fails && d < throttleMaxDelay; i++ {
-		d *= 2
-	}
-	return min(d, throttleMaxDelay)
+	return t.penalty(e.fails)
 }
 
-// wait applies key's delay. It returns an error ONLY when ctx is cancelled
-// -- a client that gives up must not leave a goroutine sleeping on its
-// behalf -- and in particular it never reports "too busy": an attempt that
-// cannot get a sleeping slot skips the delay and is checked. Refusing it
-// instead would put "a correct password can be turned away" back into a
-// design whose whole point is that it cannot be.
+// claim takes this attempt's place in key's queue and reports when it may
+// be checked, or false when the source carries no penalty and may be
+// checked at once.
+//
+// The read of the queue head and the write that moves it happen together,
+// under one lock, which is what makes two simultaneous attempts get two
+// different deadlines rather than the same one. A claim is not given back:
+// an attempt that is cancelled, or that gets checked early because the
+// sleeper pool was full, has still spent its slot. Otherwise abandoning
+// requests would be a way to buy the rate back.
+func (t *throttle) claim(key string) (time.Time, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now()
+
+	e, ok := t.at[key]
+	if !ok {
+		return time.Time{}, false
+	}
+	if now.Sub(e.last) >= throttleWindow {
+		delete(t.at, key)
+		return time.Time{}, false
+	}
+	d := t.penalty(e.fails)
+	if d <= 0 {
+		return time.Time{}, false
+	}
+
+	deadline := e.next
+	if deadline.Before(now) {
+		deadline = now
+	}
+	e.next = deadline.Add(d)
+	t.at[key] = e
+	return deadline, true
+}
+
+// wait holds this attempt until its turn in key's queue.
+//
+// It returns an error ONLY when ctx is cancelled -- a client that gives up
+// must not leave a goroutine waiting on its behalf. It never reports "too
+// busy" and never refuses: an attempt that cannot get one of the global
+// sleeping slots is checked immediately, having already spent its place in
+// the queue.
 func (t *throttle) wait(ctx context.Context, key string) error {
-	d := t.delay(key)
+	deadline, queued := t.claim(key)
+	if !queued {
+		return nil
+	}
+	d := deadline.Sub(t.now())
 	if d <= 0 {
 		return nil
 	}
-	if !t.beginSleep(key) {
-		// Either this source already has throttleMaxSleepersPerKey
-		// attempts waiting, or every slot on the page is taken. Check this
-		// one without the delay rather than turning it away.
+	if !t.beginSleep() {
 		return nil
 	}
-	defer t.endSleep(key)
+	defer t.endSleep()
 
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -250,39 +325,31 @@ func (t *throttle) wait(ctx context.Context, key string) error {
 	}
 }
 
-// beginSleep claims a sleeping slot for key, reporting whether there was
-// one: at most throttleMaxSleepersPerKey for this source, and at most
-// throttleMaxSleepers across all of them.
-func (t *throttle) beginSleep(key string) bool {
+// beginSleep claims one of the throttleMaxSleepers slots, reporting
+// whether there was one to claim.
+func (t *throttle) beginSleep() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.perKey[key] >= throttleMaxSleepersPerKey {
-		return false
-	}
 	if t.sleepers >= throttleMaxSleepers {
 		return false
 	}
 	t.sleepers++
-	t.perKey[key]++
 	return true
 }
 
-func (t *throttle) endSleep(key string) {
+// endSleep releases a slot. The guard is for an unpaired call that no
+// current path makes: a counter driven negative would silently raise the
+// cap, which is the one direction this must not fail.
+func (t *throttle) endSleep() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.sleepers--
-	if n := t.perKey[key] - 1; n > 0 {
-		t.perKey[key] = n
-	} else {
-		// Deleted rather than left at zero, so the table holds only
-		// sources that are sleeping right now and cannot be grown by a
-		// flood of one-shot keys.
-		delete(t.perKey, key)
+	if t.sleepers > 0 {
+		t.sleepers--
 	}
 }
 
-// fail records one failed attempt from key, which is what the next
-// attempt's delay is computed from.
+// fail records one failed attempt from key, which is what the penalty is
+// computed from.
 func (t *throttle) fail(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -291,7 +358,7 @@ func (t *throttle) fail(key string) {
 	e, ok := t.at[key]
 	if ok && now.Sub(e.last) >= throttleWindow {
 		// The previous failures are older than the window, so they are not
-		// evidence about this one.
+		// evidence about this one, and neither is the queue they built.
 		e = throttleEntry{}
 	}
 	if !ok {
@@ -302,9 +369,9 @@ func (t *throttle) fail(key string) {
 	t.at[key] = e
 }
 
-// clear forgets key. Called on every success, so an operator who mistyped
-// twice and then got it right does not carry those two failures into their
-// next sign-in.
+// clear forgets key: its penalty and its queue. Called on every success,
+// so an operator who mistyped twice and then got it right does not carry
+// those two failures into their next sign-in.
 func (t *throttle) clear(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -313,7 +380,8 @@ func (t *throttle) clear(key string) {
 
 // makeRoom evicts one entry at random if the table is full, so a new key
 // can be inserted without the map growing. O(1): see throttleMax for why
-// this does not go looking for the best entry to drop. Caller holds t.mu.
+// this does not go looking for the best entry to drop, and for what
+// provoking an eviction costs. Caller holds t.mu.
 func (t *throttle) makeRoom() {
 	if len(t.at) < throttleMax {
 		return

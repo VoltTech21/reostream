@@ -150,12 +150,14 @@ type Server struct {
 	claimTok     string
 	sessions     *webui.SessionStore
 
-	// throttle makes a failed login cost the next attempt from that source
-	// a delay. It is a delay and never a refusal, and it is used by the
-	// LOGIN ONLY: the claim route does not consult it at all, because the
-	// claim token is 79.3 bits and rate-limiting it would only give a
-	// passer-by a way to slow the operator's own claim. See throttle.go,
-	// which also says what the delay is and is not worth.
+	// throttle meters how often one source may have a login password
+	// CHECKED: each attempt takes the next place in that source's queue and
+	// waits its turn, so the rate is one check per penalty whatever the
+	// concurrency. It never refuses -- a correct password always works,
+	// under any load -- and it is used by the LOGIN ONLY: the claim route
+	// does not consult it at all, because the claim token is 79.3 bits and
+	// metering it would only give a passer-by a way to slow the operator's
+	// own claim. See throttle.go, which carries the measured rates.
 	throttle *throttle
 
 	// configMu serialises writeAndApply end to end: reading the previous
