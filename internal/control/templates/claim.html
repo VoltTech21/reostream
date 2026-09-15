@@ -10,7 +10,8 @@
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 <form method="post" action="/claim">
 <label>Token <input type="text" name="token" autocomplete="off" spellcheck="false" autofocus required></label>
-<label>Password <input type="password" name="password" required></label>
+<label>Password <input type="password" name="password" minlength="12" required></label>
+<p>At least 12 characters. A few words you will remember is the easiest way; it does not need numbers or symbols.</p>
 <button type="submit">Claim it</button>
 </form>
 <p>reostream writes this password into its config file and asks for it from then on. You will sign in with it on the next screen. The token is used up once this works, and reostream stops printing it.</p>

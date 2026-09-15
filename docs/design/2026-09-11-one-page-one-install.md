@@ -114,29 +114,55 @@ No longer header list and no trusted-proxy knob fixes a wrong premise. A token
 works identically over a tailnet, behind a reverse proxy and behind an L4 hop,
 and is what Jupyter, Portainer and Home Assistant all do.
 
-**The login is delayed after failures, and never refused.** The password is
-operator-chosen and subject to no strength rule on purpose, so it is the one real
-brute-force target on the page. Each attempt first waits out what the previous
-failures from its source earned: 100ms, doubling, capped at 2s. Failures only,
-cleared by a success, and charged before the password is checked, so a wrong
-guess cannot be compared and immediately retried.
+**The login is delayed after failures, and never refused.** The password is the
+one real brute-force target on the page. Each attempt first waits out what the
+previous failures from its source earned: 100ms, doubling, capped at 2s. Failures
+only, cleared by a success, and charged before the password is checked, so a
+wrong guess cannot be compared and immediately retried.
 
 A delay rather than a lockout, because `RemoteAddr` is exactly what this page
 cannot trust: behind `docker-proxy`, which is how this product ships, every
 request arrives from one address, so a lockout keyed by source would let any
 passer-by stop the operator's own correct password from working -- and on an
 unclaimed install, stop the owner from claiming it at all. A delay cannot do
-that. The claim token is not throttled at all: 79 bits cannot be guessed, and a
-delay there would only ever slow the operation this whole flow protects.
+that, and nothing here may: an attempt that cannot get a sleeping slot skips the
+delay and is checked, rather than being turned away. There is no load, and no
+flood, under which a correct password fails. The claim token is not throttled at
+all: 79 bits cannot be guessed, and a delay there would only ever slow the
+operation this whole flow protects.
 
-Two bounds, both because a mitigation must not become the next hole. The table
-is capped with a TTL and random O(1) eviction, since it is keyed by the one
-value an attacker chooses; keys are the /64 for IPv6 and the address for IPv4,
-so one customer's prefix is one budget rather than 2^64 of them. And the number
-of requests that may be waiting out a delay at once is capped, since each holds
-a goroutine and a connection -- past it an attempt is refused immediately rather
-than queued, which is the only circumstance in which a correct password is
-turned away.
+What the delay is worth, stated honestly, because the first version of this
+paragraph overstated it. Requests are concurrent and each sleeps on its own, so N
+attempts launched together all wait the same delay and are all judged against the
+same failure count. A delay curve therefore meters a serial attacker only. What
+meters a concurrent one is a cap on how many attempts from one source may be
+sleeping at once: at four, that is roughly two guesses a second from one key, not
+zero. Which is why the password has a length rule now (below) -- the two together
+are the control, and neither is on its own.
+
+Three bounds, because a mitigation must not become the next hole. The failure
+table is capped with a TTL and random O(1) eviction, since it is keyed by the one
+value an attacker chooses; keys are the /64 for IPv6 and the address for IPv4, so
+one customer's prefix is one budget rather than 2^64 of them. Four sleeping
+attempts per source, as above. And 4096 sleeping attempts across all sources, as
+a guard on goroutines and nothing more -- a sleeping request's connection and its
+`net/http` goroutine exist whether the handler sleeps or not, so the marginal cost
+of a sleeper is one blocked goroutine for at most two seconds.
+
+**The claim password must be at least 12 characters.** This reverses an earlier
+decision here that there should be no strength rule at all. That decision was
+made while the private-address gate was believed to be the control; the gate is
+gone, the delay meters a concurrent attacker to a couple of guesses a second
+rather than to nothing, and no source-keyed limit can be tightened further
+without locking out an operator who shares a hop with the attacker. The password
+is the load-bearing control now, not a backstop.
+
+Length only: no complexity classes, no strength meter, no dictionary of common
+passwords. The rule is stated plainly on the screen and in the refusal, and it is
+counted in characters rather than bytes so a password in any script faces the
+same rule. This is the first screen a person who does not code will ever see, and
+a rule they satisfy by typing three words is worth more than one they satisfy by
+adding "1!" to something short.
 
 The cross-site check on `POST /claim` stays. CSRF is a separate concern from the
 claim gate: the token blunts a forged claim but does not close it, since an
@@ -187,10 +213,12 @@ avoid: an unclaimed install serves the claim screen; a claimed one does not; a
 wrong token is refused and the right one claims; the token is single use and a
 restart while unclaimed yields a different one; the compare is constant time
 (asserted as a call, not as a timing measurement); the login delay grows, caps,
-clears on success, and never refuses a correct password however many failures
-came before it; two addresses in one /64 share one budget; the table stays
-bounded under a flood of distinct sources and the sleeper cap fails fast rather
-than queueing; zero
+clears on success, and never refuses a correct password -- however many failures
+came before it, and with the sleeping pool saturated; one source cannot hold more
+than its share of sleepers and its overflow is checked rather than refused; two
+addresses in one /64 share one budget; the table stays bounded under a flood of
+distinct sources; a short password is refused at claim time with the rule stated;
+zero
 cameras is valid; and the first save actually creates the file.
 
 Then a live pass, including a first run from genuinely nothing. Every live pass

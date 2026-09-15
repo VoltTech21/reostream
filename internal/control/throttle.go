@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -25,16 +24,29 @@ import (
 // whole flow exists to protect.
 //
 // A delay has no such failure mode. A wrong guess costs the guesser the
-// delay; a correct credential is never refused, only made to wait, so an
+// delay; a correct credential is NEVER refused, only made to wait, so an
 // attacker sharing a hop with the operator can waste their seconds and
-// nothing more. And the delay is what actually defeats a brute force: at
-// the cap below, an attacker gets fewer than one guess a second per
-// source, which no password worth the name falls to.
+// nothing more. There is no exception to that, and there must not be: if
+// any path here can turn a correct password away, the shared-hop attacker
+// is back in business by finding it.
 //
 // The delay is applied BEFORE the credential is checked, from the failures
 // already recorded. Checking first and only then consulting the throttle
 // would remove the protection entirely: a wrong guess would be compared,
 // recorded, and immediately retried at full speed.
+//
+// What the delay is actually worth, stated honestly. Requests are
+// concurrent and each sleeps on its own, and failures are recorded after
+// the check, so N attempts launched together all wait the same delay and
+// are all judged against the same failure count. A delay curve alone
+// therefore meters a serial attacker only; against a concurrent one the
+// rate is set by how many attempts may be sleeping at once. That is what
+// throttleMaxSleepersPerKey is for, and it is the number that does the
+// metering: at the cap, four sleepers finishing every two seconds is about
+// two guesses a second from one key. Not zero, which is why the claim
+// screen now requires a password long enough that two guesses a second is
+// hopeless -- see validClaimPassword. The two together are the control;
+// neither is on its own.
 //
 // Only the login uses this. The claim token is 79.3 bits of crypto/rand,
 // so brute forcing it is arithmetically impossible and delaying it buys
@@ -72,22 +84,41 @@ const (
 	// entry is evicted only ever gets a shorter wait.
 	throttleMax = 4096
 
-	// throttleMaxSleepers bounds how many requests may be waiting out a
-	// delay at once. Each sleeper holds a goroutine and a connection, so an
-	// unbounded delay is a connection-exhaustion vector: one DoS traded for
-	// another. Past this many, an attempt is refused immediately rather
-	// than queued -- queueing is what turns a delay into the resource an
-	// attacker is after.
+	// throttleMaxSleepersPerKey is how many attempts from ONE source may be
+	// sleeping at once. This is the limit that actually meters a brute
+	// force, because a delay on its own does not: nothing serialises
+	// attempts, so a hundred concurrent guesses would otherwise all wait
+	// the same two seconds and all be judged, turning a two-second delay
+	// into fifty guesses a second.
 	//
-	// This is the only circumstance in which a correct credential is
-	// turned away, it requires a flood already in progress, it clears the
-	// instant the flood stops, and it latches nothing.
-	throttleMaxSleepers = 64
-)
+	// Four, and extras are NOT refused -- they skip the delay and are
+	// checked immediately. Refusing them would be the shared-hop denial of
+	// service all over again, since behind docker-proxy the attacker's key
+	// is the operator's key. Skipping the delay for the overflow costs
+	// nothing an attacker can use: their guess rate is already whatever
+	// their concurrency allows, and the four sleeping slots keep the
+	// average cost per attempt near the delay for as long as they keep the
+	// pressure on.
+	//
+	// At the cap this is roughly two guesses a second from one source,
+	// against a password the claim screen requires to be at least
+	// claimPasswordMinLength characters. That is the pair that has to hold,
+	// not either half.
+	throttleMaxSleepersPerKey = 4
 
-// errThrottleBusy is throttleMaxSleepers reached: too many attempts are
-// already waiting out their delay for this one to join them.
-var errThrottleBusy = errors.New("too many attempts are already waiting")
+	// throttleMaxSleepers bounds how many requests may be sleeping across
+	// all sources, as a guard on goroutines and nothing more. A sleeping
+	// request's connection and its net/http goroutine exist whether the
+	// handler sleeps or not, so the marginal cost of a sleeper is one
+	// blocked goroutine for at most throttleMaxDelay.
+	//
+	// It is deliberately two orders of magnitude above the old value.
+	// Saturating it now takes roughly two thousand requests a second, which
+	// is an ordinary HTTP flood rather than anything credential-specific --
+	// and saturating it costs an attacker nothing anyway, because an
+	// attempt that cannot get a slot is CHECKED, never refused.
+	throttleMaxSleepers = 4096
+)
 
 type throttleEntry struct {
 	fails int
@@ -99,6 +130,13 @@ type throttle struct {
 	at       map[string]throttleEntry
 	sleepers int
 
+	// perKey counts how many attempts are sleeping for each source right
+	// now. It is keyed by an attacker-controlled value like at, but it
+	// needs no cap of its own: an entry exists only while a request is
+	// sleeping, it is deleted when the count reaches zero, and the number
+	// of sleepers is already bounded by throttleMaxSleepers.
+	perKey map[string]int
+
 	// now is time.Now, and base is throttleBaseDelay, except in tests,
 	// which need to step over the window and to not spend real seconds
 	// asleep.
@@ -108,9 +146,10 @@ type throttle struct {
 
 func newThrottle() *throttle {
 	return &throttle{
-		at:   make(map[string]throttleEntry),
-		now:  time.Now,
-		base: throttleBaseDelay,
+		at:     make(map[string]throttleEntry),
+		perKey: make(map[string]int),
+		now:    time.Now,
+		base:   throttleBaseDelay,
 	}
 }
 
@@ -182,18 +221,24 @@ func (t *throttle) delay(key string) time.Duration {
 	return min(d, throttleMaxDelay)
 }
 
-// wait applies key's delay, returning early if ctx is cancelled -- a client
-// that gives up must not leave a goroutine sleeping on its behalf. It
-// returns errThrottleBusy when too many attempts are already waiting.
+// wait applies key's delay. It returns an error ONLY when ctx is cancelled
+// -- a client that gives up must not leave a goroutine sleeping on its
+// behalf -- and in particular it never reports "too busy": an attempt that
+// cannot get a sleeping slot skips the delay and is checked. Refusing it
+// instead would put "a correct password can be turned away" back into a
+// design whose whole point is that it cannot be.
 func (t *throttle) wait(ctx context.Context, key string) error {
 	d := t.delay(key)
 	if d <= 0 {
 		return nil
 	}
-	if !t.beginSleep() {
-		return errThrottleBusy
+	if !t.beginSleep(key) {
+		// Either this source already has throttleMaxSleepersPerKey
+		// attempts waiting, or every slot on the page is taken. Check this
+		// one without the delay rather than turning it away.
+		return nil
 	}
-	defer t.endSleep()
+	defer t.endSleep(key)
 
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -205,22 +250,35 @@ func (t *throttle) wait(ctx context.Context, key string) error {
 	}
 }
 
-// beginSleep claims one of the throttleMaxSleepers slots, reporting
-// whether there was one to claim.
-func (t *throttle) beginSleep() bool {
+// beginSleep claims a sleeping slot for key, reporting whether there was
+// one: at most throttleMaxSleepersPerKey for this source, and at most
+// throttleMaxSleepers across all of them.
+func (t *throttle) beginSleep(key string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.perKey[key] >= throttleMaxSleepersPerKey {
+		return false
+	}
 	if t.sleepers >= throttleMaxSleepers {
 		return false
 	}
 	t.sleepers++
+	t.perKey[key]++
 	return true
 }
 
-func (t *throttle) endSleep() {
+func (t *throttle) endSleep(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.sleepers--
+	if n := t.perKey[key] - 1; n > 0 {
+		t.perKey[key] = n
+	} else {
+		// Deleted rather than left at zero, so the table holds only
+		// sources that are sleeping right now and cannot be grown by a
+		// flood of one-shot keys.
+		delete(t.perKey, key)
+	}
 }
 
 // fail records one failed attempt from key, which is what the next

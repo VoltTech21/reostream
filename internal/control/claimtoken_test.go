@@ -156,6 +156,60 @@ func TestTheClaimTokenIsSingleUse(t *testing.T) {
 	}
 }
 
+// The password is the load-bearing control now: there is no network gate in
+// front of this page, the login delay meters a concurrent attacker down to
+// a couple of guesses a second rather than to nothing, and a source-keyed
+// limit cannot be tightened without locking out an operator who shares a
+// hop with the attacker. So a short password is refused, and the refusal
+// says the rule plainly rather than judging what was typed.
+func TestAShortClaimPasswordIsRefused(t *testing.T) {
+	const want = "a password needs at least 12 characters. Any 12 will do -- a few words you will remember is the easiest way, and it does not need numbers or symbols."
+
+	if err := validClaimPassword("hunter2"); err == nil || err.Error() != want {
+		t.Fatalf("validClaimPassword(short) = %v, want %q", err, want)
+	}
+	// Exactly at the limit is fine, and one under is not.
+	if err := validClaimPassword("123456789012"); err != nil {
+		t.Fatalf("a %d-character password was refused: %v", claimPasswordMinLength, err)
+	}
+	if err := validClaimPassword("12345678901"); err == nil {
+		t.Fatal("a password one character short was accepted")
+	}
+	// Characters, not bytes: a password in a script that does not fit in
+	// one byte per letter must not face a longer rule than an English one.
+	if err := validClaimPassword("ねこがすきです、とても"); err == nil {
+		t.Fatal("an 11-character password was accepted because its bytes were counted")
+	}
+	if err := validClaimPassword("ねこがすきです、とてもね"); err != nil {
+		t.Fatalf("a 12-character non-ASCII password was refused: %v", err)
+	}
+
+	// And end to end: the claim is refused, nothing is written, the install
+	// stays unclaimed, and the page says the rule.
+	s, tok := unclaimedServer(t)
+	rec := postClaimFrom(t, s, "192.168.1.10:5000", tok, "hunter2")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a short password answered %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "at least 12 characters") {
+		t.Fatalf("the refusal does not state the rule:\n%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "hunter2") {
+		t.Fatal("the refusal echoed the password")
+	}
+	if _, err := os.Stat(s.opts.ConfigPath); err == nil {
+		t.Fatal("a refused password was written anyway")
+	}
+	if s.claimed() {
+		t.Fatal("a refused password claimed the install")
+	}
+	// The token is not spent by a refused password: the operator types a
+	// longer one and the same token still works.
+	if rec := postClaimFrom(t, s, "192.168.1.10:5000", tok, "correct-horse-battery"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the retry with a long enough password answered %d, want 303", rec.Code)
+	}
+}
+
 // A spent token must not match anything, least of all an empty submission:
 // claimTokenMatches is asked about "" as the wanted value the moment a
 // claim clears it.

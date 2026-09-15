@@ -142,11 +142,13 @@ func TestTheThrottleMapStaysBoundedUnderAFloodOfSources(t *testing.T) {
 	}
 }
 
-// Past throttleMaxSleepers, an attempt is refused immediately rather than
-// queued: each sleeper holds a goroutine and a connection, so queueing
-// would turn the delay into the connection exhaustion it is guarding
-// against.
-func TestTheSleeperCapFailsFastRatherThanQueueing(t *testing.T) {
+// The per-key sleeping limit is what actually meters a brute force. A
+// delay alone does not: nothing serialises attempts, so a hundred
+// concurrent guesses would all wait the same two seconds and all be
+// judged. Only four attempts from one source may be sleeping at once --
+// and the ones past that are CHECKED WITHOUT THE DELAY, never refused,
+// because behind a shared hop the attacker's key is the operator's.
+func TestOneSourceCanOnlyHoldItsShareOfSleepers(t *testing.T) {
 	th, _ := newFakeThrottle()
 	th.base = time.Hour // long enough that nothing finishes on its own
 	th.fail("10.0.0.1")
@@ -155,56 +157,112 @@ func TestTheSleeperCapFailsFastRatherThanQueueing(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	started := make(chan struct{}, throttleMaxSleepers)
-	for i := 0; i < throttleMaxSleepers; i++ {
+	for i := 0; i < throttleMaxSleepersPerKey; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			started <- struct{}{}
 			th.wait(ctx, "10.0.0.1")
 		}()
 	}
-	for i := 0; i < throttleMaxSleepers; i++ {
-		<-started
-	}
-	// Wait for the slots to actually be taken, without sleeping blind.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		th.mu.Lock()
-		n := th.sleepers
-		th.mu.Unlock()
-		if n == throttleMaxSleepers {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d of %d sleepers ever started", n, throttleMaxSleepers)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForSleepers(t, th, throttleMaxSleepersPerKey)
 
-	// The next one must come back at once, with the busy error, rather than
-	// joining the queue.
+	// The next attempt from that same source returns at once, having
+	// skipped the delay rather than joined the queue or been refused.
 	done := make(chan error, 1)
 	go func() { done <- th.wait(ctx, "10.0.0.1") }()
 	select {
 	case err := <-done:
-		if err != errThrottleBusy {
-			t.Fatalf("the attempt past the sleeper cap returned %v, want errThrottleBusy", err)
+		if err != nil {
+			t.Fatalf("the attempt past the per-key limit returned %v, want nil: it must be checked, not refused", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("the attempt past the sleeper cap queued instead of failing fast")
+		t.Fatal("the attempt past the per-key limit queued instead of skipping the delay")
+	}
+	th.mu.Lock()
+	n, held := th.sleepers, th.perKey["10.0.0.1"]
+	th.mu.Unlock()
+	if n != throttleMaxSleepersPerKey || held != throttleMaxSleepersPerKey {
+		t.Fatalf("one source holds %d sleepers (%d globally), want %d", held, n, throttleMaxSleepersPerKey)
 	}
 
-	// A client that gives up releases its slot rather than pinning a
-	// goroutine for the whole delay.
+	// A different source is unaffected: one key cannot monopolise the pool.
+	th.fail("10.0.0.2")
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		th.wait(ctx, "10.0.0.2")
+	}()
+	waitForSleepers(t, th, throttleMaxSleepersPerKey+1)
+
+	// Cancelled clients release their slots rather than pinning goroutines,
+	// and the per-key table keeps nothing behind.
 	cancel()
 	wg.Wait()
 	th.mu.Lock()
-	n := th.sleepers
+	n, keys := th.sleepers, len(th.perKey)
 	th.mu.Unlock()
-	if n != 0 {
-		t.Fatalf("%d sleepers survived their cancelled requests", n)
+	if n != 0 || keys != 0 {
+		t.Fatalf("%d sleepers and %d per-key entries survived their cancelled requests", n, keys)
 	}
+}
+
+// waitForSleepers blocks until the throttle reports exactly n sleepers.
+func waitForSleepers(t *testing.T, th *throttle, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		th.mu.Lock()
+		got := th.sleepers
+		th.mu.Unlock()
+		if got == n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d sleepers, want %d", got, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// The global cap is a goroutine guard and nothing more, so reaching it must
+// not cost anybody their sign-in: an attempt that cannot get a slot skips
+// the delay and is checked.
+func TestTheGlobalSleeperCapNeverRefuses(t *testing.T) {
+	th, _ := newFakeThrottle()
+	th.base = time.Hour
+	// Fill every slot, spread across enough sources to respect the per-key
+	// limit.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	for i := 0; i < throttleMaxSleepers/throttleMaxSleepersPerKey; i++ {
+		key := fmt.Sprintf("10.1.%d.%d", i/256, i%256)
+		th.fail(key)
+		for j := 0; j < throttleMaxSleepersPerKey; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				th.wait(ctx, key)
+			}()
+		}
+	}
+	waitForSleepers(t, th, throttleMaxSleepers)
+
+	// One more source, with failures of its own: no slot left, so it is
+	// checked immediately rather than turned away.
+	th.fail("10.2.0.1")
+	done := make(chan error, 1)
+	go func() { done <- th.wait(ctx, "10.2.0.1") }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("an attempt at the global cap returned %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("an attempt at the global cap queued instead of skipping the delay")
+	}
+	cancel()
+	wg.Wait()
 }
 
 // A cancelled request stops waiting immediately: a client that gives up
@@ -331,4 +389,41 @@ func TestAWrongTokenCostsNoDelay(t *testing.T) {
 	if rec := postClaimFrom(t, s, "172.17.0.1:5000", s.claimToken(), "correct-horse"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("the right token answered %d after ten wrong ones, want 303", rec.Code)
 	}
+}
+
+// The whole point, at the level an operator experiences it: a correct
+// password works while the page is saturated with attempts. Under the old
+// design this was a 503, which behind a shared hop meant an attacker
+// flooding the login locked the operator out of it -- and the flood that
+// did it was also their optimal guessing strategy.
+func TestTheRightPasswordWorksWhileTheSleeperPoolIsSaturated(t *testing.T) {
+	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "one")})
+	// Long enough that nothing in the pool finishes during the test.
+	s.throttle.base = time.Hour
+	s.throttle.fail(throttleKey("172.17.0.1:5000"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	for i := 0; i < throttleMaxSleepersPerKey; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest("POST", "/login",
+				strings.NewReader(url.Values{"password": {"wrong"}}.Encode())).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.RemoteAddr = "172.17.0.1:5000"
+			s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	waitForSleepers(t, s.throttle, throttleMaxSleepersPerKey)
+
+	// The operator, arriving through the very same shared hop, is let in
+	// without waiting on anybody.
+	rec := postLogin(t, s, "172.17.0.1:5000", "hunter2")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the right password answered %d while the pool was saturated, want 303", rec.Code)
+	}
+
+	cancel()
+	wg.Wait()
 }

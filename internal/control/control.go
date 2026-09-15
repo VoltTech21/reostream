@@ -150,10 +150,12 @@ type Server struct {
 	claimTok     string
 	sessions     *webui.SessionStore
 
-	// throttle is the shared failure lockout in front of the two routes
-	// anyone who can reach this port may submit to without a session: the
-	// claim token and the login password. Both are guessable one attempt
-	// at a time and nothing else rate-limits them. See throttle.go.
+	// throttle makes a failed login cost the next attempt from that source
+	// a delay. It is a delay and never a refusal, and it is used by the
+	// LOGIN ONLY: the claim route does not consult it at all, because the
+	// claim token is 79.3 bits and rate-limiting it would only give a
+	// passer-by a way to slow the operator's own claim. See throttle.go,
+	// which also says what the delay is and is not worth.
 	throttle *throttle
 
 	// configMu serialises writeAndApply end to end: reading the previous

@@ -1,20 +1,15 @@
 package control
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/VoltTech21/reostream/internal/webui"
 )
 
-// loginPage is what login.html renders. Failed and Busy are separate
-// because they are different instructions: one says type it again, the
-// other says the page is under a flood and this attempt was not judged at
-// all.
+// loginPage is what login.html renders.
 type loginPage struct {
 	Title  string
 	Failed bool
-	Busy   string
 }
 
 func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
@@ -30,21 +25,17 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	// never refuses: the right password still works, it just waits. See
 	// throttle.go for why a lockout would have been a denial of service
 	// anyone could trigger.
+	// wait never refuses: an attempt that cannot get a sleeping slot skips
+	// the delay and is checked here anyway, so a correct password works
+	// under any load. The only error it returns is a cancelled request.
 	who := throttleKey(r.RemoteAddr)
 	if err := s.throttle.wait(r.Context(), who); err != nil {
-		if errors.Is(err, errThrottleBusy) {
-			// A flood is already in progress and every waiting slot is
-			// taken. Refusing now is the lesser of two evils: queueing is
-			// what would turn the delay into the connection exhaustion the
-			// cap exists to prevent.
-			w.WriteHeader(http.StatusServiceUnavailable)
-			s.render(w, "login.html", loginPage{
-				Title: "Sign in",
-				Busy:  "Too many sign-in attempts are arriving at once, so this one was not checked. Try again in a moment.",
-			})
-			return
-		}
-		// The client gave up while waiting. Nothing to write to.
+		// The client gave up while waiting, almost always. Answer
+		// explicitly rather than falling out of the handler: returning
+		// without writing makes net/http send an empty 200, and a browser
+		// that is still there -- if this context were ever cancelled for
+		// some other reason -- would read that as a successful sign-in.
+		http.Error(w, "the sign-in was cancelled before it could be checked", http.StatusRequestTimeout)
 		return
 	}
 

@@ -215,9 +215,32 @@ func (s *Server) settleClaim() bool {
 	return true
 }
 
+// claimPasswordMinLength is the shortest password the claim screen accepts,
+// in characters.
+//
+// There was no length rule here until the controls around it were counted
+// honestly, and the answer changed. The private-address gate that used to
+// stand in front of this page is gone -- it refused the operator over a
+// tailnet and admitted strangers behind any L4 hop, so it was never the
+// control it looked like. The login delay that replaced it delays but
+// cannot stop a CONCURRENT attacker: nothing serialises attempts, so the
+// rate is whatever the per-key sleeping limit allows, which is about two
+// guesses a second and not zero. And a limit keyed by source cannot be
+// tightened any further without becoming unfair, because behind
+// docker-proxy the attacker's source IS the operator's.
+//
+// That leaves the password itself as the load-bearing control rather than
+// a backstop, and twelve characters is where two guesses a second stops
+// mattering. Length only: no complexity classes, no strength meter, no
+// dictionary. This is the first screen a person who does not code ever
+// sees, and a rule they can satisfy by typing three words is worth more
+// than one they satisfy by adding "1!" to something short.
+const claimPasswordMinLength = 12
+
 // validClaimPassword checks a submitted password for the two things that
-// would make it unusable in the file it is about to be written into, and
-// for being empty. It never returns the password in its message.
+// would make it unusable in the file it is about to be written into, for
+// being empty, and for being long enough to be worth having. It never
+// returns the password in its message.
 func validClaimPassword(pw string) error {
 	if pw == "" {
 		return errors.New("choose a password.")
@@ -237,6 +260,14 @@ func validClaimPassword(pw string) error {
 		if r < 0x20 || r == 0x7f {
 			return errors.New("a password cannot contain control characters or line breaks.")
 		}
+	}
+	// Characters, not bytes: a password in a language that does not fit in
+	// one byte per letter must not be held to a longer rule than an English
+	// one. Counted last, so the messages about what the file cannot hold
+	// come first -- they are about the password being unusable, not short.
+	if utf8.RuneCountInString(pw) < claimPasswordMinLength {
+		return fmt.Errorf("a password needs at least %d characters. Any %d will do -- a few words you will remember is the easiest way, and it does not need numbers or symbols.",
+			claimPasswordMinLength, claimPasswordMinLength)
 	}
 	return nil
 }

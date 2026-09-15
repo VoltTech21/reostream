@@ -59,11 +59,14 @@ const claimTokenAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 // claimTokenGroup how many go in each dash-separated group.
 //
 // The alphabet has 31 characters, so each one is log2(31) = 4.954 bits and
-// 16 of them is 79.3 bits of entropy -- comfortably past the 60-bit floor
-// this needs to be unguessable against the throttled online attack that is
-// the only attack available (there is no offline hash to grind). Three
-// groups of four would have been 59.4 bits, just under that floor, which is
-// why there are four groups and not three.
+// 16 of them is 79.3 bits of entropy -- comfortably past the 60-bit floor.
+// The entropy is the whole control here: the claim route is deliberately
+// NOT throttled (see serveClaim), so nothing slows a guesser down and
+// nothing needs to. At a million attempts a second, which no HTTP handler
+// will serve, the expected search is still longer than the age of the
+// universe by a wide margin. Three groups of four would have been 59.4
+// bits, just under that floor, which is why there are four groups and not
+// three.
 const (
 	claimTokenChars = 16
 	claimTokenGroup = 4
