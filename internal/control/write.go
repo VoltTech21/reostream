@@ -282,6 +282,18 @@ func (s *Server) serveWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A write that named where to go back to came from an undo banner,
+	// not from the block editor's own form. Sending that one to the full
+	// before/after page would land an operator who pressed "undo" on a
+	// one-line banner in exactly the wall of XML the banner exists to
+	// replace, and with no way back, which was the original complaint.
+	// The editor's own form names no return, so it still reports here.
+	if back := returnTo(r, ""); back != "" {
+		s.setFlash(w, r, flashFor(fmt.Sprintf("%s: block %d", cam.Name, id), result))
+		http.Redirect(w, r, back, http.StatusSeeOther)
+		return
+	}
+
 	page := writeResultPage{
 		Title:   fmt.Sprintf("%s: write %d", cam.Name, id),
 		Camera:  cam,

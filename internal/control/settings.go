@@ -500,7 +500,10 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 		flash.UndoAction = fmt.Sprintf("/cameras/%s/write/%d", cam.Name, pair.Set)
 		flash.UndoParam = "body"
 		flash.UndoValue = string(result.Before)
-		flash.UndoHidden = map[string]string{"verify": "true"}
+		// Carry the page this write came from into the undo itself, so
+		// pressing undo lands back here with a banner rather than on the
+		// block editor's before/after page.
+		flash.UndoHidden = map[string]string{"verify": "true", "return": back}
 	}
 	s.setFlash(w, r, flash)
 	http.Redirect(w, r, back, http.StatusSeeOther)

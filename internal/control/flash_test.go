@@ -268,10 +268,20 @@ func TestUndoPostsThePreviousDocumentThroughTheVerifiedWritePath(t *testing.T) {
 		t.Fatalf("undo does not carry the camera's own previous document: %q", form.Get("body"))
 	}
 
+	// Undo carries the page it came from, so it redirects back there with
+	// a banner of its own. Answering 200 here would mean rendering the
+	// block editor's before/after page, which is the wall of XML this
+	// whole change exists to stop a curated write landing on.
 	resp := postForm(t, c, ts.URL+action, form)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusSeeOther {
 		raw, _ := io.ReadAll(resp.Body)
-		t.Fatalf("undo answered %d: %s", resp.StatusCode, raw)
+		t.Fatalf("undo answered %d, want a redirect back: %s", resp.StatusCode, raw)
+	}
+	if got := resp.Header.Get("Location"); got != "/" {
+		t.Fatalf("undo redirected to %q, want the page it was pressed on", got)
+	}
+	if body := getPage(t, c, ts.URL+"/"); !strings.Contains(body, "flash") {
+		t.Fatalf("undo left no banner on the page it returned to: %s", body)
 	}
 	// The proof is what reached the camera, not what the page claims: the
 	// previous document, byte for byte, on a real SetConfig.
