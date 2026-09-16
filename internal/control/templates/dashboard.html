@@ -22,6 +22,7 @@
 <div class="statuscard-head">
 <a class="cam-name" href="/cameras/{{$camera}}">{{$camera}}</a>
 {{if .Address}}<span class="metric">{{.Address}}</span>{{end}}
+<a class="tool head-link" href="/cameras/{{$camera}}">camera page &rarr;</a>
 </div>
 
 {{if not .Streams}}
@@ -35,12 +36,14 @@
 <span class="metric">{{.MbpsBitrate}} Mbps</span>
 <span class="metric">{{.Clients}} clients</span>
 <span class="metric">{{.Restarts}} restarts</span>
-{{if .URL}}
-<code class="streamurl">{{.URL}}</code>
-<button type="button" class="linkish copy-btn" data-copy="{{.URL}}">copy</button>
-{{end}}
 {{if .LastError}}<span class="lasterror">{{.LastError}}</span>{{end}}
 </div>
+{{if .URL}}
+<div class="streamurl-line">
+<code class="streamurl">{{.URL}}</code>
+<button type="button" class="linkish copy-btn" data-copy="{{.URL}}">copy</button>
+</div>
+{{end}}
 {{end}}
 
 <div class="statuscard-tools">
@@ -59,7 +62,6 @@
 </form>
 {{end}}
 <a class="tool" href="/cameras/{{$camera}}/time">sync time</a>
-<a class="tool" href="/cameras/{{$camera}}">camera page</a>
 </div>
 
 </div>

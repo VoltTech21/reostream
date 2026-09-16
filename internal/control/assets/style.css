@@ -301,6 +301,10 @@ legend { color: var(--muted); padding: 0 .4rem; }
 
 .statuscard-head .cam-name:hover { text-decoration: underline; }
 
+/* The way into the camera's own page sits with the camera's name, not down
+   in the switches: it is navigation, and the switches are writes. */
+.statuscard-head .head-link { margin-left: auto; }
+
 .streamline {
   display: flex;
   flex-wrap: wrap;
@@ -321,16 +325,25 @@ legend { color: var(--muted); padding: 0 .4rem; }
   font-size: .875rem;
 }
 
-/* The URL a recorder points at this stream. It may be long; it truncates
-   rather than widening the card, and the copy button next to it is how it
-   gets used anyway. */
-.streamline .streamurl {
+/* The URL a recorder points at this stream, on its own line. It shares a
+   row with nothing but its copy button, because a long URL competing with
+   the metrics for one wrapping row is what pushed "copy" and the metrics
+   onto lines of their own. */
+.streamurl-line {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  min-width: 0;
+}
+
+.streamurl {
   color: var(--muted);
   font-size: .8125rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .streamline .lasterror {
@@ -380,20 +393,32 @@ legend { color: var(--muted); padding: 0 .4rem; }
 
 .statuscard-tools label.unavailable { text-decoration: line-through; }
 
+.cam-video {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
 .cam-video video {
   display: block;
-  width: 13rem;
+  width: 11.5rem;
   max-width: 100%;
   border-radius: 8px;
   background: #000;
 }
 
-/* A modest control, not a full-width button: the picture is the point of
-   this area, and the button used to be the widest thing in the card. */
+/* On the picture, not under it. As a block below the video the button sat
+   outside the tile's rectangle and broke the card's left edge; centred on
+   the tile it reads as "press here to play this" and costs no height. */
 .cam-video .play-btn {
-  margin-top: .25rem;
-  padding: .15rem .6rem;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: .2rem .7rem;
   font-size: .8125rem;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 @media (max-width: 640px) {
