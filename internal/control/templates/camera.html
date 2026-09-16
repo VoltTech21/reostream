@@ -10,6 +10,7 @@
 {{define "body"}}
 <h1>{{.Camera.Name}}</h1>
 <p class="hint">{{.Camera.Address}}</p>
+{{template "flash" .Flash}}
 
 <section>
 <h2>Live</h2>

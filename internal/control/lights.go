@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
@@ -234,11 +235,7 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 		before = floodlightState(beforeMode, beforeState)
 	}
 
-	result := writeResultPage{
-		Title:  cam.Name + " floodlight",
-		Camera: cam,
-		Before: before,
-	}
+	result := WriteResult{Before: []byte(before)}
 	if err := setFloodlight(ctx, c, opt.Mode, opt.State); err != nil {
 		result.Outcome = "refused"
 		result.Detail = err.Error()
@@ -247,7 +244,7 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 		result.Detail = fmt.Sprintf("the camera took the command, but reading it back failed: %v. This is not proof the camera changed anything.", readErr)
 	} else {
 		after := floodlightState(mode, state)
-		result.After = after
+		result.After = []byte(after)
 		if after == opt.Value {
 			result.Outcome = "accepted"
 			result.Detail = "the camera reports " + after + " on a read-back over the same session that carried the write, which can answer from state the camera has not committed. This is not confirmed: see docs/control.md."
@@ -257,15 +254,22 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Restore resubmits the same form with the state read before this
-	// write: floodlightState's own output is exactly the option Value
+	flash := flashFor(cam.Name+": floodlight", result)
+	// Undo resubmits this same form with the state read before this write:
+	// floodlightState's own output is exactly the option Value
 	// floodlightOptionByValue accepts, so a valid Before is always a
-	// resubmittable option.
-	if _, ok := floodlightOptionByValue(result.Before); ok {
-		result.RestoreAction = fmt.Sprintf("/cameras/%s/floodlight", cam.Name)
-		result.RestoreParam = "option"
-		result.RestoreValue = result.Before
+	// resubmittable option. A Before that is not one (the pre-read failed,
+	// or the camera reported a mode this page has no name for) gets no
+	// undo at all, rather than a button that would post something the
+	// handler refuses.
+	if _, ok := floodlightOptionByValue(before); ok {
+		flash.UndoAction = fmt.Sprintf("/cameras/%s/floodlight", cam.Name)
+		flash.UndoParam = "option"
+		flash.UndoValue = before
 	}
-
-	s.render(w, "result.html", result)
+	s.setFlash(w, r, flash)
+	// Back to the camera page, where the floodlight control lives, rather
+	// than onto a result page: see serveApplySetting for why every curated
+	// write now redirects instead of rendering.
+	http.Redirect(w, r, "/cameras/"+url.PathEscape(cam.Name), http.StatusSeeOther)
 }

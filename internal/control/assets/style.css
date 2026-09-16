@@ -439,3 +439,38 @@ legend { color: var(--muted); padding: 0 .4rem; }
 @media (prefers-reduced-motion: no-preference) {
   button, .sidebar nav a { transition: filter .1s ease, background-color .1s ease; }
 }
+
+/* The write banner. A curated setting, the floodlight and the NTP form
+   report back here, on the page the setting lives on, instead of on a full
+   page of before/after XML with no way back. One line, the outcome's own
+   colour on its left edge, and undo beside the text.
+
+   A refusal must be as visible here as it was on that page: it gets the
+   refused colour and carries the reason inline, so condensing the report
+   never quietly turns a rejected write into a tick. */
+
+.flash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .5rem;
+  margin: 0 0 1rem;
+  padding: .55rem .75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--unknown);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: .9375rem;
+}
+
+.flash-confirmed { border-left-color: var(--proven); }
+.flash-accepted { border-left-color: var(--partial); }
+.flash-refused { border-left-color: var(--refused); }
+
+.flash-confirmed .flash-mark { color: var(--proven); }
+.flash-accepted .flash-mark { color: var(--partial); }
+.flash-refused .flash-mark { color: var(--refused); }
+
+.flash-text { flex: 1 1 20rem; min-width: 0; }
+
+.flash-undo { margin: 0; }

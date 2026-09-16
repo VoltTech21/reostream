@@ -19,6 +19,11 @@ type cameraPage struct {
 	Title  string
 	Camera Camera
 
+	// Flash is the one-line report a write on this page left behind -- a
+	// curated setting or the floodlight -- or nil when this page was
+	// simply opened. See flash.go.
+	Flash *Flash
+
 	// Group is this camera's line on the dashboard: its streams' live
 	// state, and the video tile, joined by name with s.cameraGroups(). A
 	// camera cameraGroups has never heard from (Hubs is nil, or nothing
@@ -118,6 +123,7 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	page := cameraPage{
 		Title:  cam.Name,
 		Camera: cam,
+		Flash:  s.takeFlash(r),
 		Group:  s.cameraGroupFor(cam.Name),
 
 		Groups:            groups(),

@@ -1,0 +1,30 @@
+{{/*
+  flash.html: the one line a write leaves behind, rendered by every page a
+  write can redirect back to -- the camera page, the status page, and a
+  camera's time page. One block, included by all three, rather than the
+  same markup written out three times and drifting.
+
+  Data is a *Flash (flash.go), and nil means no banner: a page that was
+  simply opened renders nothing here.
+
+  The undo form posts to the same verified write path result.html's
+  "restore previous" button uses. It carries no confirm dialog: it is one
+  click, and it is reversible in exactly the way the write that produced
+  it was. The confirms that do exist -- Lights and IR's ConfirmReason, and
+  the floodlight's -- are about a physical effect and are left alone.
+*/}}
+{{define "flash"}}
+{{with .}}
+<div class="flash flash-{{.Outcome}}" role="status">
+<span class="flash-mark" aria-hidden="true">{{if eq .Outcome "refused"}}&#10005;{{else}}&#10003;{{end}}</span>
+<span class="flash-text">{{.Message}}</span>
+{{if .UndoAction}}
+<form class="flash-undo" method="post" action="{{.UndoAction}}">
+{{range $k, $v := .UndoHidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
+{{end}}<input type="hidden" name="{{.UndoParam}}" value="{{.UndoValue}}">
+<button type="submit" class="linkish">undo</button>
+</form>
+{{end}}
+</div>
+{{end}}
+{{end}}

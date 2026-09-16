@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
@@ -183,6 +184,10 @@ type timePage struct {
 	Title  string
 	Camera Camera
 
+	// Flash is the one-line report a write on this page left behind, or
+	// nil when this page was simply opened. See flash.go.
+	Flash *Flash
+
 	NTPServer  string
 	NTPEnabled bool
 	NTPErr     string
@@ -203,7 +208,7 @@ func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page := timePage{Title: cam.Name + " time", Camera: cam}
+	page := timePage{Title: cam.Name + " time", Camera: cam, Flash: s.takeFlash(r)}
 
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
@@ -258,12 +263,13 @@ func (s *Server) serveApplyTime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, "result.html", writeResultPage{
-		Title:   cam.Name + " NTP",
-		Camera:  cam,
-		Outcome: result.Outcome,
-		Detail:  result.Detail,
-		Before:  string(result.Before),
-		After:   string(result.After),
-	})
+	// Back to this camera's own time page with a one-line report, rather
+	// than onto result.html: see serveApplySetting for why. There is no
+	// undo offered here. Before is a rendering of the previous state
+	// ("on, server \"pool.ntp.org\""), not a resubmittable pair of form
+	// fields, and a button that posted that string back as a server name
+	// would write nonsense to the camera. The previous server is still on
+	// the page the operator lands on, in the form they just used.
+	s.setFlash(w, r, flashFor(cam.Name+": ntp", result))
+	http.Redirect(w, r, "/cameras/"+url.PathEscape(cam.Name)+"/time", http.StatusSeeOther)
 }

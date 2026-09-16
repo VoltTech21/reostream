@@ -127,23 +127,22 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/cam1/floodlight", url.Values{"option": {"on"}})
-	if err != nil {
-		t.Fatal(err)
+	// The floodlight redirects back to the camera page with a one-line
+	// banner rather than rendering a before/after page. The banner's own
+	// wording still has to stop short of "confirmed": a same-session
+	// read-back is not proof.
+	c := flashBrowser(t)
+	resp := postForm(t, c, ts.URL+"/cameras/cam1/floodlight", url.Values{"option": {"on"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got %d, want 303: %s", resp.StatusCode, raw)
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
+	if got := resp.Header.Get("Location"); got != "/cameras/cam1" {
+		t.Fatalf("redirected to %q, want the camera page the floodlight control lives on", got)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
-	}
-	if !strings.Contains(string(raw), `<strong class="outcome-accepted">accepted</strong>`) {
-		t.Fatalf("response does not report accepted: %s", raw)
-	}
-	if strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) {
-		t.Fatalf("the floodlight must never claim confirmed off a same-session read-back: %s", raw)
+	banner := takenFlash(t, s, resp)
+	if banner.Outcome != "accepted" {
+		t.Fatalf("banner reports %q, want accepted: %+v", banner.Outcome, banner)
 	}
 
 	// The actual proof: what the fake camera now holds, not what the

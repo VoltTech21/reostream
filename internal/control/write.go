@@ -198,12 +198,16 @@ func (s *Server) writeBlock(ctx context.Context, cam Camera, id uint32, body []b
 	return result, nil
 }
 
-// writeResultPage is what result.html renders after any write on this
-// page: the raw block editor, a curated setting, the floodlight, or the
-// NTP form. One template and one Go type for all four, so an operator
-// reads the same outcome/detail/before/after shape everywhere a write can
-// happen, rather than a different page (or a raw JSON body) depending on
-// which form was used.
+// writeResultPage is what result.html renders after a write from the raw
+// block editor, and only from there.
+//
+// It used to be what all four write forms rendered. The other three -- a
+// curated setting, the floodlight, the NTP form -- now redirect back to
+// the page the setting lives on and report in one line; see flash.go. The
+// raw editor keeps this page because seeing the exact before and after XML
+// is the entire point of the Advanced page: an operator there is checking
+// what a camera did to a document byte for byte, which is not something a
+// banner can carry.
 type writeResultPage struct {
 	Title  string
 	Camera Camera

@@ -1,8 +1,15 @@
 {{/*
-  result.html: what any write on this page lands on. One template for the
-  raw block editor, a curated setting, the floodlight, and the NTP form, so
-  an operator reads the same outcome/detail/before/after shape everywhere a
-  write can happen, and lands on a page rather than a raw JSON body.
+  result.html: what a write from the RAW BLOCK EDITOR lands on, and only
+  that. Outcome, detail, the whole document before, the whole document
+  after, and a restore.
+
+  It is deliberately unchanged, and deliberately no longer shared. A
+  curated setting, the floodlight and the NTP form used to render this too,
+  which meant an ordinary "turn the timestamp overlay off" answered with a
+  page of XML whose only way onward was "restore previous"; those three now
+  redirect back to the page the setting lives on with a one-line banner
+  (see flash.go). The Advanced page keeps this because the exact
+  before/after bytes ARE what an operator came there to read.
 */}}
 {{define "body"}}
 <h1>{{.Title}}</h1>

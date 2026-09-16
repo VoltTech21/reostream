@@ -154,20 +154,25 @@ func TestServeApplyTimeWritesThroughCGI(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/cam1/time", url.Values{"server": {"time.nist.gov"}, "enabled": {"1"}})
-	if err != nil {
-		t.Fatal(err)
+	// The NTP form redirects back to this camera's own time page with a
+	// one-line banner, rather than rendering the old before/after page.
+	c := flashBrowser(t)
+	resp := postForm(t, c, ts.URL+"/cameras/cam1/time", url.Values{"server": {"time.nist.gov"}, "enabled": {"1"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got %d, want 303: %s", resp.StatusCode, raw)
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
+	if got := resp.Header.Get("Location"); got != "/cameras/cam1/time" {
+		t.Fatalf("redirected to %q, want the camera's time page", got)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
+	// The banner is rendered where it lands; that the operator sees it
+	// there is what this asserts, alongside the write itself.
+	page := getPage(t, c, ts.URL+"/cameras/cam1/time")
+	if !strings.Contains(page, `class="flash flash-confirmed"`) {
+		t.Fatalf("the time page shows no confirmed banner:\n%s", page)
 	}
-	if !strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) {
-		t.Fatalf("response does not report confirmed: %s", raw)
+	if !strings.Contains(page, "cam1: ntp saved") {
+		t.Fatalf("the banner does not say what was saved:\n%s", page)
 	}
 	if got := cam.server.Load().(string); got != "time.nist.gov" {
 		t.Fatalf("camera holds server=%q, want time.nist.gov", got)

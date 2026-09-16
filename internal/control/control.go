@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/cgi"
@@ -36,7 +37,7 @@ import (
 // renders with the wrong chrome. Any template added under templates/ must
 // be added to this list too.
 //
-//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/fleetapply.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
+//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/fleetapply.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
 var templateFS embed.FS
 
 //go:embed assets
@@ -184,6 +185,21 @@ type Server struct {
 	done     chan struct{}
 	closeOne sync.Once
 
+	// flashMu, flashes and flashNow are the one-line banner a write leaves
+	// behind for the page it redirects to; see flash.go for why it is held
+	// here rather than passed through the redirect URL. Every page handler
+	// and every write handler touches this map concurrently, so it has its
+	// own lock. flashNow is nil in a real server and set only by a test
+	// that needs to move time rather than sleep out flashTTL.
+	//
+	// Lock order: flashMu is innermost. Nothing reachable while it is held
+	// takes any other lock, and setFlash reads the cookie name through
+	// authNow (which takes authMu) BEFORE acquiring it, not while holding
+	// it.
+	flashMu  sync.Mutex
+	flashes  map[string]flashEntry
+	flashNow func() time.Time
+
 	// inFlightMu and inFlightProbes serialise setup probes against each
 	// other, not just against the daemon's own config: probeGuarded's
 	// config-membership check closes the window against an already
@@ -245,6 +261,7 @@ func New(opts Options) (*Server, error) {
 		},
 		claimTok:       tok,
 		sessions:       sessions,
+		flashes:        make(map[string]flashEntry),
 		done:           make(chan struct{}),
 		inFlightProbes: make(map[string]bool),
 	}, nil
@@ -411,9 +428,13 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Flash: the status page's own overlay switches post through the
+	// curated-setting handler and name this page as where they came from,
+	// so a toggle from here lands back here with its one-line report.
 	s.render(w, "dashboard.html", struct {
 		Title   string
 		Cards   []statusCard
 		Toggles []Field
-	}{Title: "Status", Cards: s.statusCards(urls), Toggles: toggles})
+		Flash   *Flash
+	}{Title: "Status", Cards: s.statusCards(urls), Toggles: toggles, Flash: s.takeFlash(r)})
 }

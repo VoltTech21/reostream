@@ -325,24 +325,19 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/cam1/settings", url.Values{
+	// A curated write redirects rather than rendering; what it reports is
+	// flash_test.go's subject. Here the redirect is only the sign the
+	// handler ran to completion, and the camera's own received bytes below
+	// are the actual claim.
+	c := flashBrowser(t)
+	resp := postForm(t, c, ts.URL+"/cameras/cam1/settings", url.Values{
 		"block": {"osd get"},
 		"xpath": {"OsdChannelName/name"},
 		"value": {"lounge"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
-	}
-	if !strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) {
-		t.Fatalf("response does not report confirmed: %s", raw)
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got %d, want 303: %s", resp.StatusCode, raw)
 	}
 
 	// The actual proof: what reached the camera, not what the handler
@@ -385,24 +380,19 @@ func TestServeApplySettingRefusesWhenTheFieldDoesNotResolve(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/cam1/settings", url.Values{
+	// The refusal itself is reported as a banner on the page this redirects
+	// back to; TestARefusedCuratedWriteReportsAsRefusedNotAsSuccess owns
+	// that wording. What this test owns is the wire: nothing may reach the
+	// camera.
+	c := flashBrowser(t)
+	resp := postForm(t, c, ts.URL+"/cameras/cam1/settings", url.Values{
 		"block": {"isp get"},
 		"xpath": {"InputAdvanceCfg/DayNight/IrcutMode"},
 		"value": {"ir"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), `<strong class="outcome-refused">refused</strong>`) {
-		t.Fatalf("an unresolved field must be reported as refused, got: %s", raw)
-	}
-	if strings.Contains(string(raw), `<strong class="outcome-confirmed">confirmed</strong>`) || strings.Contains(string(raw), `<strong class="outcome-accepted">accepted</strong>`) {
-		t.Fatalf("an unresolved field must never read as any kind of success: %s", raw)
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got %d, want 303: %s", resp.StatusCode, raw)
 	}
 	// Nothing to write was ever composed, so nothing should have reached
 	// the camera beyond the read this handler itself took.

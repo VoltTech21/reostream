@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -418,7 +419,8 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 	xpath := r.FormValue("xpath")
 	value := r.FormValue("value")
 
-	if _, ok := curatedField(block, xpath); !ok {
+	field, ok := curatedField(block, xpath)
+	if !ok {
 		http.Error(w, fmt.Sprintf("%s %s is not a curated field", block, xpath), http.StatusBadRequest)
 		return
 	}
@@ -455,18 +457,26 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Where this write reports back to. The camera page is where a curated
+	// setting lives, but the status page's quick overlay switches post
+	// through this same handler, and an operator toggling one on the fleet
+	// view expects to still be on the fleet view afterwards; returnTo lets
+	// that form say where it came from, and ignores anything that is not a
+	// path on this page.
+	back := returnTo(r, "/cameras/"+url.PathEscape(cam.Name))
+	subject := fmt.Sprintf("%s: %s", cam.Name, lowerFirst(field.Label))
+
 	body, err := setField(doc, xpath, value)
 	if err != nil {
 		// The inferred image XPaths in particular may not match this
 		// model's actual schema. That must read as a refusal, the same
 		// vocabulary a rejected write already uses, never as a silent
 		// success: nothing was sent to the camera at all.
-		s.render(w, "result.html", writeResultPage{
-			Title:   fmt.Sprintf("%s: %s", cam.Name, block),
-			Camera:  cam,
+		s.setFlash(w, r, flashFor(subject, WriteResult{
 			Outcome: "refused",
 			Detail:  fmt.Sprintf("could not apply %s to the current document: %v", xpath, err),
-		})
+		}))
+		http.Redirect(w, r, back, http.StatusSeeOther)
 		return
 	}
 
@@ -476,19 +486,22 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page := writeResultPage{
-		Title:   fmt.Sprintf("%s: %s", cam.Name, block),
-		Camera:  cam,
-		Outcome: result.Outcome,
-		Detail:  result.Detail,
-		Before:  string(result.Before),
-		After:   string(result.After),
-	}
+	// Post/redirect/get rather than rendering the write's own result page.
+	// A refresh after this is a plain GET of the page the setting lives
+	// on, not a second write to the camera, and the operator is left
+	// looking at the control they just changed rather than at a wall of
+	// before/after XML whose only way onward was "restore previous".
+	flash := flashFor(subject, result)
 	if len(result.Before) > 0 {
-		page.RestoreAction = fmt.Sprintf("/cameras/%s/write/%d", cam.Name, pair.Set)
-		page.RestoreParam = "body"
-		page.RestoreValue = string(result.Before)
-		page.RestoreHidden = map[string]string{"verify": "true"}
+		// The same verified restore result.html offers, built the same
+		// way: the document this block held before the write, sent back
+		// through /write/{id} with verify on. Only the presentation
+		// changes.
+		flash.UndoAction = fmt.Sprintf("/cameras/%s/write/%d", cam.Name, pair.Set)
+		flash.UndoParam = "body"
+		flash.UndoValue = string(result.Before)
+		flash.UndoHidden = map[string]string{"verify": "true"}
 	}
-	s.render(w, "result.html", page)
+	s.setFlash(w, r, flash)
+	http.Redirect(w, r, back, http.StatusSeeOther)
 }

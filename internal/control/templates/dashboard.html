@@ -11,6 +11,7 @@
 */}}
 {{define "body"}}
 <h1>Status</h1>
+{{template "flash" .Flash}}
 <div class="statuslist">
 {{$toggles := .Toggles}}
 {{range .Cards}}
@@ -55,6 +56,10 @@
      write this page cannot stand behind. */}}
 <form class="osd-toggle" method="post" action="/cameras/{{$camera}}/settings"
   data-xpath="{{.XPath}}">
+{{/* Where the write reports back to. Without it the settings handler
+     would send a toggle from this fleet view onto one camera's page,
+     which is not where the operator was. */}}
+<input type="hidden" name="return" value="/">
 <input type="hidden" name="block" value="">
 <input type="hidden" name="xpath" value="{{.XPath}}">
 <input type="hidden" name="value" value="">
