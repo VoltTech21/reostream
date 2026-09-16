@@ -2,6 +2,8 @@ package control
 
 import (
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,8 +50,8 @@ func writeTestConfig(t *testing.T, names ...string) string {
 	return path
 }
 
-// Every route except the login pair must be behind the auth wrapper. An
-// unauthenticated route on this page reaches cameras.
+// Every route except the login pair and the static assets must be behind
+// the auth wrapper. An unauthenticated route on this page reaches cameras.
 func TestEveryRouteExceptLoginIsAuthenticated(t *testing.T) {
 	protected := []struct{ method, path string }{
 		{"GET", "/"},
@@ -74,7 +76,6 @@ func TestEveryRouteExceptLoginIsAuthenticated(t *testing.T) {
 		{"GET", "/setup"},
 		{"GET", "/setup/urls"},
 		{"POST", "/setup/probe"},
-		{"GET", "/assets/style.css"},
 	}
 
 	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "one")})
@@ -103,5 +104,65 @@ func TestEveryRouteExceptLoginIsAuthenticated(t *testing.T) {
 				t.Errorf("%s %s redirected to %q, want /login", r.method, r.path, loc)
 			}
 		})
+	}
+}
+
+// The stylesheet must be served to a request with no session, or the login
+// page -- the one screen an operator cannot get past without it -- renders
+// unstyled. This is a deliberate exception and it is only defensible while
+// nothing under assets/ is a secret, so the test asserts that too: the
+// whole directory is walked, and every file must be readable without a
+// session and must not carry anything drawn from this install.
+func TestAssetsAreServedWithoutASession(t *testing.T) {
+	// A distinctive name, not "one": the check below is a substring
+	// search across files that include vendored JavaScript and a licence,
+	// and a common word would match by coincidence rather than by leak.
+	const cameraName = "qv7-marker-cam"
+	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, cameraName)})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	names, err := fs.Glob(assetSub, "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no assets are embedded at all")
+	}
+	for _, name := range names {
+		resp, err := c.Get(ts.URL + "/assets/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("/assets/%s answered %d to a request with no session, want 200", name, resp.StatusCode)
+			continue
+		}
+		// Nothing under assets/ may be derived from this install: they
+		// are the same bytes in every copy of the image.
+		for _, secret := range []string{"hunter2", cameraName, s.opts.ConfigPath, s.claimToken()} {
+			if secret != "" && strings.Contains(string(body), secret) {
+				t.Errorf("/assets/%s carries %q, which is specific to this install", name, secret)
+			}
+		}
+	}
+
+	// And the stylesheet in particular, by the URL the layout links.
+	resp, err := c.Get(ts.URL + "/assets/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the stylesheet the login page links answered %d, want 200", resp.StatusCode)
 	}
 }

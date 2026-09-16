@@ -57,6 +57,20 @@ a { color: var(--proven); }
   margin: 0 0 1.5rem .5rem;
 }
 
+/* The sidebar groups its links under headings: "Cameras", and the name of
+   the camera being looked at. They are labels for a group of links, not
+   page headings, so they are sized down rather than left at the browser's
+   default h2. */
+
+.sidebar nav h2 {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 1.25rem .5rem .4rem;
+}
+
+.sidebar nav h2:first-child { margin-top: 0; }
+
 .sidebar nav ul {
   list-style: none;
   margin: 0;
@@ -105,7 +119,11 @@ main h1 {
   margin: 0 0 1.25rem;
 }
 
-.card {
+/* A panel. The camera pages mark theirs up as <section>, the rest as
+   .card; they are the same object and are styled together rather than
+   drifting apart. */
+
+.card, section {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -113,7 +131,7 @@ main h1 {
   margin-bottom: 1.25rem;
 }
 
-.card h2 {
+main h2 {
   font-size: 1.05rem;
   font-weight: 600;
   margin: 0 0 .75rem;
@@ -126,6 +144,11 @@ main h1 {
 }
 
 /* Tables and settings rows: label left, value right, hairline between. */
+
+/* The probe and raw-block tables are wider than a narrow viewport and must
+   not be allowed to push the page sideways: they scroll inside their own
+   box instead. Every wide table on the camera pages is wrapped in one. */
+.table-wrap { overflow-x: auto; }
 
 table { border-collapse: collapse; width: 100%; }
 
@@ -208,6 +231,34 @@ legend { color: var(--muted); padding: 0 .4rem; }
 .state-novideo, .state-reconnecting { color: var(--partial); }
 .state-down { color: var(--refused); }
 .state-undetermined, .state-unknown { color: var(--unknown); }
+
+/* A caution beside a control: something a camera would not answer for, or
+   a write whose effect is not what an operator would assume. It stays
+   inline and visible, never behind a tooltip or an accordion. */
+
+.warning {
+  color: var(--partial);
+  font-size: .875rem;
+  margin: .25rem 0;
+}
+
+/* Write outcome: confirmed / accepted / refused. "accepted" is deliberately
+   the partial colour, not the proven one -- a 200 is not proof. */
+
+.outcome-confirmed { color: var(--proven); }
+.outcome-accepted { color: var(--partial); }
+.outcome-refused { color: var(--refused); }
+
+/* Write confidence: proven / unverified / known inert / unsafe to rewrite.
+   These carry the most weight of any colour on this page, because they sit
+   on pills beside buttons that write to a camera. "unsafe to rewrite" must
+   never be mistakable for "proven": it is the one that interrupts a live
+   stream. */
+
+.confidence-proven { color: var(--proven); }
+.confidence-unverified { color: var(--partial); }
+.confidence-known-inert { color: var(--refused); }
+.confidence-unsafe-to-rewrite { color: var(--refused); }
 
 /* Status rows (the dashboard). Each camera is one row; on a narrow
    viewport it stacks instead of forcing horizontal scroll. */

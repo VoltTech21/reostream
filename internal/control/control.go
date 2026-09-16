@@ -328,8 +328,21 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /setup", s.wrap(http.HandlerFunc(s.serveSetup)))
 	mux.Handle("GET /setup/urls", s.wrap(http.HandlerFunc(s.serveURLs)))
 	mux.Handle("POST /setup/probe", s.wrap(http.HandlerFunc(s.serveProbe)))
-	mux.Handle("GET /assets/", s.wrap(http.StripPrefix("/assets/",
-		http.FileServer(http.FS(assetSub)))))
+	// Assets are served WITHOUT auth, deliberately, and it is the one
+	// route on this page that is. Behind s.wrap the stylesheet request
+	// itself answered 303 /login, so the login screen -- the page an
+	// operator sees every day forever after -- rendered unstyled. (The
+	// claim screen escaped that only because claimGate exempts /assets/,
+	// which is the same exemption arriving one layer too late.)
+	//
+	// What is under assets/ is the whole argument: a stylesheet, the
+	// vendored mpegts.js and its two licence files, and a README about
+	// where that copy came from. No secret, no camera name, no config,
+	// nothing derived from any of them -- they are the same bytes for
+	// every install, and they are already in the published image. Any
+	// file added there has to hold to that.
+	mux.Handle("GET /assets/", http.StripPrefix("/assets/",
+		http.FileServer(http.FS(assetSub))))
 	// The live tiles need to fetch MPEG-TS from the same origin as this
 	// page: mpegts.js pulls the stream over XHR, the streaming listener is
 	// a different port and therefore a different origin, and that listener
