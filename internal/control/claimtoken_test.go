@@ -237,8 +237,19 @@ func TestAClaimTokenIsAcceptedHoweverItIsTyped(t *testing.T) {
 			t.Errorf("the token typed as %q was not accepted", typed)
 		}
 	}
-	// And one that really is different still is not.
-	if claimTokenMatches(tok, strings.ReplaceAll(bare, bare[:1], "Z")) {
+	// And one that really is different still is not. The substituted
+	// character is "0", which claimTokenAlphabet deliberately excludes, so
+	// this is a changed token BY CONSTRUCTION -- whatever the first
+	// character happened to be, it was not that. Replacing it with a
+	// character from the alphabet would be a no-op whenever the token
+	// already began with it, and the test would then report that the
+	// constant-time compare accepted a changed token when nothing had
+	// changed: a security alarm firing 1 run in 31.
+	changed := "0" + bare[1:]
+	if changed == bare {
+		t.Fatalf("the mutation did not change the token: %q", bare)
+	}
+	if claimTokenMatches(tok, changed) {
 		t.Error("a changed token was accepted")
 	}
 }
