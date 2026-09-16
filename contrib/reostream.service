@@ -13,7 +13,20 @@ Group=reostream
 #   /etc/reostream/reostream.env containing REOSTREAM_DRIVEWAY_PASSWORD=...
 EnvironmentFile=/etc/reostream/reostream.env
 
-ExecStart=/usr/local/bin/reostream -config /etc/reostream/config.toml
+# -data, not -config. An explicit -config naming a file that does not exist
+# is deliberately fatal, so a fresh install with that flag would exit 1 and
+# never reach the claim screen; -data names a DIRECTORY, and reostream
+# writes <data>/config.toml itself when the install is claimed. StateDirectory
+# below is what makes that directory exist and be writable by this unit's
+# user even under ProtectSystem=strict; systemd creates /var/lib/reostream
+# owned by reostream:reostream before ExecStart runs.
+ExecStart=/usr/local/bin/reostream -data /var/lib/reostream
+
+# /var/lib/reostream, created and chowned by systemd. It holds config.toml,
+# which holds camera passwords and the control password, so it is not
+# world-readable.
+StateDirectory=reostream
+StateDirectoryMode=0700
 
 # KillSignal and TimeoutStopSec are deliberate, not defaults left in place.
 # On a stop, the daemon sends a stream-stop message to every connected
@@ -31,9 +44,11 @@ Restart=on-failure
 RestartSec=5
 
 # Hardening. Each of these was chosen for a service that only opens an
-# outbound TCP connection to cameras and an inbound HTTP listener, and reads
-# its config and env file from /etc; nothing here needs write access to the
-# filesystem, a home directory, or elevated privileges.
+# outbound TCP connection to cameras and an inbound HTTP listener, reads its
+# env file from /etc, and writes its config under StateDirectory; nothing
+# here needs write access to the rest of the filesystem, a home directory,
+# or elevated privileges. ProtectSystem=strict leaves StateDirectory
+# writable, which is the one path that has to be.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

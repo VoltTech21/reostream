@@ -114,9 +114,13 @@ config file at all:
    `XXXX-XXXX-XXXX-XXXX`, and the log line names the URL to open. The token lives in
    memory only: restarting the container before it is claimed prints a new one and the
    old one stops working.
-3. Open that URL, enter the token and a password of your own choosing. That writes
-   `/data/config.toml` inside the container and the page starts requiring the password
-   from then on.
+3. Open that URL and enter the token. The password field arrives already filled in with
+   a password generated for that render -- 16 characters of `crypto/rand` from a
+   31-character alphabet, 79.3 bits -- and accepting it as it stands is the recommended
+   answer: it is the only thing that makes the password strong by construction, and
+   nothing on this page is rate limited. A password you type instead must be at least 16
+   characters. Either way, submitting writes `/data/config.toml` inside the container and
+   the page starts requiring that password from then on.
 4. Add a camera from the page, or by editing the config directly, either by hand on the
    mounted data volume or through the page's own editor:
 
@@ -203,10 +207,18 @@ listen = "0.0.0.0:8562"
 password = "$REOSTREAM_CONTROL_PASSWORD"
 ```
 
-Absent the section nothing is served and nothing changes. `password` follows the same
-rule as a camera password: a value beginning with `$` is read from that environment
-variable. `listen` with no password refuses to boot unless `allow_no_password = true` is
-set explicitly.
+Absent the section this daemon starts no control listener of its own. That is not the
+same as "nothing changes": a container image started with no config at all serves the
+page anyway, on 0.0.0.0:8562, so there is somewhere to claim the install from -- see
+Configuration above. While a config file exists but names no `[control]` password the
+page stays behind its claim screen and serves nothing else, so an old config carried
+over from before this feature is closed rather than open. Write a `[control]` section
+with a password into it and the running daemon picks that up on its next request, with
+no restart.
+
+`password` follows the same rule as a camera password: a value beginning with `$` is
+read from that environment variable. `listen` with no password refuses to boot unless
+`allow_no_password = true` is set explicitly.
 
 Control runs on its own listener, separate from the streaming port. The streaming port
 stays open and unauthenticated, which is what a recorder needs; the control port carries
@@ -217,6 +229,17 @@ The page shows one row per stream translated from `/api/status` into a state
 (streaming, no video, reconnecting, down) rather than raw booleans, plays each stream's
 video live in the browser, edits the config with the same parser the daemon boots with
 so an invalid save is rejected before it is written, and tails the daemon's own logs.
+
+It also controls the cameras themselves, which is the other half of what it is for.
+Each camera has its own page: what the camera says it is and what this login may do on
+it, what every read this daemon knows answers, a curated set of settings that can
+actually be changed, the floodlight, its NTP server and timezone, and an advanced view
+of every readable block with the raw write behind it. Nothing there is presented as more
+certain than it is: each writable pair carries a confidence -- proven, unverified, known
+inert, unsafe to rewrite -- from what was actually observed on a camera rather than from
+a 200, and a write that answers 200 is reported as "accepted" and not as "confirmed"
+unless it was read back. NTP and timezone can be applied to the whole fleet at once,
+per-camera result by per-camera result. See docs/control.md.
 Saving diffs the old config against the new and reloads only what changed: an unchanged
 stream is never stopped, and a changed camera is stopped to completion before it is
 started again, so its session is released before the same camera is asked to reconnect.
@@ -310,8 +333,10 @@ and publishes the streaming and control ports. Nothing is baked into the image: 
 install has no config and no password until it is claimed through the control page, per
 the Configuration section above.
 
-For a plain Linux host, `contrib/reostream.service` is a systemd unit. Read the comment
-on `KillSignal` and `TimeoutStopSec` before changing either: a shutdown that does not
+For a plain Linux host, `contrib/reostream.service` is a systemd unit. It claims the
+same way the container does: it passes `-data /var/lib/reostream`, systemd creates that
+directory for it, and the config appears there when the install is claimed. Read the
+comment on `KillSignal` and `TimeoutStopSec` before changing either: a shutdown that does not
 give the daemon time to send its stream-stop messages leaves every camera in the fleet
 refusing new connections for minutes.
 

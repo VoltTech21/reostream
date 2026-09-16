@@ -1,6 +1,7 @@
-// Package webui is the plumbing shared by the project's two web surfaces:
-// the operator page inside the streaming daemon, and reocam's camera control
-// page. It holds no policy about either, only sessions, auth and rendering.
+// Package webui is the session, auth and rendering plumbing behind the
+// reostream daemon's operator page -- one process, one page, covering both
+// the fleet and the cameras on it. It holds no policy about that page, only
+// the mechanism.
 package webui
 
 import (
@@ -82,14 +83,14 @@ func (s *SessionStore) len() int {
 // Auth gates a handler on a session. LoginPath is where an unauthenticated
 // request is sent.
 //
-// CookieName is supplied by the consumer, not a shared package constant,
-// because this package is used by two independent surfaces on one host:
-// reocam's camera control page on :8563 and the streaming daemon's own
-// operator page on :8560. Each runs its own SessionStore, so two surfaces
-// sharing one cookie name means logging into one silently logs the other
-// out, intermittently, whenever the browser resends whichever cookie it
-// last set for that name. Requiring every caller to name its own cookie is
-// what stops a third surface from inheriting that collision by accident.
+// CookieName is supplied by the consumer, not a shared package constant.
+// There is one surface today, the daemon's operator page, and this package
+// holds nothing that assumes it. Two surfaces on one host that shared a
+// cookie name would each run their own SessionStore, so logging into one
+// would silently log the other out, intermittently, whenever the browser
+// resent whichever cookie it last set for that name. That is exactly what
+// happened while this project had a second page, and making every caller
+// name its own cookie is what stops a second one reintroducing it.
 type Auth struct {
 	Store           *SessionStore
 	Password        string

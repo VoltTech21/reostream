@@ -243,16 +243,26 @@ The claim flow needs its own tests, because it is the one path a new user cannot
 avoid: an unclaimed install serves the claim screen; a claimed one does not; a
 wrong token is refused and the right one claims; the token is single use and a
 restart while unclaimed yields a different one; the compare is constant time
-(asserted as a call, not as a timing measurement); the login rate from one source
-is MEASURED flat at 1, 4, 8, 64 and 512 concurrent workers, since every previous
-design here passed at one worker and failed by three orders of magnitude at
-eight; concurrent attempts take different places in the queue; an abandoned
-attempt still spends its place; a queue decays with its window and a success
-clears it; a correct password is never refused, with a queue ahead of it or with
-the waiting pool saturated; two addresses in one /64 share one budget; the table
-stays bounded under a flood of distinct sources; a short password is refused at
-claim time with the rule stated; zero
-cameras is valid; and the first save actually creates the file.
+(asserted as a call, not as a timing measurement, and with a mutation that
+cannot coincide with the original); zero cameras is valid; and the first save
+actually creates the file.
+
+The login has no rate limit, and that end state is what gets tested rather than
+the four throttles that were measured and rejected on the way to it. There is no
+delay: a wrong password is answered immediately and a correct one is accepted
+immediately, whatever else is in flight, and no attempt is ever refused or
+deferred because of a different one. The password is what carries the weight, so
+the tests are about the password: the claim screen offers a generated one on
+every render, freshly generated each time and never stored, logged or reused;
+a hand-typed password shorter than the 16-character floor is refused at claim
+time with the rule stated; and 16 or more is accepted.
+
+Every state a config file can be in is tested for which side it fails to, since
+that is what decides whether the page is open: a password is adopted live
+without a restart; `allow_no_password` is honoured; an unparseable file, a
+`$NAME` whose variable is unset, and a file with no `[control]` section at all
+all leave the install UNCLAIMED with the gate shut, and a gated route on such an
+install must redirect rather than serve a camera password into a response body.
 
 Then a live pass, including a first run from genuinely nothing. Every live pass
 run against this project so far has found something no unit test could, and the
