@@ -38,7 +38,10 @@ func (r *recordingReloader) Validate(cams []config.Camera) error {
 func TestConfigSaveReloadsTheFleet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n"), 0o600)
+	// The [control] section is what makes this install claimed; without
+	// one, every route below would be answered by the claim gate instead
+	// of by the handler under test. See claim.go.
+	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\nallow_no_password = true\n"), 0o600)
 
 	rel := &recordingReloader{}
 	ts := newTestServer(t, control.Options{
@@ -48,6 +51,10 @@ func TestConfigSaveReloadsTheFleet(t *testing.T) {
 	})
 
 	body := url.Values{"toml": {`listen = "0.0.0.0:8560"
+
+[control]
+listen = "0.0.0.0:8562"
+allow_no_password = true
 
 [[camera]]
 name = "one"
@@ -73,7 +80,10 @@ streams = ["main"]
 func TestConfigSaveDoesNotReloadWhenValidationFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n"), 0o600)
+	// The [control] section is what makes this install claimed; without
+	// one, every route below would be answered by the claim gate instead
+	// of by the handler under test. See claim.go.
+	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\nallow_no_password = true\n"), 0o600)
 
 	rel := &recordingReloader{}
 	ts := newTestServer(t, control.Options{

@@ -429,6 +429,64 @@ func TestAnAllowNoPasswordConfigIsClaimedAndStaysOpen(t *testing.T) {
 	}
 }
 
+// A config file with no [control] section at all answers neither question
+// claimed() asks. It must NOT drop the gate: this process is still running
+// on the first-run AllowNoPassword default, so counting such a file as
+// claimed would 404 the claim screen and serve every route -- including the
+// camera passwords on the Config page -- to a request with no credential.
+// The file appearing underneath a first-run daemon is the mundane case: any
+// config written before this feature existed has no [control] section.
+func TestAConfigWithNoControlSectionLeavesTheInstallUnclaimed(t *testing.T) {
+	const cameraPassword = "hunter2"
+	path := filepath.Join(t.TempDir(), "config.toml")
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+
+	// Before: no file, so the gate is shut and the claim screen is on.
+	if rec := getFrom(t, s, "/config"); rec.Header().Get("Location") != "/claim" {
+		t.Fatalf("an install with no config sent /config to %q, want /claim", rec.Header().Get("Location"))
+	}
+
+	text := "listen = \"0.0.0.0:8560\"\n\n[[camera]]\nname = \"gate\"\naddress = \"192.0.2.10\"\nusername = \"admin\"\npassword = \"" + cameraPassword + "\"\nstreams = [\"main\"]\n"
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Errors, not fatals: the route assertions below are the ones that
+	// say what counting this as claimed actually costs, and they are
+	// worth seeing in the same run.
+	if s.claimed() {
+		t.Error("a config with no [control] section counted as claimed")
+	}
+	if s.authNow().Password != "" {
+		t.Error("a config with no password to adopt left one in force anyway")
+	}
+
+	// Every gated route still redirects rather than serving, and the
+	// camera password reaches no response body.
+	for _, path := range []string{"/", "/config", "/cameras", "/logs", "/setup"} {
+		rec := getFrom(t, s, path)
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/claim" {
+			t.Errorf("%s answered %d to %q, want 303 to /claim", path, rec.Code, rec.Header().Get("Location"))
+		}
+		if strings.Contains(rec.Body.String(), cameraPassword) {
+			t.Errorf("%s served a camera password to an unauthenticated request", path)
+		}
+	}
+
+	// And the claim screen is still there -- refusing, because that file
+	// will not be overwritten, but there and saying what to fix.
+	rec := getFrom(t, s, "/claim")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/claim answered %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "nothing to claim") {
+		t.Fatalf("the claim screen does not explain the config it will not overwrite:\n%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), cameraPassword) {
+		t.Fatal("the claim screen leaked a camera password")
+	}
+}
+
 // Adding a password through the Config page is the other way an install
 // stops being open, and it has to take effect in the same breath: a
 // "saved" banner from a page that still serves without a password is worse

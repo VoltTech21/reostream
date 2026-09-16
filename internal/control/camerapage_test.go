@@ -25,10 +25,15 @@ import (
 // real one, so a test that accidentally dials cannot reach anything. This
 // mirrors routes_test.go's own writeTestConfig: that one lives in package
 // control, unreachable from here.
+//
+// The [control] section saying allow_no_password is what makes the install
+// CLAIMED, which is the state these pages are reached in. A config with no
+// [control] section at all leaves it unclaimed and sends every route to the
+// claim screen; see claim.go.
 func writeTestConfig(t *testing.T, names ...string) string {
 	t.Helper()
 	var b strings.Builder
-	b.WriteString("listen = \"0.0.0.0:8560\"\n")
+	b.WriteString("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\nallow_no_password = true\n")
 	for i, name := range names {
 		fmt.Fprintf(&b, "\n[[camera]]\nname = %q\naddress = \"192.0.2.%d\"\nusername = \"admin\"\npassword = \"\"\nstreams = [\"main\"]\n", name, i+10)
 	}

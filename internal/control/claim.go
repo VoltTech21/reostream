@@ -56,16 +56,10 @@ const (
 //     password is written later.
 //   - [control].allow_no_password: claimed. That is an operator's
 //     deliberate choice and the live state already matches it.
-//   - a config with no [control] section at all: claimed, because the file
-//     exists and says nothing about this page, so however this process was
-//     configured stands. The shipped daemon never reaches this -- it only
-//     starts the page when [control] names a listener, and config.Validate
-//     refuses such a listener with neither a password nor
-//     allow_no_password -- but a page left open by it is still worth
-//     saying out loud, so it logs.
 //   - no file: unclaimed. The gate stays shut, which is the whole point.
 //   - anything else -- unparseable, unreadable, a directory, a file caught
-//     half-written, a [control] with no answer in it -- NOT claimed.
+//     half-written, a config with no [control] section at all, a [control]
+//     with no answer in it -- NOT claimed.
 //     Stricter than the os.Stat it replaces, and it means a half-written
 //     config cannot drop the gate. serveClaim separately refuses to write
 //     over a file that is already there, so "unclaimed" never costs
@@ -95,11 +89,31 @@ func (s *Server) claimed() bool {
 		return false
 	}
 	if cfg.Control == nil {
-		if s.settleClaim() && s.authNow().AllowNoPassword {
-			log.Printf("reostream: control: the config at %s has no [control] section, so this page is still serving with no password; add a password line under [control] to close it",
-				s.opts.ConfigPath)
-		}
-		return true
+		// NOT claimed, and nothing is settled. A file with no [control]
+		// section answers neither question this function asks, so it is
+		// the unreadable case wearing a different hat: there is no
+		// password to adopt, and counting it as claimed would drop the
+		// gate over a process whose live auth state is still the
+		// first-run AllowNoPassword default -- serving the config page,
+		// and the camera passwords in it, to a request carrying no
+		// credential at all. That is not hypothetical: a pre-branch
+		// config legitimately has no [control] section, and the
+		// refusal's own advice invites writing one by hand.
+		//
+		// It is tempting to argue the shipped daemon cannot reach here,
+		// because it only starts the page when [control] names a
+		// listener and config.Validate refuses such a listener with
+		// neither a password nor allow_no_password. That argument is
+		// about STARTUP, and this branch is reached from the first-run
+		// path, which is precisely the one that never ran startup
+		// validation: main synthesized a config in memory and is
+		// already serving. The file appearing underneath it is the
+		// whole scenario.
+		//
+		// Leaving it unsettled is also what lets the install heal
+		// itself: add a password line to that file and the next request
+		// adopts it, with no restart.
+		return false
 	}
 	switch {
 	case cfg.Control.Password != "":

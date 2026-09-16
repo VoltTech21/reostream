@@ -25,10 +25,19 @@ func newTestServer(t *testing.T, opts Options) *Server {
 // writeTestConfig writes a reostream config naming the given cameras and
 // returns its path. Addresses are from the documentation range, never a
 // real one, so a test that accidentally dials cannot reach anything.
+//
+// The config carries a [control] section saying allow_no_password, because
+// that is what a CLAIMED install looks like, and a test server exists to
+// exercise the pages behind the claim gate. A config with no [control]
+// section at all is a different state -- it answers neither question
+// claimed() asks, so it leaves the install unclaimed and every route
+// redirecting to the claim screen. See claim.go, and
+// TestAConfigWithNoControlSectionLeavesTheInstallUnclaimed, which is the
+// test that owns that state.
 func writeTestConfig(t *testing.T, names ...string) string {
 	t.Helper()
 	var b strings.Builder
-	b.WriteString("listen = \"0.0.0.0:8560\"\n")
+	b.WriteString("listen = \"0.0.0.0:8560\"\n\n[control]\nlisten = \"0.0.0.0:8562\"\nallow_no_password = true\n")
 	for i, name := range names {
 		fmt.Fprintf(&b, "\n[[camera]]\nname = %q\naddress = \"192.0.2.%d\"\nusername = \"admin\"\npassword = \"\"\nstreams = [\"main\"]\n", name, i+10)
 	}
