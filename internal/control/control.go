@@ -310,6 +310,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /cameras/add", s.wrap(http.HandlerFunc(s.saveCamera)))
 	mux.Handle("GET /cameras/{name}", s.wrap(http.HandlerFunc(s.serveCamera)))
 	mux.Handle("POST /cameras/{name}/settings", s.wrap(http.HandlerFunc(s.serveApplySetting)))
+	// Read only, and the status page's toggles are the only caller. Writing
+	// them still goes through POST /cameras/{name}/settings above: that
+	// handler carries the read-modify-write discipline (read the camera's
+	// own document, change one field, send it back), and a second write
+	// path is exactly how a composed document reaches a camera.
+	mux.Handle("GET /cameras/{name}/osd", s.wrap(http.HandlerFunc(s.serveOSD)))
 	mux.Handle("POST /cameras/{name}/floodlight", s.wrap(http.HandlerFunc(s.serveApplyFloodlight)))
 	mux.Handle("GET /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveTime)))
 	mux.Handle("POST /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveApplyTime)))
@@ -384,8 +390,30 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
+	// The URLs a recorder would use, built by setup.go's own recorderURLs
+	// from the host this page was reached on, so the status page shows the
+	// same URL the setup page pastes out. A config that would not load at
+	// all leaves them empty rather than stopping the page: the stream state
+	// below comes from memory and is still worth showing.
+	var urls RecorderURLs
+	if err == nil {
+		urls = recorderURLs(cfg, hostOnly(r.Host))
+	}
+	// The overlay switches each card offers come from the curated OSD group
+	// itself, not a second list written out in the template: the XPath the
+	// page posts and the XPath osd.go reads have to be the same string, and
+	// this is what keeps them one.
+	var toggles []Field
+	if g, ok := osdGroup(); ok {
+		for _, f := range g.Fields {
+			if f.Kind == "toggle" {
+				toggles = append(toggles, f)
+			}
+		}
+	}
 	s.render(w, "dashboard.html", struct {
-		Title  string
-		Groups []cameraGroup
-	}{Title: "Status", Groups: s.cameraGroups()})
+		Title   string
+		Cards   []statusCard
+		Toggles []Field
+	}{Title: "Status", Cards: s.statusCards(urls), Toggles: toggles})
 }

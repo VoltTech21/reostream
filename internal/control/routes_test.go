@@ -58,6 +58,7 @@ func TestEveryRouteExceptLoginIsAuthenticated(t *testing.T) {
 		{"GET", "/cameras"},
 		{"GET", "/cameras/one"},
 		{"POST", "/cameras/one/settings"},
+		{"GET", "/cameras/one/osd"},
 		{"POST", "/cameras/one/floodlight"},
 		{"GET", "/cameras/one/time"},
 		{"POST", "/cameras/one/time"},

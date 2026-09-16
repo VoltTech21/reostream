@@ -59,3 +59,79 @@ func (s *Server) cameraGroups() []cameraGroup {
 	}
 	return out
 }
+
+// streamLine is one stream inside a camera's card: the same row the status
+// table has always carried, plus the bare stream name ("main", not
+// "lounge/main") and the URL a recorder would point at it.
+type streamLine struct {
+	row
+	Stream string
+	URL    string
+}
+
+// statusCard is one CAMERA on the status page, not one stream. A camera
+// pulling main, sub and extern used to render as three separate cards,
+// which is the same "two different things called a camera" confusion the
+// merge of the operator page and the camera control page removed: a person
+// has one camera in their head. Everything that camera is doing -- every
+// stream's state, its address, its URLs, its picture, its overlay toggles
+// -- belongs in one card.
+type statusCard struct {
+	Camera  string
+	Address string
+	Streams []streamLine
+	Tile    tile
+}
+
+// statusCards folds the per-stream rows into one card per camera, joining
+// in each camera's configured address and each stream's recorder URL.
+//
+// Nothing here contacts a camera. Every value comes from memory (the
+// stream stats and the hubs) or from the config file, which is what makes
+// this page render instantly however many cameras are configured; see
+// dashboard.html for how the overlay toggles keep that true.
+func (s *Server) statusCards(urls RecorderURLs) []statusCard {
+	// Name and Address only. Camera also carries Username and Password,
+	// and no camera password may reach a template, a response body, a log
+	// line or a URL.
+	address := make(map[string]string)
+	if cams, err := s.fleet(); err == nil {
+		for _, c := range cams {
+			address[c.Name] = c.Address
+		}
+	}
+	// A fleet that will not load costs this page its addresses, not the
+	// page: the stream state is read from memory and is still worth
+	// showing, and the config page is where a broken config gets reported.
+
+	// Every configured camera gets a card, including one nothing has
+	// reported status for yet: a camera that is in the config and missing
+	// from this page reads as "gone", which is the opposite of what a
+	// camera that has not connected yet needs to look like.
+	groups := s.cameraGroups()
+	seen := make(map[string]bool, len(groups))
+	for _, g := range groups {
+		seen[g.Camera] = true
+	}
+	for name := range address {
+		if !seen[name] {
+			groups = append(groups, cameraGroup{Camera: name})
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Camera < groups[j].Camera })
+
+	out := make([]statusCard, 0, len(groups))
+	for _, g := range groups {
+		card := statusCard{Camera: g.Camera, Address: address[g.Camera], Tile: g.Tile}
+		for _, r := range g.Rows {
+			_, stream, _ := strings.Cut(r.Name, "/")
+			card.Streams = append(card.Streams, streamLine{
+				row:    r,
+				Stream: stream,
+				URL:    urls.StreamHTTP[g.Camera][stream],
+			})
+		}
+		out = append(out, card)
+	}
+	return out
+}

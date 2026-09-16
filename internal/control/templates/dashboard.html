@@ -1,35 +1,69 @@
+{{/*
+  dashboard.html: one card per CAMERA, not per stream. statusCard
+  (dashboard.go) carries everything one camera is doing -- its address,
+  every stream's state and URL, its picture, and the two overlay switches
+  -- so a camera pulling main, sub and extern is one card, not three.
+
+  Nothing in the rendered page contacts a camera. The overlay switches
+  start disabled and are filled in afterwards, one fetch per camera, from
+  GET /cameras/{name}/osd; see osd.go for why that read cannot happen while
+  the page is being rendered.
+*/}}
 {{define "body"}}
 <h1>Status</h1>
 <div class="statuslist">
-{{range .Groups}}
-{{$group := .}}
-{{$n := len .Rows}}
-{{if eq $n 0}}
-<div class="card statusrow">
-<div class="statusrow-main">
-<span class="cam-name">{{.Camera}}</span>
-<span class="pill state-unknown">no status yet</span>
+{{$toggles := .Toggles}}
+{{range .Cards}}
+{{$camera := .Camera}}
+<div class="card statuscard" data-camera="{{$camera}}">
+<div class="statuscard-video">{{template "cameravideo" .}}</div>
+<div class="statuscard-body">
+
+<div class="statuscard-head">
+<a class="cam-name" href="/cameras/{{$camera}}">{{$camera}}</a>
+{{if .Address}}<span class="metric">{{.Address}}</span>{{end}}
 </div>
-<div class="statusrow-video">{{template "cameravideo" $group}}</div>
-</div>
-{{else}}
-{{range $i, $r := .Rows}}
-<div class="card statusrow">
-<div class="statusrow-main">
-<span class="cam-name">{{$r.Name}}</span>
-<span class="pill state-{{$r.State}}">{{$r.State}}</span>
-<span class="metric">{{printf "%.1f" $r.FPS}} fps</span>
-<span class="metric">{{$r.MbpsBitrate}} Mbps</span>
-<span class="metric">{{$r.Clients}} clients</span>
-<span class="metric">{{$r.Restarts}} restarts</span>
-{{if $r.LastError}}<span class="lasterror">{{$r.LastError}}</span>{{end}}
-</div>
-{{if eq $i 0}}
-<div class="statusrow-video">{{template "cameravideo" $group}}</div>
+
+{{if not .Streams}}
+<p class="streamline"><span class="pill state-unknown">no status yet</span></p>
 {{end}}
+{{range .Streams}}
+<div class="streamline">
+<span class="stream-name">{{.Stream}}</span>
+<span class="pill state-{{.State}}">{{.State}}</span>
+<span class="metric">{{printf "%.1f" .FPS}} fps</span>
+<span class="metric">{{.MbpsBitrate}} Mbps</span>
+<span class="metric">{{.Clients}} clients</span>
+<span class="metric">{{.Restarts}} restarts</span>
+{{if .URL}}
+<code class="streamurl">{{.URL}}</code>
+<button type="button" class="linkish copy-btn" data-copy="{{.URL}}">copy</button>
+{{end}}
+{{if .LastError}}<span class="lasterror">{{.LastError}}</span>{{end}}
 </div>
 {{end}}
+
+<div class="statuscard-tools">
+{{range $toggles}}
+{{/* The write goes to the settings handler every other curated field
+     already writes through. block is left empty until the OSD read says
+     which block this camera answered on, and the checkbox stays disabled
+     until then: a toggle that posted a guessed block name would be a
+     write this page cannot stand behind. */}}
+<form class="osd-toggle" method="post" action="/cameras/{{$camera}}/settings"
+  data-xpath="{{.XPath}}">
+<input type="hidden" name="block" value="">
+<input type="hidden" name="xpath" value="{{.XPath}}">
+<input type="hidden" name="value" value="">
+<label title="reading this camera"><input type="checkbox" disabled> {{.Label}}</label>
+</form>
 {{end}}
+<a class="tool" href="/cameras/{{$camera}}/time">sync time</a>
+<a class="tool" href="/cameras/{{$camera}}">camera page</a>
+</div>
+
+</div>
+</div>
 {{end}}
 </div>
 
@@ -80,6 +114,92 @@ for (const container of document.querySelectorAll('.cam-video[data-src]')) {
   btn.addEventListener('click', function() { startPlayer(container); });
   video.addEventListener('click', function() {
     if (!video.hasAttribute('controls')) startPlayer(container);
+  });
+}
+
+// Copying a stream URL. navigator.clipboard is absent on a page served
+// over plain HTTP to anything but localhost, which is how this page is
+// normally reached, so the fallback is a selection the operator can copy
+// with the keyboard rather than a button that silently does nothing.
+for (const btn of document.querySelectorAll('.copy-btn')) {
+  btn.addEventListener('click', function() {
+    const text = btn.dataset.copy;
+    const said = function(word) {
+      btn.textContent = word;
+      setTimeout(function() { btn.textContent = 'copy'; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() { said('copied'); },
+        function() { selectURL(btn); });
+      return;
+    }
+    selectURL(btn);
+  });
+}
+
+function selectURL(btn) {
+  const code = btn.parentNode.querySelector('.streamurl');
+  if (!code) return;
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// The overlay switches, filled in after the page is already on screen.
+// One fetch per camera, each independent: a camera that does not answer
+// leaves its own two switches unavailable, with the reason on hover, and
+// costs the rest of the page nothing.
+for (const card of document.querySelectorAll('.statuscard[data-camera]')) {
+  loadOSD(card);
+}
+
+function loadOSD(card) {
+  const camera = card.dataset.camera;
+  const forms = card.querySelectorAll('.osd-toggle');
+  fetch('/cameras/' + encodeURIComponent(camera) + '/osd', {
+    headers: {'Accept': 'application/json'}
+  }).then(function(r) {
+    // A non-2xx here is not a camera that failed -- osd.go answers those
+    // 200 with a reason -- it is this browser's session having expired,
+    // which the auth wrapper answers with a redirect to /login.
+    if (!r.ok) throw new Error('not signed in any more (' + r.status + ')');
+    return r.json();
+  }).then(function(flags) {
+    for (const form of forms) {
+      const field = (flags.fields || {})[form.dataset.xpath];
+      if (flags.error) { markUnavailable(form, flags.error); continue; }
+      if (!field) { markUnavailable(form, 'this camera does not report it'); continue; }
+      if (field.unavailable) { markUnavailable(form, field.unavailable); continue; }
+      enableToggle(form, flags.block, field.on);
+    }
+  }).catch(function(err) {
+    for (const form of forms) markUnavailable(form, String(err.message || err));
+  });
+}
+
+function markUnavailable(form, reason) {
+  const label = form.querySelector('label');
+  label.classList.add('unavailable');
+  label.title = reason;
+}
+
+function enableToggle(form, block, on) {
+  const box = form.querySelector('input[type=checkbox]');
+  const label = form.querySelector('label');
+  form.querySelector('input[name=block]').value = block;
+  box.checked = on;
+  box.disabled = false;
+  label.title = block;
+  box.addEventListener('change', function() {
+    // "1" and "0" are what the camera's own document uses for these two
+    // fields. The write is a normal form post to the settings handler,
+    // which reads the camera's document fresh and changes only this
+    // field; the result page it renders is the same one every other
+    // curated write reports through.
+    form.querySelector('input[name=value]').value = box.checked ? '1' : '0';
+    form.submit();
   });
 }
 </script>

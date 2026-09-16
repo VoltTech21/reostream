@@ -260,53 +260,140 @@ legend { color: var(--muted); padding: 0 .4rem; }
 .confidence-known-inert { color: var(--refused); }
 .confidence-unsafe-to-rewrite { color: var(--refused); }
 
-/* Status rows (the dashboard). Each camera is one row; on a narrow
-   viewport it stacks instead of forcing horizontal scroll. */
+/* Status cards (the dashboard). One card per CAMERA, whatever number of
+   streams it pulls: the picture on the left, and everything that camera is
+   doing stacked beside it. Dense on purpose -- eight cameras is a normal
+   fleet and it should not be four screens. On a narrow viewport it stacks
+   instead of forcing horizontal scroll. */
 
-.statuslist { display: flex; flex-direction: column; gap: 1rem; }
+.statuslist { display: flex; flex-direction: column; gap: .5rem; }
 
-.statusrow {
+.statuscard {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 1rem;
+  grid-template-columns: auto 1fr;
+  gap: .75rem;
   align-items: start;
+  padding: .6rem .75rem;
 }
 
-.statusrow-main {
+.statuscard-video { flex: 0 0 auto; }
+
+.statuscard-body {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  min-width: 0;
+}
+
+.statuscard-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .25rem .75rem;
+}
+
+.statuscard-head .cam-name {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.statuscard-head .cam-name:hover { text-decoration: underline; }
+
+.streamline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: .6rem 1rem;
+  gap: .2rem .7rem;
+  margin: 0;
+  min-width: 0;
 }
 
-.statusrow-main .cam-name {
+.streamline .stream-name {
   font-weight: 600;
-  min-width: 8rem;
+  font-size: .875rem;
+  min-width: 4rem;
 }
 
-.statusrow-main .metric {
+.streamline .metric {
   color: var(--muted);
   font-size: .875rem;
 }
 
-.statusrow-main .lasterror {
+/* The URL a recorder points at this stream. It may be long; it truncates
+   rather than widening the card, and the copy button next to it is how it
+   gets used anyway. */
+.streamline .streamurl {
+  color: var(--muted);
+  font-size: .8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.streamline .lasterror {
   color: var(--refused);
   font-size: .875rem;
   flex-basis: 100%;
 }
 
-.statusrow-video { flex: 0 0 auto; }
+/* Quick actions: a button that is not a write, and links out of the card.
+   They stay quiet, because the colour on this page belongs to the state
+   pills. */
+.linkish {
+  background: none;
+  border: none;
+  color: var(--proven);
+  padding: 0;
+  font: inherit;
+  font-size: .8125rem;
+  cursor: pointer;
+}
+
+.statuscard-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem 1rem;
+  font-size: .875rem;
+  margin-top: .15rem;
+}
+
+.statuscard-tools .tool { font-size: .875rem; }
+
+.statuscard-tools form { margin: 0; }
+
+.statuscard-tools label {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  margin: 0;
+  color: var(--muted);
+}
+
+/* A switch whose true state is still being read, or could not be read at
+   all, must not look like a switch reporting the camera. Both are dimmed;
+   the unavailable one says why on hover. */
+.statuscard-tools label:has(input:disabled) { opacity: .55; }
+
+.statuscard-tools label.unavailable { text-decoration: line-through; }
 
 .cam-video video {
   display: block;
-  max-width: 22rem;
-  width: 100%;
+  width: 13rem;
+  max-width: 100%;
   border-radius: 8px;
   background: #000;
 }
 
+/* A modest control, not a full-width button: the picture is the point of
+   this area, and the button used to be the widest thing in the card. */
 .cam-video .play-btn {
-  width: 100%;
+  margin-top: .25rem;
+  padding: .15rem .6rem;
+  font-size: .8125rem;
 }
 
 @media (max-width: 640px) {
@@ -320,8 +407,8 @@ legend { color: var(--muted); padding: 0 .4rem; }
   }
   .sidebar nav ul { display: flex; flex-wrap: wrap; gap: .25rem; }
   main { padding: 1.25rem 1rem; max-width: none; }
-  .statusrow { grid-template-columns: 1fr; }
-  .cam-video video { max-width: 100%; }
+  .statuscard { grid-template-columns: 1fr; }
+  .cam-video video { width: 100%; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

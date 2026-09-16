@@ -16,6 +16,24 @@ type RecorderURLs struct {
 	Frigate string
 	RTSP    []string
 	HTTP    []string
+
+	// StreamHTTP is the same HTTP output, but every stream a camera
+	// carries rather than only its main, keyed by camera name and then
+	// stream name. The status page shows a stream's URL next to that
+	// stream's own state, and it reads it from here rather than building
+	// one itself: two builders for the same URL drift, and the one an
+	// operator pastes into a recorder must be the one the page shows.
+	StreamHTTP map[string]map[string]string
+}
+
+// httpStreamURL is where the streaming listener serves one stream: main is
+// the camera's bare name, and every other stream carries its own name as a
+// suffix. It is the single place that shape is written down.
+func httpStreamURL(base, camera, stream string) string {
+	if stream == "main" {
+		return fmt.Sprintf("http://%s/%s.ts", base, camera)
+	}
+	return fmt.Sprintf("http://%s/%s_%s.ts", base, camera, stream)
 }
 
 // portOf takes the port from a listen address, which is normally written
@@ -33,13 +51,19 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 	// with an unbracketed colon-separated address, which nothing parses as
 	// the host and port they are meant to be.
 	httpBase := net.JoinHostPort(host, portOf(cfg.Listen))
-	var out RecorderURLs
+	out := RecorderURLs{StreamHTTP: make(map[string]map[string]string, len(cfg.Cameras))}
 	var frigate strings.Builder
 	frigate.WriteString("cameras:\n")
 
 	for _, cam := range cfg.Cameras {
-		main := fmt.Sprintf("http://%s/%s.ts", httpBase, cam.Name)
+		main := httpStreamURL(httpBase, cam.Name, "main")
 		out.HTTP = append(out.HTTP, main)
+
+		byStream := make(map[string]string, len(cam.Streams))
+		for _, s := range cam.Streams {
+			byStream[s] = httpStreamURL(httpBase, cam.Name, s)
+		}
+		out.StreamHTTP[cam.Name] = byStream
 
 		// Detect uses the sub stream when the camera has one; falling back
 		// to main rather than emitting a URL for a stream this camera never
@@ -47,7 +71,7 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 		detect := main
 		for _, s := range cam.Streams {
 			if s == "sub" {
-				detect = fmt.Sprintf("http://%s/%s_sub.ts", httpBase, cam.Name)
+				detect = httpStreamURL(httpBase, cam.Name, "sub")
 			}
 		}
 		fmt.Fprintf(&frigate, "  %s:\n    ffmpeg:\n      inputs:\n", cam.Name)
