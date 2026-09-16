@@ -1,6 +1,6 @@
 # Where reostream is, and what is next
 
-Updated 2026-09-09.
+Updated 2026-09-16.
 
 ## State
 
@@ -48,6 +48,49 @@ Two documented assumptions also turned out to be wrong:
 - "One connection per stream" is really one connection per **main** stream. Sub streams accept
   at least two simultaneous clients, both healthy, and the incumbent is never harmed by a
   contender.
+
+## One page, one install
+
+Merged in 2026-09-16 from `one-page-one-install`. The camera control page and the
+streaming daemon are one binary, one page and one password; `reocam serve` is gone
+and `cmd/reocam` keeps its command line. A fresh install needs no config file: the
+daemon starts with an empty fleet, prints a one-time claim token to its log, and
+serves a claim screen. Claiming writes `/data/config.toml` at mode 0600.
+
+### What the first live run actually did
+
+Run against the real image, an empty volume and one camera on the live fleet:
+
+- Unclaimed, every route answered `303 /claim` and the volume stayed empty.
+- A wrong token was refused 403; a 15 character password was refused without
+  spending the token or writing anything.
+- The right token wrote `/data/config.toml` at mode 600, owner 65532:65532, and
+  `/claim` then answered 404.
+- **Auth went live with no restart**: `/config` moved from open to `303 /login`,
+  and the password set seconds earlier worked immediately.
+- A config written by hand under a running first-run daemon was adopted live too,
+  password and all, with no restart.
+- The claim token appeared zero times in the log buffer the Logs page serves.
+- `/` on a claimed install with no cameras redirects to `/setup` rather than
+  showing an empty table.
+- The setup page probed a real camera and reported `IPC, 3840*2160` with all three
+  streams, their codecs and their resolutions.
+- Adding that camera through the page started it streaming: 19.9 fps, 0.89 Mbps,
+  zero restarts, and 2527 of 2527 MPEG-TS packets carried the 0x47 sync byte across
+  PIDs 0, 256, 257 and 4096.
+- The merged camera page rendered stream state, bitrate, the video tile, the curated
+  settings, the floodlight and the link to the raw blocks, all on one page.
+
+### What it corrected
+
+**A camera will serve the same stream to a second client.** The working belief was
+one connection per stream. The live run attached a second daemon to `lounge`'s
+`extern` stream while production was already pulling `main`, `sub` and `extern` from
+that camera, and nothing was disturbed: the fleet held 23 of 23 streaming with not
+one restart counter moving, before, during or after, and the camera's own extern
+stream stayed at 20 fps with a 0.02s frame age throughout. The hazard that is real
+is an *unreleased* session, not a concurrent one, which is why shutdown still waits
+for every stream-stop.
 
 ## Next
 
