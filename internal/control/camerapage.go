@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
@@ -94,6 +96,47 @@ func (p cameraPage) countWhere(match func(BlockProbe) bool) int {
 		}
 	}
 	return n
+}
+
+// sliderFloor and sliderCeil are the track a numeric image setting
+// (brightness, contrast, saturation) gets by default.
+//
+// The camera reports its current value for these fields and never reports
+// their range: no document this project has read from a camera says what
+// the minimum or maximum is. 0-255 is what these fields use on the models
+// this project has seen, so it is a good guess for the track -- and it is
+// only the track. The number box beside the slider is the input that
+// actually posts, and it is not clamped to these bounds, so an operator on
+// a model with a different scale can still type the value that model
+// wants. Guessing a range is acceptable for a convenience; it would not be
+// acceptable as a limit on what can be sent.
+const (
+	sliderFloor = 0
+	sliderCeil  = 255
+)
+
+// SliderMin and SliderMax give camera.html the track for one numeric field,
+// widened when the value the camera is already holding falls outside the
+// default one. Widening rather than clamping matters: a slider whose track
+// cannot reach the current value would render with the handle pinned at an
+// end, silently showing a value the camera does not hold, and one nudge
+// would post it.
+//
+// A value that is not a number at all (a field this code guessed wrong
+// about, say) leaves the default track alone; the number box still shows
+// exactly what the camera sent.
+func (p cameraPage) SliderMin(current string) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(current)); err == nil && v < sliderFloor {
+		return v
+	}
+	return sliderFloor
+}
+
+func (p cameraPage) SliderMax(current string) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(current)); err == nil && v > sliderCeil {
+		return v
+	}
+	return sliderCeil
 }
 
 // cameraGroupFor finds the dashboard's cameraGroup for one camera by name,

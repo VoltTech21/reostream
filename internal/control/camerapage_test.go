@@ -340,11 +340,39 @@ func TestCameraPageShowsAllSixCombinedProperties(t *testing.T) {
 	if !strings.Contains(body, "Brightness") {
 		t.Errorf("camera page does not render the Brightness field")
 	}
-	if !strings.Contains(body, `value="120"`) {
-		t.Errorf("camera page does not show the brightness read from the camera:\n%s", body)
+	// The numeric image settings render as a slider PLUS the number box
+	// that actually posts. The box is pinned by its full attribute run, not
+	// by the bare value: it is the input carrying name="value", so a change
+	// that left only the slider behind would post nothing at all, and a
+	// bare value="120" would still match the slider and hide that.
+	if !strings.Contains(body, `class="slider-box" name="value" value="120"`) {
+		t.Errorf("camera page does not show the brightness read from the camera in the box that posts it:\n%s", body)
+	}
+	if !strings.Contains(body, `type="range"`) {
+		t.Errorf("camera page does not render the numeric image settings as sliders:\n%s", body)
 	}
 	if strings.Contains(body, "not available:") {
 		t.Errorf("a curated field that resolved cleanly was rendered as unavailable:\n%s", body)
+	}
+
+	// The layout itself, which is what this page was reordered for: the
+	// controls an operator came here to touch come before the three tables
+	// the camera merely reports, and those are collapsed. A future edit
+	// that puts the reference tables back above the settings must fail
+	// here, not just look wrong to whoever next opens the page.
+	settingsAt := strings.Index(body, "<h2>Settings</h2>")
+	reportsAt := strings.Index(body, "what this camera reports")
+	if settingsAt < 0 || reportsAt < 0 {
+		t.Fatalf("camera page is missing the Settings heading or the collapsed reports section:\n%s", body)
+	}
+	if settingsAt > reportsAt {
+		t.Errorf("the camera's reference tables come before the settings again")
+	}
+	if !strings.Contains(body, `<details class="reports">`) {
+		t.Errorf("what the camera reports is not inside a details section:\n%s", body)
+	}
+	if strings.Contains(body, `<details class="reports" open`) {
+		t.Errorf("the reports section is open by default; it is reference, not a control")
 	}
 
 	// 5: the floodlight, seeded from the fake CGI camera's real

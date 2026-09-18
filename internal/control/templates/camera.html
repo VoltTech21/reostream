@@ -1,11 +1,18 @@
 {{/*
   camera.html: one camera, one page, two aspects. cameraPage (camerapage.go)
   renders the dashboard's own stream state and video for this camera
-  (Group), what GetSupport and GetAbilities say the camera is plus the
-  probe table (Support/Abilities/Probes), and then the curated settings a
-  person actually changes (Groups, from settings.go's groups()), including
-  the floodlight, which is not a Group field because its write goes over
-  CGI rather than a Baichuan block.
+  (Group), the curated settings a person actually changes (Groups, from
+  settings.go's groups()) including the floodlight, which is not a Group
+  field because its write goes over CGI rather than a Baichuan block, and
+  only then what GetSupport and GetAbilities say the camera is plus the
+  probe table (Support/Abilities/Probes).
+
+  The order is deliberate and was changed from the original: the three
+  tables the camera merely REPORTS (support, abilities, probes) used to sit
+  between the live tile and the settings, so the only controls on the page
+  were two screens down. They are reference, not controls, so they now live
+  below the controls and inside one closed <details>; the controls an
+  operator came here to touch start directly under the picture.
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}</h1>
@@ -63,59 +70,6 @@
 })();
 </script>
 
-{{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
-
-{{if .Support}}
-<div class="card table-wrap">
-<h2>What it says it is</h2>
-<table>
-<tr><td>Channels</td><td>{{.Support.Support.ChannelNum}}</td></tr>
-<tr><td>PTZ</td><td>{{if .Support.HasPTZ}}{{.Support.Support.PTZMode}}{{else}}none{{end}}</td></tr>
-<tr><td>Talk</td><td>{{if .Support.CanTalk}}yes{{else}}no{{end}}</td></tr>
-<tr><td>Extern stream</td><td>{{if .Support.HasExternStream}}yes{{else}}no{{end}}</td></tr>
-<tr><td>WiFi</td><td>{{if .Support.Support.WiFi}}yes{{else}}no{{end}}</td></tr>
-<tr><td>ONVIF</td><td>{{if .Support.Support.ONVIF}}yes{{else}}no{{end}}</td></tr>
-</table>
-</div>
-{{end}}
-
-{{if .Abilities}}
-<div class="card table-wrap">
-<h2>What this user may do</h2>
-<table>
-<tr><th>Module</th><th>Name</th><th>Access</th></tr>
-{{range .Abilities}}
-<tr><td>{{.Module}}</td><td>{{.Name}}</td><td>{{if .Writable}}read/write{{else}}read{{end}}</td></tr>
-{{end}}
-</table>
-</div>
-{{end}}
-
-{{if .Probes}}
-<div class="card table-wrap">
-<h2>What it answers</h2>
-<p class="hint">A message this model does not implement answers 405 rather than dropping the connection,
-which is what makes asking about every known message safe, and is the only honest way to
-find out what a model has: no table can say it in advance. See
-<a href="/cameras/{{.Camera.Name}}/advanced">every block, as XML</a> for the raw documents.</p>
-<table>
-<tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>No answer</th></tr>
-<tr><td>{{.SupportedCount}}</td><td>{{.WantsParamsCount}}</td><td>{{.AbsentCount}}</td><td>{{.HungUpCount}}</td></tr>
-</table>
-<table>
-<tr><th>Message</th><th>ID</th><th>Status</th><th>Result</th></tr>
-{{range .Probes}}
-<tr>
-<td>{{.Name}}</td>
-<td>{{.ID}}</td>
-<td>{{.Status}}</td>
-<td>{{if .Supported}}supported{{else if .WantsParams}}wants parameters (400){{else if .Absent}}absent (405){{else if .HungUp}}no answer{{end}}</td>
-</tr>
-{{end}}
-</table>
-</div>
-{{end}}
-
 {{/* Curated settings: Picture and OSD, and Lights and IR, from settings.go's groups(). */}}
 <h2>Settings</h2>
 {{if .SettingsErr}}<p class="outcome-refused">{{.SettingsErr}}</p>{{end}}
@@ -160,7 +114,24 @@ find out what a model has: no table can say it in advance. See
 <option value="1" {{if eq $current "1"}}selected{{end}}>on</option>
 </select>
 {{else if eq .Kind "number"}}
-<input type="number" name="value" value="{{$current}}">
+{{/*
+  Brightness, contrast and saturation are far easier to judge by dragging
+  than by typing, but the camera reports its current value and NOT its
+  range: nothing in any document this project has read says what the
+  minimum and maximum for these fields are. So the slider is a convenience,
+  never a cage. It spans 0-255, which is what these fields use on the models
+  this project has seen, and the number box beside it carries name="value"
+  and stays free: it is the only input that is submitted, it is not clamped
+  to the slider, and on a model with a different scale an operator can still
+  type the value that model actually wants. SliderMin/SliderMax widen the
+  track when the camera's own current value falls outside 0-255, so the
+  slider never snaps a value the camera is already holding.
+*/}}
+<span class="slider">
+<input type="range" class="slider-range" aria-label="{{.Label}} slider"
+  min="{{$.SliderMin $current}}" max="{{$.SliderMax $current}}" step="1" value="{{$current}}">
+<input type="number" class="slider-box" name="value" value="{{$current}}">
+</span>
 {{else}}
 <input type="text" name="value" value="{{$current}}">
 {{end}}
@@ -173,6 +144,31 @@ find out what a model has: no table can say it in advance. See
 </table>
 </section>
 {{end}}
+
+<script>
+// Keeps each slider and its number box showing the same value. The number
+// box is the authoritative one -- it is the input that posts -- so the
+// slider follows it only when the typed value is one the track can actually
+// represent; a value outside the track is left exactly as typed rather than
+// being pulled back to an assumed range.
+(function () {
+  var pairs = document.querySelectorAll('.slider');
+  for (var i = 0; i < pairs.length; i++) {
+    (function (wrap) {
+      var range = wrap.querySelector('input[type=range]');
+      var box = wrap.querySelector('input[type=number]');
+      if (!range || !box) return;
+      range.addEventListener('input', function () { box.value = range.value; });
+      box.addEventListener('input', function () {
+        var v = Number(box.value);
+        if (box.value !== '' && !isNaN(v) && v >= Number(range.min) && v <= Number(range.max)) {
+          range.value = box.value;
+        }
+      });
+    })(pairs[i]);
+  }
+})();
+</script>
 
 {{/*
   The floodlight, from settings.go's floodlightOptions. It is not a Group
@@ -202,4 +198,84 @@ find out what a model has: no table can say it in advance. See
 </tr>
 </table>
 </section>
+
+<section>
+<h3>Time</h3>
+<p class="hint">NTP and the camera's timezone are a page of their own, because the
+write goes over CGI and nothing here writes the timezone at all:
+<a href="/cameras/{{.Camera.Name}}/time">set this camera's time</a>.</p>
+</section>
+
+{{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
+
+{{/*
+  Everything below is what the camera REPORTS about itself: nothing here
+  changes anything, so it is closed by default and opens in place. Plain
+  <details>, no script: a reference table that needs JavaScript to be
+  readable is a reference table that disappears the day the script breaks.
+*/}}
+<details class="reports">
+<summary>what this camera reports</summary>
+
+{{if .Support}}
+<div class="card table-wrap">
+<h3>What it says it is</h3>
+<table>
+<tr><td>Channels</td><td>{{.Support.Support.ChannelNum}}</td></tr>
+<tr><td>PTZ</td><td>{{if .Support.HasPTZ}}{{.Support.Support.PTZMode}}{{else}}none{{end}}</td></tr>
+<tr><td>Talk</td><td>{{if .Support.CanTalk}}yes{{else}}no{{end}}</td></tr>
+<tr><td>Extern stream</td><td>{{if .Support.HasExternStream}}yes{{else}}no{{end}}</td></tr>
+<tr><td>WiFi</td><td>{{if .Support.Support.WiFi}}yes{{else}}no{{end}}</td></tr>
+<tr><td>ONVIF</td><td>{{if .Support.Support.ONVIF}}yes{{else}}no{{end}}</td></tr>
+</table>
+</div>
+{{end}}
+
+{{if .Abilities}}
+<div class="card table-wrap">
+<h3>What this user may do</h3>
+<table>
+<tr><th>Module</th><th>Name</th><th>Access</th></tr>
+{{range .Abilities}}
+<tr><td>{{.Module}}</td><td>{{.Name}}</td><td>{{if .Writable}}read/write{{else}}read{{end}}</td></tr>
+{{end}}
+</table>
+</div>
+{{end}}
+
+{{if .Probes}}
+<div class="card table-wrap">
+<h3>What it answers</h3>
+<p class="hint">A message this model does not implement answers 405 rather than dropping the connection,
+which is what makes asking about every known message safe, and is the only honest way to
+find out what a model has: no table can say it in advance.</p>
+<table>
+<tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>No answer</th></tr>
+<tr><td>{{.SupportedCount}}</td><td>{{.WantsParamsCount}}</td><td>{{.AbsentCount}}</td><td>{{.HungUpCount}}</td></tr>
+</table>
+<table>
+<tr><th>Message</th><th>ID</th><th>Status</th><th>Result</th></tr>
+{{range .Probes}}
+<tr>
+<td>{{.Name}}</td>
+<td>{{.ID}}</td>
+<td>{{.Status}}</td>
+<td>{{if .Supported}}supported{{else if .WantsParams}}wants parameters (400){{else if .Absent}}absent (405){{else if .HungUp}}no answer{{end}}</td>
+</tr>
+{{end}}
+</table>
+</div>
+{{end}}
+</details>
+
+{{/*
+  The raw documents, last: it is the way out of this page for someone who
+  needs more than the curated fields. It lives outside the <details> above,
+  and only renders once a probe sweep has actually happened, because that
+  is what makes the link meaningful rather than a guess.
+*/}}
+{{if .Probes}}
+<p class="hint">Beyond the curated fields:
+<a href="/cameras/{{.Camera.Name}}/advanced">every block, as XML</a>.</p>
+{{end}}
 {{end}}

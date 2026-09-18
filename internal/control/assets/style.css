@@ -474,3 +474,56 @@ legend { color: var(--muted); padding: 0 .4rem; }
 .flash-text { flex: 1 1 20rem; min-width: 0; }
 
 .flash-undo { margin: 0; }
+
+/* A numeric image setting: a slider for judging it by eye, and the number
+   box that actually posts. They sit on one line so it reads as one control
+   rather than two, and the box stays narrow -- it holds a value, not a
+   sentence. The track's range is a guess (see camerapage.go's sliderCeil);
+   the box is not bounded by it, which is why the box, not the slider, is
+   the one that carries the form's name. */
+
+.slider {
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+}
+
+.slider-range {
+  flex: 1 1 10rem;
+  min-width: 6rem;
+  max-width: 14rem;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--proven);
+}
+
+.slider-box { width: 5.5rem; }
+
+/* What the camera reports about itself: three reference tables that used to
+   push the controls two screens down the page. Closed by default, and
+   styled as a panel so a closed one still reads as a thing on the page
+   rather than as a stray line of text. */
+
+.reports {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.reports > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .9375rem;
+}
+
+.reports[open] > summary { margin-bottom: 1rem; }
+
+/* The tables inside are already .card panels; nesting a second panel
+   background inside this one only muddies both. */
+.reports .card { background: none; padding: 0 0 1rem; border: none; margin-bottom: 1rem; }
+.reports .card:last-child { padding-bottom: 0; margin-bottom: 0; }
+
+.reports h3 { font-size: 1rem; font-weight: 600; margin: 0 0 .5rem; }
