@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
@@ -62,13 +62,20 @@ func TestApplyAllDoesNotStopAtTheFirstFailure(t *testing.T) {
 		AllowNoPassword: true,
 		ConfigPath:      writeTestConfig(t, "first", "second"),
 	})
+	// Guarded: applyAll runs the cameras concurrently, so the record of
+	// which ones it tried is written from several goroutines at once.
+	var mu sync.Mutex
 	var tried []string
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
+		mu.Lock()
 		tried = append(tried, cam.Name)
+		mu.Unlock()
 		return WriteResult{}, errors.New("unreachable")
 	}
 
 	got := s.applyAll(context.Background(), apply)
+	mu.Lock()
+	defer mu.Unlock()
 	if len(tried) != 2 {
 		t.Fatalf("tried %v, want both cameras attempted", tried)
 	}
@@ -78,45 +85,52 @@ func TestApplyAllDoesNotStopAtTheFirstFailure(t *testing.T) {
 }
 
 // TestApplyAllBoundsEachCameraSeparately proves the timeout is per camera,
-// not shared off one deadline: a context that has already expired for the
-// first camera must not carry that expiry into the second, or a single
-// dead camera at the front of the list would eat the budget for everyone
-// behind it, exactly the failure mode the brief calls out by name.
+// not shared off one deadline: one dead camera must not eat the budget for
+// everyone else in the fleet.
 //
-// Checking only that each call's ctx.Deadline() reports ok is not enough:
-// a buggy implementation that hoists one context.WithTimeout above the
-// loop and shares it across every camera would pass that check too, since
-// every call would still see a deadline, just the same shared one. The
-// deterministic tell is the deadline VALUE, not a wall-clock margin: with
-// the bug, every camera is handed the identical instant, because it is the
-// same context.WithTimeout call. With the fix, each camera's context is
-// created at its own moment in the loop, so its deadline differs from the
-// one before it by however long the previous iteration took, which is
-// never exactly zero even at the monotonic clock's own resolution. Asserting
-// the deadlines are unequal proves each camera got its own context; it
-// needs no sleep and no timing margin to do it, so it cannot go flaky on a
-// loaded machine the way a wall-clock comparison could.
+// Checking only that each call's ctx.Deadline() reports ok is not enough: an
+// implementation that hoists a single context.WithTimeout above the fan-out
+// and hands it to every camera would pass that check too, since every call
+// still sees a deadline, just the same one.
+//
+// The tell is that each camera is handed its OWN context. An earlier version
+// of this test compared deadline values instead, which worked only while
+// applyAll ran the cameras one after another -- two contexts created in the
+// same instant may legitimately carry the same deadline once they are
+// created concurrently, and the shared slice it recorded them in was itself
+// a data race. Comparing the contexts themselves is exact, needs no timing
+// margin, and says what the property actually is.
 func TestApplyAllBoundsEachCameraSeparately(t *testing.T) {
 	s := newTestServer(t, Options{
 		AllowNoPassword: true,
 		ConfigPath:      writeTestConfig(t, "first", "second"),
 	})
-	var deadlines []time.Time
+
+	var mu sync.Mutex
+	seen := make([]context.Context, 0, 2)
+	missingDeadline := make([]string, 0, 2)
 	apply := func(ctx context.Context, cam Camera) (WriteResult, error) {
-		dl, ok := ctx.Deadline()
-		if !ok {
-			t.Fatalf("camera %q ran with no deadline: each camera must be bounded on its own", cam.Name)
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := ctx.Deadline(); !ok {
+			missingDeadline = append(missingDeadline, cam.Name)
 		}
-		deadlines = append(deadlines, dl)
+		seen = append(seen, ctx)
 		return WriteResult{Outcome: "confirmed"}, nil
 	}
 
 	s.applyAll(context.Background(), apply)
-	if len(deadlines) != 2 {
-		t.Fatalf("got %d calls, want 2", len(deadlines))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(missingDeadline) > 0 {
+		t.Fatalf("cameras ran with no deadline: %v; each must be bounded on its own", missingDeadline)
 	}
-	if deadlines[0].Equal(deadlines[1]) {
-		t.Fatalf("both cameras were handed the same deadline (%v): the timeout is shared across the fleet rather than given fresh per camera", deadlines[0])
+	if len(seen) != 2 {
+		t.Fatalf("got %d calls, want 2", len(seen))
+	}
+	if seen[0] == seen[1] {
+		t.Fatal("both cameras were handed the same context: the timeout is shared across the fleet rather than given fresh per camera")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"sync"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/config"
@@ -155,17 +156,39 @@ func (s *Server) applyAll(ctx context.Context, apply func(context.Context, Camer
 		return []FleetResult{{Outcome: "refused", Detail: fmt.Sprintf("could not read the fleet: %v", err)}}
 	}
 
-	results := make([]FleetResult, 0, len(cams))
-	for _, cam := range cams {
-		camCtx, cancel := context.WithTimeout(ctx, fleetApplyTimeout)
-		result, err := apply(camCtx, cam)
-		cancel()
-		if err != nil {
-			results = append(results, FleetResult{Camera: cam.Name, Outcome: "refused", Detail: err.Error()})
-			continue
-		}
-		results = append(results, FleetResult{Camera: cam.Name, Outcome: result.Outcome, Detail: result.Detail})
+	// One goroutine per camera, not one after another. Serially, each
+	// camera gets its own fleetApplyTimeout, so a fleet that is entirely
+	// unreachable holds the operator's request open for that timeout times
+	// the number of cameras -- twelve minutes on the eight-camera fleet
+	// this was written against, on a page an operator now visits
+	// routinely. Concurrently the whole apply costs one timeout no matter
+	// how many cameras are down.
+	//
+	// These are different cameras and different connections, so there is
+	// nothing to serialise for the protocol's sake: the supervisor already
+	// runs one goroutine per stream, and shutdown already stops every
+	// stream at once for the same reason.
+	results := make([]FleetResult, len(cams))
+	var wg sync.WaitGroup
+	for i, cam := range cams {
+		wg.Add(1)
+		go func(i int, cam Camera) {
+			defer wg.Done()
+			camCtx, cancel := context.WithTimeout(ctx, fleetApplyTimeout)
+			defer cancel()
+			result, err := apply(camCtx, cam)
+			if err != nil {
+				results[i] = FleetResult{Camera: cam.Name, Outcome: "refused", Detail: err.Error()}
+				return
+			}
+			results[i] = FleetResult{Camera: cam.Name, Outcome: result.Outcome, Detail: result.Detail}
+		}(i, cam)
 	}
+	wg.Wait()
+	// Indexed writes into a pre-sized slice, so the report keeps the
+	// fleet's own order rather than whichever camera answered first: an
+	// operator reading eight rows should find them where the sidebar puts
+	// them.
 	return results
 }
 
