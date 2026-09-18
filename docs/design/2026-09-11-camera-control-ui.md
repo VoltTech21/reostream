@@ -139,11 +139,19 @@ field, writes it, reads it back on a fresh connection, and observes. The label
 is a fact about this codebase's knowledge, not about the camera, and it should
 be updated when the knowledge changes.
 
-## Fleet apply
+## Apply to every camera
 
 Limited to settings that should be identical across a fleet. NTP server and
-timezone to begin with. NTP goes over CGI `SetNtp`, because the message table
-contains no Baichuan set time.
+timezone, and nothing else. Both go over CGI (`SetNtp`, `SetTime`), because the
+message table contains no Baichuan set time.
+
+This is not a page of its own. It is a checkbox, unticked, on the two forms of
+the camera's own time page: the operator is already filling in the value for one
+camera, and "also do this to the other seven" is a decision about that same
+value rather than a separate screen with a second copy of the same two forms.
+Unticked is the default because writing eight cameras has to be asked for. The
+page this replaced had no such choice -- its only button was "apply to every
+camera" -- which is the complaint it was removed over.
 
 The result is a per camera table, never one summary line. Eight cameras are
 eight independent outcomes, and partial success is the normal case rather than

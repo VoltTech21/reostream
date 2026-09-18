@@ -1,6 +1,5 @@
 {{define "body"}}
 <h1>Cameras</h1>
-<p><a href="/fleet/apply">fleet apply: push the clock to every camera at once</a></p>
 {{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
 {{if .ReloadNote}}<p class="state-streaming">{{.ReloadNote}}</p>{{end}}
 {{if not .Cameras}}

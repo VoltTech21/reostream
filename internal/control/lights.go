@@ -109,7 +109,7 @@ func (s *Server) cgiDial(cam Camera) (*cgi.Client, error) {
 
 // readFloodlightDoc reads the floodlight's whole GetWhiteLed document as a
 // generic map rather than a narrow struct, the same discipline
-// fleetapply.go's readFullTime already uses for GetTime: a real WhiteLed
+// time.go's readFullTime already uses for GetTime: a real WhiteLed
 // object carries bright and LightingSchedule, fields this codebase does not
 // model, and setFloodlight changes only mode and state on top of whatever
 // this returns rather than composing a document that drops them.

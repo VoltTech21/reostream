@@ -37,7 +37,7 @@ import (
 // renders with the wrong chrome. Any template added under templates/ must
 // be added to this list too.
 //
-//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/fleetapply.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
+//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
 var templateFS embed.FS
 
 //go:embed assets
@@ -50,8 +50,8 @@ var assetSub, _ = fs.Sub(assetFS, "assets")
 // returns it as a *Camera, or nil when the page has no such field. The
 // sidebar template uses this to decide whether it is looking at a
 // camera-specific page (the camera overview, its advanced blocks, time,
-// accounts) or a fleet-wide one (the camera list, fleet apply, the
-// dashboard, login): those pages carry no Camera at all, and a plain
+// accounts) or a fleet-wide one (the camera list, the dashboard,
+// login): those pages carry no Camera at all, and a plain
 // {{.Camera}} in the shared layout would fail to execute on them.
 func cameraOf(v any) *Camera {
 	rv := reflect.ValueOf(v)
@@ -336,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /cameras/{name}/floodlight", s.wrap(http.HandlerFunc(s.serveApplyFloodlight)))
 	mux.Handle("GET /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveTime)))
 	mux.Handle("POST /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveApplyTime)))
+	mux.Handle("POST /cameras/{name}/timezone", s.wrap(http.HandlerFunc(s.serveApplyTimezone)))
 	// Accounts get a GET route only. No POST, PUT, PATCH or DELETE route
 	// exists for /cameras/{name}/accounts anywhere in this package; see
 	// accounts.go's top comment for why. Go's ServeMux answers 405 for a
@@ -345,9 +346,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /cameras/{name}/accounts", s.wrap(http.HandlerFunc(s.serveAccounts)))
 	mux.Handle("GET /cameras/{name}/advanced", s.wrap(http.HandlerFunc(s.serveBlocks)))
 	mux.Handle("POST /cameras/{name}/write/{id}", s.wrap(http.HandlerFunc(s.serveWrite)))
-	mux.Handle("GET /fleet/apply", s.wrap(http.HandlerFunc(s.serveFleetApplyForm)))
-	mux.Handle("POST /fleet/apply/ntp", s.wrap(http.HandlerFunc(s.serveFleetApplyNTP)))
-	mux.Handle("POST /fleet/apply/timezone", s.wrap(http.HandlerFunc(s.serveFleetApplyTimezone)))
 	mux.Handle("GET /setup", s.wrap(http.HandlerFunc(s.serveSetup)))
 	mux.Handle("GET /setup/urls", s.wrap(http.HandlerFunc(s.serveURLs)))
 	mux.Handle("POST /setup/probe", s.wrap(http.HandlerFunc(s.serveProbe)))

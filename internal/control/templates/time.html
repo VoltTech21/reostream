@@ -1,7 +1,18 @@
 {{/*
-  Time: NTP server and enabled, over CGI SetNtp, plus the camera's
-  timezone shown read only. See time.go for why: no Baichuan set-time
-  message has ever been recovered, and nothing here writes the timezone.
+  Time: NTP server and enabled, over CGI SetNtp, and the camera's timezone,
+  over CGI SetTime. See time.go for why both go over CGI: no Baichuan
+  set-time message has ever been recovered, so CGI is the only path either
+  setting has.
+
+  Each form carries an "apply to every camera" checkbox, unticked, which is
+  what remains of the /fleet/apply page this replaced. Unticked is the
+  default on purpose: a form submitted without thinking writes the camera
+  whose page this is, and nothing else.
+
+  Results, when present, is one row per camera, always, even when every row
+  confirmed: a single summary line over a partial apply is the lie
+  applyAll's own comment in fleet.go warns against, and this table is what
+  keeps that from happening on the page too.
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}: time</h1>
@@ -10,7 +21,12 @@
 <section>
 <h2>NTP</h2>
 {{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
-<form method="post" action="/cameras/{{.Camera.Name}}/time">
+{{/*
+  onsubmit asks only when the box is ticked: a one-camera write is the same
+  write this form has always made and never asked about, but eight cameras
+  at once is worth a second look. this.every is the checkbox by name.
+*/}}
+<form method="post" action="/cameras/{{.Camera.Name}}/time" onsubmit="return !this.every.checked || confirm('write this ntp server to every camera in the fleet?')">
 <table>
 <tr>
 <td>Enabled</td>
@@ -25,6 +41,10 @@
 <td>Server</td>
 <td><input type="text" name="server" value="{{.NTPServer}}"></td>
 </tr>
+<tr>
+<td><label for="ntp-every">Every camera</label></td>
+<td><label><input type="checkbox" id="ntp-every" name="every" value="1"> apply to every camera, not just {{.Camera.Name}}</label></td>
+</tr>
 </table>
 <button type="submit">set</button>
 </form>
@@ -32,11 +52,35 @@
 
 <section>
 <h2>Timezone</h2>
-<p class="hint">Read only: no write path exists for this from here.</p>
+<p class="hint">Written over CGI SetTime, not Baichuan: no set-time message exists in the recovered table, so this is the only path there is. Raw CGI value; the sign convention has not been confirmed against real hardware, so send back what a camera's own page reports rather than converting it.</p>
 {{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
-<p>The camera reports its timeZone field as {{.TimeZone}} (raw CGI value; the sign
-convention has not been confirmed against real hardware, so this is shown as the camera
-gave it, not converted).</p>
+<p>The camera reports its timeZone field as {{.TimeZone}} (shown as the camera gave it, not converted).</p>
 {{end}}
+<form method="post" action="/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('write this timezone to every camera in the fleet?')">
+<table>
+<tr>
+<td>Timezone</td>
+<td><input type="number" name="timezone" value="{{.TimeZone}}"></td>
+</tr>
+<tr>
+<td><label for="tz-every">Every camera</label></td>
+<td><label><input type="checkbox" id="tz-every" name="every" value="1"> apply to every camera, not just {{.Camera.Name}}</label></td>
+</tr>
+</table>
+<button type="submit">set</button>
+</form>
 </section>
+
+{{if .Results}}
+<section class="table-wrap">
+<h2>Every camera{{if .ResultsTarget}}: {{.ResultsTarget}}{{end}}</h2>
+<p class="hint">One row per camera. A camera failing did not stop the rest from being tried, and a camera that answered success without changing anything reads as accepted, not confirmed.</p>
+<table>
+<tr><th>Camera</th><th>Outcome</th><th>Detail</th></tr>
+{{range .Results}}
+<tr><td>{{.Camera}}</td><td class="outcome-{{.Outcome}}">{{.Outcome}}</td><td>{{.Detail}}</td></tr>
+{{end}}
+</table>
+</section>
+{{end}}
 {{end}}

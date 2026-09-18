@@ -179,10 +179,17 @@ func TestServeApplyTimeWritesThroughCGI(t *testing.T) {
 	}
 }
 
-// TestServeTimeRendersNTPAndTimezoneReadOnly proves the time page shows
-// both the NTP fields and the timezone, and that the timezone section
-// carries no form: it is display only.
-func TestServeTimeRendersNTPAndTimezoneReadOnly(t *testing.T) {
+// TestServeTimeRendersNTPAndTheTimezoneForm proves the time page shows both
+// the NTP fields and the timezone, seeded from the camera, and that each
+// form's "apply to every camera" box is rendered UNCHECKED.
+//
+// The unchecked assertion is the point: an unticked checkbox sends nothing,
+// so a box that shipped checked would silently turn every visit to this page
+// into a fleet write. The timezone is no longer display-only here -- that
+// write came over from the deleted /fleet/apply page -- but it still goes
+// out over CGI SetTime with an unconfirmed sign convention, and this checks
+// the page still says so.
+func TestServeTimeRendersNTPAndTheTimezoneForm(t *testing.T) {
 	cam := newFakeNTPCamera(t, 1, "pool.ntp.org", -28800)
 	cgiDial := func(c Camera) (*cgi.Client, error) {
 		return cgi.Dial(cam.addr(), "admin", "")
@@ -204,9 +211,30 @@ func TestServeTimeRendersNTPAndTimezoneReadOnly(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("got %d, want 200: %s", resp.StatusCode, html)
 	}
-	for _, want := range []string{"pool.ntp.org", "-28800", "Timezone", "Read only"} {
+	for _, want := range []string{
+		"pool.ntp.org",
+		"-28800",
+		"Timezone",
+		// The timezone write is a CGI write and the page must keep saying
+		// so, plus the warning that the sign convention is unverified.
+		"CGI SetTime",
+		"sign convention has not been confirmed",
+		// Both forms, and both every-camera boxes.
+		`action="/cameras/cam1/time"`,
+		`action="/cameras/cam1/timezone"`,
+		`id="ntp-every" name="every" value="1"`,
+		`id="tz-every" name="every" value="1"`,
+	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render %q:\n%s", want, html)
+		}
+	}
+	// Per checkbox tag, not over the whole page: the forms' onsubmit guard
+	// reads this.every.checked, so a page-wide search for "checked" would
+	// match the confirm gate and never the default it is meant to police.
+	for _, line := range strings.Split(html, "\n") {
+		if strings.Contains(line, `type="checkbox"`) && strings.Contains(line, "checked") {
+			t.Errorf("an every-camera box ships checked; the default must be this camera only: %s", line)
 		}
 	}
 }

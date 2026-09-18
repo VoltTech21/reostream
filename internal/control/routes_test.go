@@ -62,13 +62,11 @@ func TestEveryRouteExceptLoginIsAuthenticated(t *testing.T) {
 		{"POST", "/cameras/one/floodlight"},
 		{"GET", "/cameras/one/time"},
 		{"POST", "/cameras/one/time"},
+		{"POST", "/cameras/one/timezone"},
 		{"GET", "/cameras/one/accounts"},
 		{"GET", "/cameras/one/advanced"},
 		{"POST", "/cameras/one/write/45"},
 		{"POST", "/cameras/add"},
-		{"GET", "/fleet/apply"},
-		{"POST", "/fleet/apply/ntp"},
-		{"POST", "/fleet/apply/timezone"},
 		{"GET", "/logs"},
 		{"GET", "/logs/history"},
 		{"GET", "/logs/stream"},
@@ -165,5 +163,43 @@ func TestAssetsAreServedWithoutASession(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("the stylesheet the login page links answered %d, want 200", resp.StatusCode)
+	}
+}
+
+// The /fleet/apply page is gone, folded into each camera's own time page as
+// an "apply to every camera" checkbox on the two forms it used to carry.
+//
+// This asserts the routes are actually gone rather than quietly dropping
+// them from the list above. A route left wired to a handler whose template
+// is no longer embedded does not fail to compile: it 500s the first time
+// somebody opens it, which is exactly the failure an explicit go:embed list
+// and this test exist to turn into a test failure instead.
+func TestTheFleetApplyRoutesAreGone(t *testing.T) {
+	removed := []struct{ method, path string }{
+		{"GET", "/fleet/apply"},
+		{"POST", "/fleet/apply/ntp"},
+		{"POST", "/fleet/apply/timezone"},
+	}
+
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "one")})
+	for _, r := range removed {
+		t.Run(r.method+" "+r.path, func(t *testing.T) {
+			req := httptest.NewRequest(r.method, r.path, nil)
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("%s %s answered %d, want 404: the fleet apply page was removed", r.method, r.path, rec.Code)
+			}
+		})
+	}
+}
+
+// fleetapply.html is gone with its page, and nothing may still embed it:
+// the go:embed list in control.go is explicit precisely so a template that
+// should not be there is visible, and a page that is no longer reachable
+// has no business shipping in the binary.
+func TestFleetApplyTemplateIsNotEmbedded(t *testing.T) {
+	if _, err := fs.Stat(templateFS, "templates/fleetapply.html"); err == nil {
+		t.Fatal("templates/fleetapply.html is still embedded; the page it belonged to was removed")
 	}
 }

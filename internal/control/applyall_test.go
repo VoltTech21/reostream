@@ -122,7 +122,7 @@ func TestApplyAllBoundsEachCameraSeparately(t *testing.T) {
 
 // fakeClockCamera is a CGI camera for the fleet-apply path: it answers
 // GetNtp/SetNtp exactly as fakeNTPCamera in time_test.go does, plus
-// GetTime/SetTime for the timezone path fleetapply.go adds, and it records
+// GetTime/SetTime for the timezone path time.go adds, and it records
 // what each write actually received so a test can check the camera's own
 // state rather than trust the handler's claim.
 type fakeClockCamera struct {
@@ -198,11 +198,11 @@ func newFakeClockCamera(t *testing.T, enable int, server string, timeZone int) *
 
 func (f *fakeClockCamera) addr() string { return strings.TrimPrefix(f.srv.URL, "http://") }
 
-// TestServeFleetApplyNTPWritesEveryCameraAndReportsARow proves the NTP
-// fleet route reaches every configured camera through setNTP and renders
-// one row each, the same proof TestServeApplyTimeWritesThroughCGI already
-// gives for the single-camera path.
-func TestServeFleetApplyNTPWritesEveryCameraAndReportsARow(t *testing.T) {
+// twoClockCameras wires a two-camera fleet ("one", "two") to two fake CGI
+// cameras and returns the server plus both fakes, which is the setup every
+// every-camera test below shares.
+func twoClockCameras(t *testing.T) (*httptest.Server, *fakeClockCamera, *fakeClockCamera) {
+	t.Helper()
 	one := newFakeClockCamera(t, 0, "old.example", 0)
 	two := newFakeClockCamera(t, 0, "old.example", 0)
 	cgiDial := func(cam Camera) (*cgi.Client, error) {
@@ -218,8 +218,54 @@ func TestServeFleetApplyNTPWritesEveryCameraAndReportsARow(t *testing.T) {
 	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "one", "two"), CGIDial: cgiDial})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
+	return ts, one, two
+}
 
-	resp, err := http.PostForm(ts.URL+"/fleet/apply/ntp", url.Values{"server": {"time.nist.gov"}, "enabled": {"1"}})
+// resultRow is the table cell an every-camera result renders for one
+// camera. Tests match on this rather than on the bare camera name: every
+// page draws the whole fleet in its sidebar, so "two" appears on this page
+// whether or not camera two was written, and a test that matched the name
+// alone would pass against a handler that wrote nothing.
+func resultRow(camera, outcome string) string {
+	return "<td>" + camera + `</td><td class="outcome-` + outcome + `">`
+}
+
+// TestTheTimeFormWritesOnlyThisCameraByDefault is the default the fleet
+// apply page never offered: the box is unticked, so the NTP form writes the
+// camera whose page it is and no other.
+//
+// It asserts camera two's state, not just camera one's: "did not write the
+// rest of the fleet" is the claim, and only the other camera can support
+// it.
+func TestTheTimeFormWritesOnlyThisCameraByDefault(t *testing.T) {
+	ts, one, two := twoClockCameras(t)
+
+	c := flashBrowser(t)
+	resp := postForm(t, c, ts.URL+"/cameras/one/time", url.Values{"server": {"time.nist.gov"}, "enabled": {"1"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got %d, want 303 back to the camera's own page: %s", resp.StatusCode, raw)
+	}
+	if got := one.server.Load().(string); got != "time.nist.gov" {
+		t.Fatalf("camera one holds server=%q, want time.nist.gov", got)
+	}
+	if got := two.server.Load().(string); got != "old.example" {
+		t.Fatalf("camera two holds server=%q: an unticked box wrote the rest of the fleet", got)
+	}
+	if got := atomic.LoadInt32(&two.ntpSets); got != 0 {
+		t.Fatalf("camera two received %d SetNtp calls, want none", got)
+	}
+}
+
+// TestTickingEveryCameraWritesTheWholeFleetAndReportsEachOne is the
+// capability folded in from the deleted /fleet/apply page: the same NTP
+// form, ticked, reaches every camera and renders one row each.
+func TestTickingEveryCameraWritesTheWholeFleetAndReportsEachOne(t *testing.T) {
+	ts, one, two := twoClockCameras(t)
+
+	resp, err := http.PostForm(ts.URL+"/cameras/one/time", url.Values{
+		"server": {"time.nist.gov"}, "enabled": {"1"}, "every": {"1"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,9 +278,9 @@ func TestServeFleetApplyNTPWritesEveryCameraAndReportsARow(t *testing.T) {
 		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
 	}
 	html := string(raw)
-	for _, want := range []string{"one", "two", "confirmed"} {
+	for _, want := range []string{resultRow("one", "confirmed"), resultRow("two", "confirmed")} {
 		if !strings.Contains(html, want) {
-			t.Errorf("page does not render %q:\n%s", want, html)
+			t.Errorf("page has no result row %q:\n%s", want, html)
 		}
 	}
 	if got := one.server.Load().(string); got != "time.nist.gov" {
@@ -242,6 +288,123 @@ func TestServeFleetApplyNTPWritesEveryCameraAndReportsARow(t *testing.T) {
 	}
 	if got := two.server.Load().(string); got != "time.nist.gov" {
 		t.Fatalf("camera two holds server=%q, want time.nist.gov", got)
+	}
+}
+
+// TestTickingEveryCameraWritesTheTimezoneToTheWholeFleet is the same proof
+// for the other setting the deleted page carried. The timezone form is a
+// write now, not the read-only display it used to be on this page.
+func TestTickingEveryCameraWritesTheTimezoneToTheWholeFleet(t *testing.T) {
+	ts, one, two := twoClockCameras(t)
+
+	resp, err := http.PostForm(ts.URL+"/cameras/one/timezone", url.Values{
+		"timezone": {"-18000"}, "every": {"1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
+	}
+	html := string(raw)
+	for _, want := range []string{resultRow("one", "confirmed"), resultRow("two", "confirmed")} {
+		if !strings.Contains(html, want) {
+			t.Errorf("page has no result row %q:\n%s", want, html)
+		}
+	}
+	if got := atomic.LoadInt32(&one.timeZone); got != -18000 {
+		t.Fatalf("camera one holds timeZone=%d, want -18000", got)
+	}
+	if got := atomic.LoadInt32(&two.timeZone); got != -18000 {
+		t.Fatalf("camera two holds timeZone=%d, want -18000", got)
+	}
+}
+
+// TestTheTimezoneFormWritesOnlyThisCameraByDefault pins the default on the
+// timezone form too: one form having a safe default and the other not would
+// be worse than neither having one, because the operator would learn the
+// wrong rule from whichever they used first.
+func TestTheTimezoneFormWritesOnlyThisCameraByDefault(t *testing.T) {
+	ts, one, two := twoClockCameras(t)
+
+	c := flashBrowser(t)
+	resp := postForm(t, c, ts.URL+"/cameras/one/timezone", url.Values{"timezone": {"-18000"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("got %d, want 303 back to the camera's own page: %s", resp.StatusCode, raw)
+	}
+	if got := atomic.LoadInt32(&one.timeZone); got != -18000 {
+		t.Fatalf("camera one holds timeZone=%d, want -18000", got)
+	}
+	if got := atomic.LoadInt32(&two.timeSets); got != 0 {
+		t.Fatalf("camera two received %d SetTime calls, want none", got)
+	}
+
+	page := getPage(t, c, ts.URL+"/cameras/one/time")
+	if !strings.Contains(page, "one: timezone saved") {
+		t.Fatalf("the banner does not say what was saved:\n%s", page)
+	}
+}
+
+// TestOneCameraFailingDoesNotStopOrHideTheOthers is the partial apply this
+// hardware actually produces: eight cameras of three models, and the
+// fisheye disagreeing with the rest is the ordinary case. The camera that
+// failed must be on the page, named, with its reason, and the cameras that
+// worked must still have been written.
+func TestOneCameraFailingDoesNotStopOrHideTheOthers(t *testing.T) {
+	one := newFakeClockCamera(t, 0, "old.example", 0)
+	three := newFakeClockCamera(t, 0, "old.example", 0)
+	// Camera "two" answers nothing: cgiDial fails for it the way a
+	// powered-off or rebooting camera fails, before any request is made.
+	cgiDial := func(cam Camera) (*cgi.Client, error) {
+		switch cam.Name {
+		case "one":
+			return cgi.Dial(one.addr(), "admin", "")
+		case "two":
+			return nil, errors.New("dial tcp 192.0.2.11:80: connect: no route to host")
+		case "three":
+			return cgi.Dial(three.addr(), "admin", "")
+		}
+		t.Fatalf("unexpected camera %q", cam.Name)
+		return nil, nil
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "one", "two", "three"), CGIDial: cgiDial})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.PostForm(ts.URL+"/cameras/one/time", url.Values{
+		"server": {"time.nist.gov"}, "enabled": {"1"}, "every": {"1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
+	}
+	html := string(raw)
+	if !strings.Contains(html, resultRow("two", "refused")) {
+		t.Errorf("the camera that failed is not reported as refused:\n%s", html)
+	}
+	if !strings.Contains(html, "no route to host") {
+		t.Errorf("the refusal carries no reason:\n%s", html)
+	}
+	// The camera AFTER the failure matters most: a loop that aborted on
+	// the first error would leave this one untouched and unreported.
+	if !strings.Contains(html, resultRow("three", "confirmed")) {
+		t.Errorf("the camera after the failing one is not reported:\n%s", html)
+	}
+	if got := three.server.Load().(string); got != "time.nist.gov" {
+		t.Fatalf("camera three holds server=%q: a failure earlier in the fleet stopped the apply", got)
 	}
 }
 

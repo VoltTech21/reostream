@@ -50,7 +50,7 @@ func loginReply(token string) string {
 // reached it, not just what the handler claims. The SetWhiteLed handler
 // fails the test itself if bright arrives as anything but the value
 // GetWhiteLed reported, the same discipline fakeClockCamera's SetTime
-// handler already applies to "year" in fleetapply_test.go: an unmodelled
+// handler already applies to "year" in applyall_test.go: an unmodelled
 // field surviving the round trip is the thing under test, not a value this
 // test reads back afterward.
 type fakeCGICamera struct {
@@ -287,7 +287,7 @@ func TestCuratedFieldFindsTheWhiteLedField(t *testing.T) {
 // them. fakeCGICamera's SetWhiteLed handler fails the test itself if
 // bright arrives as anything but what GetWhiteLed reported, the same
 // discipline TestSetTimeZonePreservesEveryOtherField uses for "year" in
-// fleetapply_test.go, so this is checked on the wire, not just against
+// applyall_test.go, so this is checked on the wire, not just against
 // setFloodlight's return value.
 func TestSetFloodlightPreservesEveryOtherField(t *testing.T) {
 	cam := newFakeCGICamera(t, 0, 0)
