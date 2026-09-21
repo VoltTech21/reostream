@@ -64,7 +64,7 @@ func main() {
 	dataDir := flag.String("data", "/data", "data directory; holds config.toml when -config is not set")
 	listenOverride := flag.String("listen", "", "HTTP listen address, overriding the config file's")
 	controlListenOverride := flag.String("control-listen", "", "address for the page, overriding the config file's [control].listen. Symmetric with -listen; mostly useful for moving the page off 8562 without editing the config")
-	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://10.0.0.2:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
+	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://192.0.2.10:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
 	flag.Parse()
 
 	d, err := startup(*configFlag, *dataDir, *listenOverride, *controlListenOverride, *streamBase)

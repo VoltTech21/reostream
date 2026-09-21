@@ -14,7 +14,7 @@ func TestTileURLDefaultsToTheSameOriginMount(t *testing.T) {
 }
 
 func TestTileURLHonoursAnExplicitBase(t *testing.T) {
-	if got := tileURL("http://10.0.0.2:8560", "/gate_sub.ts"); got != "http://10.0.0.2:8560/gate_sub.ts" {
+	if got := tileURL("http://192.0.2.10:8560", "/gate_sub.ts"); got != "http://192.0.2.10:8560/gate_sub.ts" {
 		t.Fatalf("tileURL with an explicit base = %q, want it used verbatim", got)
 	}
 }
