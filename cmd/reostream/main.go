@@ -63,10 +63,11 @@ func main() {
 	configFlag := flag.String("config", "", "path to the TOML config file (default: <data>/config.toml)")
 	dataDir := flag.String("data", "/data", "data directory; holds config.toml when -config is not set")
 	listenOverride := flag.String("listen", "", "HTTP listen address, overriding the config file's")
+	controlListenOverride := flag.String("control-listen", "", "address for the page, overriding the config file's [control].listen. Symmetric with -listen; mostly useful for moving the page off 8562 without editing the config")
 	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://10.0.0.2:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
 	flag.Parse()
 
-	d, err := startup(*configFlag, *dataDir, *listenOverride, *streamBase)
+	d, err := startup(*configFlag, *dataDir, *listenOverride, *controlListenOverride, *streamBase)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reostream: %v\n", err)
 		os.Exit(1)
@@ -124,10 +125,14 @@ type daemon struct {
 	sup        *supervisor.Supervisor
 	rtspSrv    *rtsp.Server
 	controlSrv *http.Server
-	httpSrv    *http.Server
-	supCtx     context.Context
-	cancelSup  context.CancelFunc
-	runDone    <-chan error
+	// controlLn is the listener controlSrv is serving on, kept so a caller
+	// can read the address actually bound. With a ":0" override that is the
+	// only way to learn the port.
+	controlLn net.Listener
+	httpSrv   *http.Server
+	supCtx    context.Context
+	cancelSup context.CancelFunc
+	runDone   <-chan error
 }
 
 // startup resolves the config -- including the no-config first-run path --
@@ -136,7 +141,7 @@ type daemon struct {
 // error here is always fatal in main: a config that exists and fails to
 // parse or validate, an explicit -config pointing at nothing, or a listener
 // that fails to start.
-func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, error) {
+func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamBase string) (*daemon, error) {
 	explicitConfig := configFlag != ""
 	configPath := resolveConfigPath(dataDir, configFlag)
 
@@ -230,6 +235,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 	// streaming port stays unauthenticated because that is what a recorder
 	// points at; this one holds camera credentials.
 	var controlSrv *http.Server
+	var controlLn net.Listener
 	var claimToken string
 	if cfg.Control != nil && cfg.Control.Listen != "" {
 		ctl, err := control.New(control.Options{
@@ -247,7 +253,21 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 			return nil, fmt.Errorf("control: %w", err)
 		}
 		claimToken = ctl.ClaimToken()
-		controlSrv = &http.Server{Addr: cfg.Control.Listen, Handler: ctl.Handler()}
+		controlListen := cfg.Control.Listen
+		if controlListenOverride != "" {
+			controlListen = controlListenOverride
+		}
+		// Listen here rather than inside ListenAndServe, so the address the
+		// kernel actually chose is knowable. With ":0" that is the only way
+		// to find the port, which is what lets a test exercise this path
+		// without binding the real 8562 on the machine running it.
+		ln, lerr := net.Listen("tcp", controlListen)
+		if lerr != nil {
+			cancelSup()
+			return nil, fmt.Errorf("control: listen on %s: %w", controlListen, lerr)
+		}
+		controlLn = ln
+		controlSrv = &http.Server{Addr: controlListen, Handler: ctl.Handler()}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits
 		// on active connections, which is exactly when a live log stream
 		// needs to be released: Shutdown blocks on active connections
@@ -256,7 +276,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 		controlSrv.RegisterOnShutdown(ctl.Close)
 		go func() {
 			log.Printf("reostream: control listening on %s", cfg.Control.Listen)
-			if err := controlSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := controlSrv.Serve(controlLn); err != nil && err != http.ErrServerClosed {
 				log.Printf("reostream: control: %v", err)
 			}
 		}()
@@ -294,6 +314,7 @@ func startup(configFlag, dataDir, listenOverride, streamBase string) (*daemon, e
 		sup:        sup,
 		rtspSrv:    rtspSrv,
 		controlSrv: controlSrv,
+		controlLn:  controlLn,
 		httpSrv:    httpSrv,
 		supCtx:     supCtx,
 		cancelSup:  cancelSup,

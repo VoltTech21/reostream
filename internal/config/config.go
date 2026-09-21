@@ -50,9 +50,9 @@ type ControlConfig struct {
 // Config is the top level shape of the TOML file.
 type Config struct {
 	Listen  string
-	RTSP    *RTSPConfig `toml:"rtsp"`
+	RTSP    *RTSPConfig    `toml:"rtsp"`
 	Control *ControlConfig `toml:"control"`
-	Cameras []Camera    `toml:"camera"`
+	Cameras []Camera       `toml:"camera"`
 }
 
 // NormalizeAddr applies the same default-port rule baichuan.Dial does, so

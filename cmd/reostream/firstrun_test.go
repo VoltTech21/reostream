@@ -32,7 +32,7 @@ func TestStartupWithAnExplicitMissingConfigStaysFatal(t *testing.T) {
 	// page on the default first-run config.
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "does-not-exist.toml")
-	if _, err := startup(missing, dir, "", ""); err == nil {
+	if _, err := startup(missing, dir, "", "", ""); err == nil {
 		t.Fatal("expected an error for an explicit -config pointing at a missing file")
 	}
 }
@@ -43,7 +43,7 @@ func TestStartupWithNoConfigSynthesizesAndServes(t *testing.T) {
 	// come up -- an empty fleet, and a control listener that answers --
 	// not merely fail to crash.
 	dir := t.TempDir()
-	d, err := startup("", dir, "127.0.0.1:0", "")
+	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "")
 	if err != nil {
 		t.Fatalf("startup: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestStartupWithNoConfigSynthesizesAndServes(t *testing.T) {
 	var resp *http.Response
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		resp, err = http.Get("http://127.0.0.1:8562/")
+		resp, err = http.Get("http://" + d.controlLn.Addr().String() + "/")
 		if err == nil {
 			break
 		}
