@@ -149,6 +149,37 @@ func readTimeZone(ctx context.Context, c *cgi.Client) (int, error) {
 // it directly, and the every-camera checkbox calls it once per camera
 // through applyAll. Two implementations of one write would be two things
 // to keep honest about read-back.
+// prevNTP is the enable/server pair a camera held before a write, in the
+// shape the form posts rather than the sentence WriteResult.Before renders.
+//
+// It exists so undo can be offered here at all. "on, server
+// \"pool.ntp.org\"" is for a person to read; posting it back as a server
+// name would write nonsense to the camera, which is why this page carried
+// no undo until now.
+type prevNTP struct {
+	Server  string
+	Enabled bool
+	// Known is false when the pre-write read failed. No undo is offered
+	// then, rather than one that would post a zero value as if it were the
+	// camera's previous setting.
+	Known bool
+}
+
+func (s *Server) setNTPPrev(ctx context.Context, cam Camera, server string, enabled bool) (WriteResult, prevNTP, error) {
+	c, err := s.cgiDial(cam)
+	if err != nil {
+		return WriteResult{}, prevNTP{}, fmt.Errorf("control: connecting to %q for NTP: %w", cam.Name, err)
+	}
+	cur, err := readNTPDoc(ctx, c)
+	if err != nil {
+		return WriteResult{}, prevNTP{}, fmt.Errorf("control: reading NTP for %q before writing: %w", cam.Name, err)
+	}
+	curEnabled, curServer := ntpEnableServer(cur)
+
+	result, err := s.setNTP(ctx, cam, server, enabled)
+	return result, prevNTP{Server: curServer, Enabled: curEnabled, Known: err == nil}, err
+}
+
 func (s *Server) setNTP(ctx context.Context, cam Camera, server string, enabled bool) (WriteResult, error) {
 	c, err := s.cgiDial(cam)
 	if err != nil {
@@ -445,20 +476,33 @@ func (s *Server) serveApplyTime(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
 
-	result, err := s.setNTP(ctx, cam, server, enabled)
+	result, prev, err := s.setNTPPrev(ctx, cam, server, enabled)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
 	// Back to this camera's own time page with a one-line report, rather
-	// than onto result.html: see serveApplySetting for why. There is no
-	// undo offered here. Before is a rendering of the previous state
-	// ("on, server \"pool.ntp.org\""), not a resubmittable pair of form
-	// fields, and a button that posted that string back as a server name
-	// would write nonsense to the camera. The previous server is still on
-	// the page the operator lands on, in the form they just used.
-	s.setFlash(w, r, flashFor(cam.Name+": ntp", result))
+	// than onto result.html: see serveApplySetting for why.
+	//
+	// Undo posts the pair the camera actually held before the write, back
+	// through this same handler -- the form's own two fields, not a
+	// rendering of them. Offered only when the pre-write read succeeded:
+	// without it there is no previous setting to restore, and a button
+	// that posted a zero value as though there were would be worse than no
+	// button.
+	flash := flashFor(cam.Name+": ntp", result)
+	if prev.Known {
+		flash.UndoAction = "/cameras/" + url.PathEscape(cam.Name) + "/time"
+		flash.UndoParam = "server"
+		flash.UndoValue = prev.Server
+		hidden := map[string]string{"return": "/cameras/" + url.PathEscape(cam.Name) + "/time"}
+		if prev.Enabled {
+			hidden["enabled"] = "1"
+		}
+		flash.UndoHidden = hidden
+	}
+	s.setFlash(w, r, flash)
 	http.Redirect(w, r, "/cameras/"+url.PathEscape(cam.Name)+"/time", http.StatusSeeOther)
 }
 
