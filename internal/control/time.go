@@ -294,6 +294,14 @@ type timePage struct {
 	TimeZone    int
 	TimeZoneErr string
 
+	// TimeZoneLabel is TimeZone read the way a person reads a timezone,
+	// and TimeZoneChoices is the picker beside the raw field. See
+	// timezone.go: the field counts seconds WEST of UTC, so the number
+	// and the label carry opposite signs and the bare number reads as a
+	// mystery on its own.
+	TimeZoneLabel   string
+	TimeZoneChoices []timeZoneChoice
+
 	// Results is one row per camera, filled in only when a write on this
 	// page was ticked "apply to every camera". It is never a summary: see
 	// applyAll in fleet.go for why a fleet of three models cannot honestly
@@ -318,7 +326,7 @@ type timePage struct {
 // submitted: a write that was accepted but did not take must not leave the
 // page showing the value that failed to stick.
 func (s *Server) readTimePage(ctx context.Context, cam Camera) timePage {
-	page := timePage{Title: cam.Name + " time", Camera: cam}
+	page := timePage{Title: cam.Name + " time", Camera: cam, TimeZoneChoices: timeZoneChoices()}
 
 	c, err := s.cgiDial(cam)
 	if err != nil {
@@ -338,6 +346,7 @@ func (s *Server) readTimePage(ctx context.Context, cam Camera) timePage {
 		page.TimeZoneErr = fmt.Sprintf("could not read the timezone: %v", readErr)
 	} else {
 		page.TimeZone = tz
+		page.TimeZoneLabel = utcOffsetLabel(tz)
 	}
 	return page
 }

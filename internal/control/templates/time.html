@@ -54,13 +54,28 @@
 <h2>Timezone</h2>
 <p class="hint">Written over CGI SetTime, not Baichuan: no set-time message exists in the recovered table, so this is the only path there is. Raw CGI value; the sign convention has not been confirmed against real hardware, so send back what a camera's own page reports rather than converting it.</p>
 {{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
-<p>The camera reports its timeZone field as {{.TimeZone}} (shown as the camera gave it, not converted).</p>
+<p>The camera reports <strong>{{.TimeZoneLabel}}</strong>, which it holds as
+<code>{{.TimeZone}}</code> &mdash; seconds <em>west</em> of UTC, so the number and the
+label carry opposite signs.</p>
+<p class="hint">That is the standard offset. A camera applies its own daylight saving
+rule on top of it, so the clock in the picture can read an hour off this and still be
+right. Nothing on this page changes that rule.</p>
 {{end}}
 <form method="post" action="/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('write this timezone to every camera in the fleet?')">
 <table>
 <tr>
 <td>Timezone</td>
-<td><input type="number" name="timezone" value="{{.TimeZone}}"></td>
+<td>
+<select class="tz-pick" aria-label="common offsets">
+<option value="">pick an offset&hellip;</option>
+{{range .TimeZoneChoices}}<option value="{{.Seconds}}"{{if eq .Seconds $.TimeZone}} selected{{end}}>{{.Label}}</option>
+{{end}}</select>
+{{/* The raw field stays authoritative. The picker only fills it in: a
+     camera already holding an offset that is not a whole or half hour
+     must not have it rounded away by a dropdown that has no entry for
+     it. */}}
+<input type="number" class="tz-raw" name="timezone" value="{{.TimeZone}}">
+</td>
 </tr>
 <tr>
 <td><label for="tz-every">Every camera</label></td>
@@ -83,4 +98,18 @@
 </table>
 </section>
 {{end}}
+<script>
+// The picker writes into the number box; the number box is what posts.
+for (const pick of document.querySelectorAll('.tz-pick')) {
+  const raw = pick.parentNode.querySelector('.tz-raw');
+  pick.addEventListener('change', function() {
+    if (pick.value !== '') raw.value = pick.value;
+  });
+  // Typing an offset the picker has no entry for clears the picker rather
+  // than leaving it pointing at something the field no longer says.
+  raw.addEventListener('input', function() {
+    pick.value = [...pick.options].some(o => o.value === raw.value) ? raw.value : '';
+  });
+}
+</script>
 {{end}}
