@@ -1,9 +1,10 @@
 package control
 
 import (
-	"bytes"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/VoltTech21/reostream/internal/config"
@@ -46,6 +47,18 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 	}
 	cfg.Cameras = append(cfg.Cameras, cam)
 	return cfg.Validate()
+}
+
+// cameraNamed finds the camera applyCameraForm just folded in, so the
+// block written to the file is the validated one rather than a second
+// reading of the form.
+func cameraNamed(cfg *config.Config, name string) (config.Camera, bool) {
+	for _, cam := range cfg.Cameras {
+		if cam.Name == name {
+			return cam, true
+		}
+	}
+	return config.Camera{}, false
 }
 
 // formCamera is a config.Camera with the helpers the template needs.
@@ -112,46 +125,202 @@ func (s *Server) serveCameras(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "cameras.html", s.camerasPage())
 }
 
-// saveCamera folds one camera into the config and then goes through the
-// same write and apply path the raw editor uses. Re-encoding to TOML and
-// handing the text to writeAndApply is what keeps that one path: a second
-// writer would be a second place for the backup, the validation and the
-// reload to drift out of agreement.
+// cameraBlockText renders one camera as the [[camera]] block a person
+// would have typed: lower-case keys, no indentation, in the order the
+// Setup page's own example and claimConfigText use.
+//
+// Password goes through %q like every other value and is NOT resolved on
+// the way: the caller hands this a camera read by config.LoadRaw, so a
+// password recorded as "$CAM_ONE" is still the literal string "$CAM_ONE"
+// here and is written back as one. Resolving it would put an operator's
+// real camera credential in config.toml, which is the bug LoadRaw exists
+// to prevent.
+//
+// Optional lists are left out entirely when empty rather than written as
+// "[]", because absent is what the loader reads as none and an empty list
+// is noise in a file people edit by hand.
+//
+// %q is not TOML's escaping in every case -- a control character comes out
+// as Go's \x00, which TOML does not accept -- but saveConfig validates the
+// whole file through the real loader before anything is written, so such a
+// value is refused rather than saved as something that will not load.
+func cameraBlockText(cam config.Camera) string {
+	var b strings.Builder
+	b.WriteString("[[camera]]\n")
+	fmt.Fprintf(&b, "name = %q\n", cam.Name)
+	fmt.Fprintf(&b, "address = %q\n", cam.Address)
+	fmt.Fprintf(&b, "username = %q\n", cam.Username)
+	fmt.Fprintf(&b, "password = %q\n", cam.Password)
+	writeList := func(key string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		quoted := make([]string, len(values))
+		for i, v := range values {
+			quoted[i] = fmt.Sprintf("%q", v)
+		}
+		fmt.Fprintf(&b, "%s = [%s]\n", key, strings.Join(quoted, ", "))
+	}
+	writeList("streams", cam.Streams)
+	writeList("rtsp", cam.RTSP)
+	return b.String()
+}
+
+// findCameraBlock locates the [[camera]] block naming name, as a half-open
+// range of line indices into lines, so upsertCameraBlock can replace just
+// that block and leave every other byte of the file alone.
+//
+// It finds table headers by scanning lines rather than by asking the TOML
+// decoder, which reports no byte offsets. Two things make that scan safe
+// enough to edit a file with: a multi-line string can hold a line that
+// looks like a header, so the scan tracks whether it is inside one, and a
+// comment can too, so comment lines are skipped. The name itself is read
+// by handing the block's own text back to the decoder, so quoting and
+// escapes are the loader's business and not a second implementation's.
+//
+// Trailing blank lines are left OUT of the range: they separate this block
+// from the next one, and swallowing them into a replacement would close
+// the gap up a little more on every save.
+func findCameraBlock(lines []string, name string) (start, end int, found bool) {
+	// The ranges of every [[camera]] block, in file order.
+	type span struct{ start, end int }
+	var spans []span
+	var multi string
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if multi != "" {
+			if strings.Count(line, multi)%2 == 1 {
+				multi = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			if len(spans) > 0 {
+				spans[len(spans)-1].end = i
+			}
+			if strings.HasPrefix(trimmed, "[[") && strings.TrimSpace(strings.Trim(trimmed, "[]")) == "camera" {
+				spans = append(spans, span{start: i, end: len(lines)})
+			}
+			continue
+		}
+		for _, delim := range []string{`"""`, `'''`} {
+			if strings.Count(line, delim)%2 == 1 {
+				multi = delim
+				break
+			}
+		}
+	}
+
+	for _, sp := range spans {
+		for sp.end > sp.start+1 && strings.TrimSpace(lines[sp.end-1]) == "" {
+			sp.end--
+		}
+		var doc struct {
+			Camera []struct{ Name string }
+		}
+		text := strings.Join(lines[sp.start:sp.end], "\n")
+		if _, err := toml.Decode(text, &doc); err != nil || len(doc.Camera) == 0 {
+			// A block this cannot read is a block this must not edit.
+			// The whole file still has to load for saveConfig to write
+			// anything, so an unreadable block here means the save is
+			// about to be refused anyway.
+			continue
+		}
+		if doc.Camera[0].Name == name {
+			return sp.start, sp.end, true
+		}
+	}
+	return 0, 0, false
+}
+
+// upsertCameraBlock returns text with cam's [[camera]] block replaced, or
+// appended when there is no block for that name yet.
+//
+// This is a text edit, not a re-encode. saveCamera used to run the whole
+// decoded config back through toml.NewEncoder, which produced a correct
+// file that had lost everything about the old one that was not data: the
+// comment header a claim writes (including its warning about -listen,
+// which a ledger ruling leaned on), the file's own key casing, and the
+// order a person had put things in. Adding one camera is one thing
+// changed, so one thing is what gets changed.
+func upsertCameraBlock(text string, cam config.Camera) string {
+	block := cameraBlockText(cam)
+	lines := strings.Split(text, "\n")
+	start, end, found := findCameraBlock(lines, cam.Name)
+	if !found {
+		// A blank line before the new block, so the file reads the way
+		// the ones people write by hand do. A file that is empty or
+		// whitespace-only becomes just the block.
+		existing := strings.TrimRight(text, "\n")
+		if strings.TrimSpace(existing) == "" {
+			return block
+		}
+		return existing + "\n\n" + block
+	}
+	var prefix string
+	if start > 0 {
+		prefix = strings.Join(lines[:start], "\n") + "\n"
+	}
+	return prefix + block + strings.Join(lines[end:], "\n")
+}
+
+// saveCamera folds one camera into the config text and then goes through
+// the same write and apply path the raw editor uses. Handing the text to
+// writeAndApply is what keeps that one path: a second writer would be a
+// second place for the backup, the validation and the reload to drift out
+// of agreement.
+//
+// The config is decoded only to validate the submission against the rules
+// startup enforces. What gets written is the file's own text with one
+// [[camera]] block changed or added; see upsertCameraBlock.
 func (s *Server) saveCamera(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// LoadRaw, not Load: cfg here is re-encoded and written back below, and
-	// Load would turn every camera's "$NAME" password reference into that
-	// camera's real, resolved secret before it ever reached the encoder,
-	// writing every live credential into the config file in plaintext for
-	// the sake of editing one unrelated camera.
+	fail := func(err error) {
+		page := s.camerasPage()
+		page.Error = err.Error()
+		s.render(w, "cameras.html", page)
+	}
+
+	text, err := loadRawConfig(s.opts.ConfigPath)
+	if err != nil {
+		fail(err)
+		return
+	}
+
+	// LoadRaw, not Load: the camera this produces is written straight back
+	// into the file below, and Load would turn a "$NAME" password
+	// reference into that camera's real, resolved secret first, writing a
+	// live credential into config.toml in plaintext. LoadRaw is also what
+	// makes "leave the password alone" work: the value the form's sentinel
+	// is replaced with is the reference, not the secret behind it.
 	cfg, err := config.LoadRaw(s.opts.ConfigPath)
 	if err != nil {
-		page := s.camerasPage()
-		page.Error = err.Error()
-		s.render(w, "cameras.html", page)
+		fail(err)
 		return
 	}
 
+	// Fold the submission into the decoded config purely to validate it:
+	// cfg.Validate is the daemon's own check, so the browser is held to
+	// exactly the rules startup enforces. cfg itself is not what gets
+	// written.
 	if err := applyCameraForm(cfg, r.Form); err != nil {
-		page := s.camerasPage()
-		page.Error = err.Error()
-		s.render(w, "cameras.html", page)
+		fail(err)
+		return
+	}
+	cam, ok := cameraNamed(cfg, r.Form.Get("name"))
+	if !ok {
+		fail(fmt.Errorf("control: the camera form named %q, which is not in the config it just produced", r.Form.Get("name")))
 		return
 	}
 
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
-		page := s.camerasPage()
-		page.Error = err.Error()
-		s.render(w, "cameras.html", page)
-		return
-	}
-
-	note, err := s.writeAndApply(buf.String())
+	note, err := s.writeAndApply(upsertCameraBlock(text, cam))
 	page := s.camerasPage()
 	if err != nil {
 		page.Error = err.Error()
