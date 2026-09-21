@@ -66,10 +66,39 @@ type Flash struct {
 	UndoHidden map[string]string
 }
 
-// flashEntry is one stashed Flash and the moment it stops being worth
-// showing.
+// FleetFlash is what an every-camera apply leaves behind: one row per
+// camera, and which setting those rows are about.
+//
+// It is stashed here rather than rendered straight onto the POST response
+// for exactly the reason a single write is: a rendered POST means refresh
+// re-submits, and re-submitting this one writes the whole fleet a second
+// time. The blast radius is what makes it worth carrying rows through a
+// redirect at all -- a banner is one line and rows are as many lines as
+// there are cameras, but the rule about refresh does not care about size.
+//
+// Results is never collapsed into a summary on the way here; see applyAll
+// in fleet.go for why a fleet of three models cannot honestly be reduced
+// to one line.
+type FleetFlash struct {
+	// Target names which setting the rows belong to ("ntp", "timezone").
+	// The two settings go out as two different CGI commands, and a camera
+	// refusing one must not be read as it refusing the other.
+	Target  string
+	Results []FleetResult
+}
+
+// flashEntry is what one browser has waiting for it: the one-line banner a
+// single write left, the rows an every-camera apply left, or both, and the
+// moment they stop being worth showing.
+//
+// Both are pointers and both are optional, so that taking one does not
+// discard the other. A single-camera write and a fleet apply report through
+// different fields of the same entry rather than through two stores,
+// because they share everything that matters here: the key, the TTL, the
+// sweep, and the read-once rule.
 type flashEntry struct {
-	flash   Flash
+	flash   *Flash
+	fleet   *FleetFlash
 	expires time.Time
 }
 
@@ -130,34 +159,69 @@ func newFlashID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// flashKeyFor is flashKey for a request that is about to stash something:
+// when there is no key to be had it mints the fallback cookie and returns
+// that instead, so the redirect the caller is about to write carries the
+// id its landing GET will be found by.
+//
+// It returns "" only when even that failed, which the callers treat as
+// "report nothing": neither a banner nor a table of rows is worth failing
+// a write that has already reached the cameras.
+func (s *Server) flashKeyFor(w http.ResponseWriter, r *http.Request) string {
+	if key := s.flashKey(r); key != "" {
+		return key
+	}
+	tok, err := newFlashID()
+	if err != nil {
+		return ""
+	}
+	ck := &http.Cookie{
+		Name:     flashCookie,
+		Value:    tok,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(flashTTL.Seconds()),
+	}
+	http.SetCookie(w, ck)
+	// Put it on the request too, so a second stash in the same request
+	// finds the id this one just minted instead of minting another. Two
+	// ids would mean two entries under two keys, and the browser is only
+	// going to send one of them back.
+	r.AddCookie(ck)
+	return "flash:" + tok
+}
+
+// stash puts fill's changes into this request's entry, creating it if there
+// is none and refreshing its expiry either way. The entry is read first so
+// that stashing a banner does not throw away rows already waiting, or the
+// other way round.
+func (s *Server) stash(w http.ResponseWriter, r *http.Request, fill func(*flashEntry)) {
+	key := s.flashKeyFor(w, r)
+	if key == "" {
+		return
+	}
+	s.flashMu.Lock()
+	defer s.flashMu.Unlock()
+	s.sweepFlashesLocked()
+	e := s.flashes[key]
+	fill(&e)
+	e.expires = s.flashClock().Add(flashTTL)
+	s.flashes[key] = e
+}
+
 // setFlash stashes f for whoever made this request, minting the fallback
 // cookie when there is no session to key by. Call it before writing the
 // redirect: it may need to set a header.
 func (s *Server) setFlash(w http.ResponseWriter, r *http.Request, f Flash) {
-	key := s.flashKey(r)
-	if key == "" {
-		tok, err := newFlashID()
-		if err != nil {
-			// A banner is not worth failing a write that already
-			// happened. The redirect still goes out; the operator just
-			// lands on the page without the one-line report.
-			return
-		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     flashCookie,
-			Value:    tok,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			MaxAge:   int(flashTTL.Seconds()),
-		})
-		key = "flash:" + tok
-	}
+	s.stash(w, r, func(e *flashEntry) { e.flash = &f })
+}
 
-	s.flashMu.Lock()
-	defer s.flashMu.Unlock()
-	s.sweepFlashesLocked()
-	s.flashes[key] = flashEntry{flash: f, expires: s.flashClock().Add(flashTTL)}
+// setFleetFlash stashes an every-camera apply's rows for the page the
+// operator is about to be redirected to. Same call order as setFlash: it
+// may need to set a header, so it goes before the redirect is written.
+func (s *Server) setFleetFlash(w http.ResponseWriter, r *http.Request, f FleetFlash) {
+	s.stash(w, r, func(e *flashEntry) { e.fleet = &f })
 }
 
 // takeFlash returns this request's stashed banner and removes it, so it is
@@ -167,20 +231,43 @@ func (s *Server) setFlash(w http.ResponseWriter, r *http.Request, f Flash) {
 // It returns a pointer because the page structs carry one, and nil is how
 // a template says "no banner" without a second boolean field.
 func (s *Server) takeFlash(r *http.Request) *Flash {
+	var f *Flash
+	s.unstash(r, func(e *flashEntry) { f, e.flash = e.flash, nil })
+	return f
+}
+
+// takeFleetFlash returns this request's stashed every-camera rows and
+// removes them, on the same read-once rule takeFlash follows: rows that
+// survived a reload would go on claiming the fleet was just written long
+// after it was.
+func (s *Server) takeFleetFlash(r *http.Request) *FleetFlash {
+	var f *FleetFlash
+	s.unstash(r, func(e *flashEntry) { f, e.fleet = e.fleet, nil })
+	return f
+}
+
+// unstash hands this request's entry to take, which clears the one field it
+// is after, and then keeps the entry only if something is still waiting in
+// it. Taking a banner must not discard rows stashed beside it, and taking
+// rows must not discard the banner.
+func (s *Server) unstash(r *http.Request, take func(*flashEntry)) {
 	key := s.flashKey(r)
 	if key == "" {
-		return nil
+		return
 	}
 	s.flashMu.Lock()
 	defer s.flashMu.Unlock()
 	s.sweepFlashesLocked()
 	e, ok := s.flashes[key]
 	if !ok {
-		return nil
+		return
 	}
-	delete(s.flashes, key)
-	f := e.flash
-	return &f
+	take(&e)
+	if e.flash == nil && e.fleet == nil {
+		delete(s.flashes, key)
+		return
+	}
+	s.flashes[key] = e
 }
 
 // sweepFlashesLocked drops every expired entry, not just the one being

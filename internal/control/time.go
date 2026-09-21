@@ -378,6 +378,13 @@ func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
 
 	page := s.readTimePage(ctx, cam)
 	page.Flash = s.takeFlash(r)
+	// The rows an every-camera apply left behind, read once and then gone:
+	// a reload of this page shows the forms and nothing else, because by
+	// then the write it reported is no longer what just happened.
+	if fleet := s.takeFleetFlash(r); fleet != nil {
+		page.ResultsTarget = fleet.Target
+		page.Results = fleet.Results
+	}
 	s.render(w, "time.html", page)
 }
 
@@ -394,21 +401,18 @@ func applyEveryCamera(r *http.Request) bool {
 	return r.FormValue("every") == "1"
 }
 
-// renderFleetResults re-reads this camera and renders its time page with
-// one row per camera below the forms.
+// redirectFleetResults stashes an every-camera apply's rows and sends the
+// operator back to this camera's time page to read them.
 //
-// It renders rather than redirecting the way the single-camera path does: a
-// flash carries one line, and the whole point of an every-camera apply is
-// that there are as many lines as there are cameras and none of them may be
-// dropped on the way to the page.
-func (s *Server) renderFleetResults(w http.ResponseWriter, r *http.Request, cam Camera, target string, results []FleetResult) {
-	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
-	defer cancel()
-
-	page := s.readTimePage(ctx, cam)
-	page.ResultsTarget = target
-	page.Results = results
-	s.render(w, "time.html", page)
+// It used to render the rows straight onto the POST response, which meant
+// refresh re-submitted the form and wrote every camera on the fleet a
+// second time -- the same defect post/redirect/get already fixed for a
+// single write, only with the whole fleet behind it. The rows travel
+// through the flash store (see FleetFlash in flash.go), never through the
+// URL: they name cameras, and values on this project do not reach URLs.
+func (s *Server) redirectFleetResults(w http.ResponseWriter, r *http.Request, cam Camera, target string, results []FleetResult) {
+	s.setFleetFlash(w, r, FleetFlash{Target: target, Results: results})
+	http.Redirect(w, r, "/cameras/"+url.PathEscape(cam.Name)+"/time", http.StatusSeeOther)
 }
 
 // serveApplyTime is the NTP form's POST: setNTP against this camera, or,
@@ -434,7 +438,7 @@ func (s *Server) serveApplyTime(w http.ResponseWriter, r *http.Request) {
 		results := s.applyAll(r.Context(), func(ctx context.Context, c Camera) (WriteResult, error) {
 			return s.setNTP(ctx, c, server, enabled)
 		})
-		s.renderFleetResults(w, r, cam, "ntp", results)
+		s.redirectFleetResults(w, r, cam, "ntp", results)
 		return
 	}
 
@@ -485,7 +489,7 @@ func (s *Server) serveApplyTimezone(w http.ResponseWriter, r *http.Request) {
 		results := s.applyAll(r.Context(), func(ctx context.Context, c Camera) (WriteResult, error) {
 			return s.setTimeZone(ctx, c, tz)
 		})
-		s.renderFleetResults(w, r, cam, "timezone", results)
+		s.redirectFleetResults(w, r, cam, "timezone", results)
 		return
 	}
 

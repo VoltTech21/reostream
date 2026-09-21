@@ -244,6 +244,29 @@ func resultRow(camera, outcome string) string {
 	return "<td>" + camera + `</td><td class="outcome-` + outcome + `">`
 }
 
+// applyEvery posts an every-camera form the way a browser does and follows
+// the redirect it must answer with, returning the page the operator lands
+// on.
+//
+// The POST answering 303 rather than 200 is itself part of what these
+// tests assert: rendering the rows onto the POST response is what made a
+// refresh write the whole fleet again. The client carries a cookie jar
+// because that is how the rows travel -- stashed server side and keyed by
+// the browser, never in the URL.
+func applyEvery(t *testing.T, c *http.Client, ts *httptest.Server, path string, form url.Values) string {
+	t.Helper()
+	resp := postForm(t, c, ts.URL+path, form)
+	if resp.StatusCode != http.StatusSeeOther {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST %s: got %d, want 303 so a refresh cannot re-submit it: %s", path, resp.StatusCode, raw)
+	}
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		t.Fatal("the redirect names no page to land on")
+	}
+	return getPage(t, c, ts.URL+loc)
+}
+
 // TestTheTimeFormWritesOnlyThisCameraByDefault is the default the fleet
 // apply page never offered: the box is unticked, so the NTP form writes the
 // camera whose page it is and no other.
@@ -277,21 +300,9 @@ func TestTheTimeFormWritesOnlyThisCameraByDefault(t *testing.T) {
 func TestTickingEveryCameraWritesTheWholeFleetAndReportsEachOne(t *testing.T) {
 	ts, one, two := twoClockCameras(t)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/one/time", url.Values{
+	html := applyEvery(t, flashBrowser(t), ts, "/cameras/one/time", url.Values{
 		"server": {"time.nist.gov"}, "enabled": {"1"}, "every": {"1"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
-	}
-	html := string(raw)
 	for _, want := range []string{resultRow("one", "confirmed"), resultRow("two", "confirmed")} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page has no result row %q:\n%s", want, html)
@@ -311,21 +322,9 @@ func TestTickingEveryCameraWritesTheWholeFleetAndReportsEachOne(t *testing.T) {
 func TestTickingEveryCameraWritesTheTimezoneToTheWholeFleet(t *testing.T) {
 	ts, one, two := twoClockCameras(t)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/one/timezone", url.Values{
+	html := applyEvery(t, flashBrowser(t), ts, "/cameras/one/timezone", url.Values{
 		"timezone": {"-18000"}, "every": {"1"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
-	}
-	html := string(raw)
 	for _, want := range []string{resultRow("one", "confirmed"), resultRow("two", "confirmed")} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page has no result row %q:\n%s", want, html)
@@ -391,21 +390,9 @@ func TestOneCameraFailingDoesNotStopOrHideTheOthers(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.PostForm(ts.URL+"/cameras/one/time", url.Values{
+	html := applyEvery(t, flashBrowser(t), ts, "/cameras/one/time", url.Values{
 		"server": {"time.nist.gov"}, "enabled": {"1"}, "every": {"1"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("got %d, want 200: %s", resp.StatusCode, raw)
-	}
-	html := string(raw)
 	if !strings.Contains(html, resultRow("two", "refused")) {
 		t.Errorf("the camera that failed is not reported as refused:\n%s", html)
 	}
@@ -451,5 +438,95 @@ func TestSetTimeZonePreservesEveryOtherField(t *testing.T) {
 	}
 	if atomic.LoadInt32(&cam.timeSets) != 1 {
 		t.Fatalf("camera received %d SetTime calls, want 1", cam.timeSets)
+	}
+}
+
+// TestAnEveryCameraApplyRedirectsAndItsRowsAreShownOnce is the
+// post/redirect/get rule applied to the fleet path.
+//
+// The rows used to be rendered straight onto the POST response, so a
+// refresh re-submitted the form and wrote every camera on the fleet a
+// second time. The assertion that matters is the SetNtp count at the
+// cameras, not what the page says: a page can report anything, and the
+// question here is what actually reached the hardware.
+func TestAnEveryCameraApplyRedirectsAndItsRowsAreShownOnce(t *testing.T) {
+	ts, one, two := twoClockCameras(t)
+	c := flashBrowser(t)
+
+	page := applyEvery(t, c, ts, "/cameras/one/time", url.Values{
+		"server": {"time.nist.gov"}, "enabled": {"1"}, "every": {"1"},
+	})
+	for _, want := range []string{resultRow("one", "confirmed"), resultRow("two", "confirmed")} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the rows did not survive the redirect, no %q:\n%s", want, page)
+		}
+	}
+	if got := atomic.LoadInt32(&one.ntpSets); got != 1 {
+		t.Fatalf("camera one received %d SetNtp calls, want 1", got)
+	}
+	if got := atomic.LoadInt32(&two.ntpSets); got != 1 {
+		t.Fatalf("camera two received %d SetNtp calls, want 1", got)
+	}
+
+	// The refresh. It is a GET of the page the redirect landed on, which
+	// is the whole point of redirecting: there is no form submission left
+	// for the browser to repeat.
+	again := getPage(t, c, ts.URL+"/cameras/one/time")
+	if got := atomic.LoadInt32(&one.ntpSets); got != 1 {
+		t.Fatalf("camera one received %d SetNtp calls after a refresh, want still 1", got)
+	}
+	if got := atomic.LoadInt32(&two.ntpSets); got != 1 {
+		t.Fatalf("camera two received %d SetNtp calls after a refresh: a refresh wrote the fleet again", got)
+	}
+	for _, gone := range []string{resultRow("one", "confirmed"), resultRow("two", "confirmed")} {
+		if strings.Contains(again, gone) {
+			t.Errorf("row %q is still on the page a load later: rows are shown once, or they go on claiming a write just happened\n%s", gone, again)
+		}
+	}
+}
+
+// TestAnEveryCameraApplyKeepsItsRowsOutOfTheURL pins the project's rule
+// that values do not reach URLs. These rows name cameras, and a redirect
+// that carried them would write every camera's name into browser history
+// and into every access log between here and the browser.
+func TestAnEveryCameraApplyKeepsItsRowsOutOfTheURL(t *testing.T) {
+	ts, _, _ := twoClockCameras(t)
+	c := flashBrowser(t)
+
+	resp := postForm(t, c, ts.URL+"/cameras/one/timezone", url.Values{
+		"timezone": {"-18000"}, "every": {"1"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("got %d, want 303", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/cameras/one/time" {
+		t.Fatalf("Location = %q, want the camera's own time page with nothing appended", loc)
+	}
+}
+
+// TestABannerAndFleetRowsDoNotEvictEachOther covers the one thing sharing
+// a store could have broken: both live under one key, so taking the
+// one-line banner must not take the rows with it, or either write could
+// silently swallow the other's report.
+func TestABannerAndFleetRowsDoNotEvictEachOther(t *testing.T) {
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t, "one")})
+	w := httptest.NewRecorder()
+	post := httptest.NewRequest(http.MethodPost, "/cameras/one/time", nil)
+	s.setFlash(w, post, Flash{Outcome: "confirmed", Message: "one: ntp saved"})
+	s.setFleetFlash(w, post, FleetFlash{Target: "ntp", Results: []FleetResult{{Camera: "one", Outcome: "confirmed"}}})
+
+	get := httptest.NewRequest(http.MethodGet, "/cameras/one/time", nil)
+	for _, ck := range w.Result().Cookies() {
+		get.AddCookie(ck)
+	}
+	if f := s.takeFlash(get); f == nil || f.Message != "one: ntp saved" {
+		t.Fatalf("banner = %+v, want the stashed one", f)
+	}
+	fleet := s.takeFleetFlash(get)
+	if fleet == nil || len(fleet.Results) != 1 {
+		t.Fatalf("rows = %+v, want the stashed row: taking the banner discarded them", fleet)
+	}
+	if n := s.flashLen(); n != 0 {
+		t.Fatalf("%d entries left, want the entry dropped once both halves were taken", n)
 	}
 }
