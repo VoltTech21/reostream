@@ -7,6 +7,26 @@ serves it as MPEG-TS over HTTP.
 camera --Baichuan(9000)--> reostream --HTTP MPEG-TS--> Frigate / mpv / VLC
 ```
 
+## Quickstart
+
+```
+docker run -d --name reostream \
+  -v reostream-data:/data \
+  -p 8560:8560 -p 8562:8562 \
+  ghcr.io/volttech21/reostream:latest
+
+docker logs reostream
+```
+
+The log prints a one-time token. Open `http://<this-host>:8562/claim`, paste it,
+take the password it offers you, and add a camera. That is the whole setup; there
+is no config file to write first and no password to choose in advance.
+
+Point your recorder at `http://<this-host>:8560/<camera>.ts`.
+
+If you want to read why any of this exists before running it, carry on below.
+Configuration has the same four steps in more detail.
+
 ## Why
 
 Reolink cameras have an RTSP server, and on some models it does not work properly. On a
@@ -122,10 +142,19 @@ config file at all:
    characters. Either way, submitting writes `/data/config.toml` inside the container and
    the page starts requiring that password from then on.
 4. Add a camera from the page, or by editing the config directly, either by hand on the
-   mounted data volume or through the page's own editor:
+   mounted data volume or through the page's own editor.
+
+   If you edit by hand, **add** the `[[camera]]` block to the file that is already
+   there; do not replace the file with this fragment. A config with no `[control]`
+   section is treated as not yet claimed, which is deliberate -- it is what stops a
+   half-written file leaving the page open to anyone -- but it means overwriting your
+   config with the block below would send you back to the claim screen with no way in
+   except editing the file again.
 
 ```toml
 listen = "0.0.0.0:8560"
+
+# ... your existing [control] section stays exactly as it is ...
 
 [[camera]]
 name = "driveway"

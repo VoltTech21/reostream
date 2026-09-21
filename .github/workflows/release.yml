@@ -1,0 +1,75 @@
+# Build and publish the container image.
+#
+# The README's quickstart tells a stranger to run
+# ghcr.io/volttech21/reostream:latest. That line is a promise, and this is
+# what keeps it: a tag push builds the image and pushes it, so the thing
+# people are told to run is built from a commit anyone can go and read.
+#
+# Runs the tests first. An image that ships from a red tree is worse than no
+# image, because the failure arrives on somebody else's cameras.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Must match the toolchain go.mod pins; the project builds with
+          # GOTOOLCHAIN set to exactly this everywhere else.
+          go-version: "1.26.0"
+      - name: vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l internal cmd)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt clean:"; echo "$unformatted"; exit 1
+          fi
+      - name: test
+        # internal/control alone is ~4 minutes under -race; the whole suite
+        # needs a generous timeout or it is killed mid-run and reads as a
+        # failure it is not.
+        run: go test ./... -race -timeout 20m
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # :latest only ever moves on a real tag, never on a branch push,
+          # so the quickstart cannot start handing people a work in progress.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The recorder hosts this is built for are amd64; arm64 is here
+          # because a Pi is the other obvious place to run it, and the
+          # binary is pure Go with no cgo, so it costs only build time.
+          platforms: linux/amd64,linux/arm64
