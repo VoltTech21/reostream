@@ -18,7 +18,55 @@ const passwordUnchanged = "\u0000unchanged"
 
 // applyCameraForm folds one camera's form submission into cfg, adding it if
 // its name is new and replacing it if not.
+// printableField rejects a submitted value that cannot survive the config
+// file, and says so in the operator's terms.
+//
+// Without this, a control character in a name or password reaches the TOML
+// encoder, comes back as an escape the parser then refuses, and the page
+// reports a TOML error naming a line number in a file the operator never
+// opened. The write is correctly refused either way -- saveConfig validates
+// through the real loader before anything is written -- so this changes the
+// message, not the safety.
+//
+// Deliberately narrow: only characters that genuinely cannot round-trip are
+// refused. A name with spaces, punctuation or non-ASCII letters is fine and
+// must stay fine, because camera names on this fleet are things like
+// "Sales Floor".
+func printableField(label, v string) error {
+	for _, r := range v {
+		if r == '\n' || r == '\r' {
+			return fmt.Errorf("%s cannot contain a line break", label)
+		}
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%s cannot contain control characters", label)
+		}
+		if r == 0xfffd {
+			return fmt.Errorf("%s is not valid text", label)
+		}
+	}
+	return nil
+}
+
 func applyCameraForm(cfg *config.Config, form url.Values) error {
+	fields := []struct{ label, value string }{
+		{"the camera name", form.Get("name")},
+		{"the address", form.Get("address")},
+		{"the username", form.Get("username")},
+	}
+	// The password is checked only when it is a real one. The sentinel the
+	// form submits for "leave it alone" deliberately begins with a NUL so
+	// it cannot collide with anything an operator could type, which is
+	// exactly what printableField refuses -- an existing test caught this
+	// the first time round.
+	if pw := form.Get("password"); pw != passwordUnchanged {
+		fields = append(fields, struct{ label, value string }{"the password", pw})
+	}
+	for _, f := range fields {
+		if err := printableField(f.label, f.value); err != nil {
+			return err
+		}
+	}
+
 	cam := config.Camera{
 		Name:     form.Get("name"),
 		Address:  form.Get("address"),
