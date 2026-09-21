@@ -16,6 +16,36 @@ available under the same terms.
 If that does not suit your product, a separate commercial licence is available
 which carries no such obligation. Contact riley@audiotronix.co.
 
+Third-party code
+----------------
+
+This repository redistributes code written by other people. All of it is under
+permissive licences that the AGPL can incorporate, and all of it keeps its own
+notices.
+
+Bundled in the page, and shipped in the container image:
+
+- mpegts.js, at internal/control/assets/mpegts.js, under the Apache License
+  2.0. The licence text is beside it at assets/LICENSE-mpegts.txt.
+- es6-promise, by Yehuda Katz, Tom Dale, Stefan Penner and contributors, under
+  the MIT licence. It is bundled inside mpegts.js rather than vendored
+  separately; its notice is preserved at assets/mpegts.js.LICENSE.txt.
+
+Linked into the binary, resolved through go.mod and pinned in go.sum:
+
+- github.com/BurntSushi/toml, MIT, for reading the config file.
+- github.com/bluenviron/gortsplib and mediacommon, MIT, for the RTSP output.
+- the github.com/pion/* packages, MIT, which gortsplib builds on.
+- github.com/google/uuid and golang.org/x/*, BSD.
+
+go.mod and go.sum are the authoritative list, and each module carries its own
+licence in the Go module cache. That list is deliberately not duplicated in
+full here: a copy of it would rot the first time a dependency moved, and a
+stale licence list is worse than none.
+
+Nothing here is copyleft, so building or distributing reostream imposes no
+obligation beyond keeping the notices above.
+
 Prior art
 ---------
 
