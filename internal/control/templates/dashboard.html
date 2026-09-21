@@ -36,8 +36,20 @@
 <span class="metric">{{printf "%.1f" .FPS}} fps</span>
 <span class="metric">{{.MbpsBitrate}} Mbps</span>
 <span class="metric">{{.Clients}} clients</span>
+{{/* The last error is shown beside a stream only while that stream is
+     actually unwell. StreamStatus.LastError is the last error EVER seen,
+     not a current one, so rendering it unconditionally put a red line next
+     to a camera delivering twenty frames a second -- which is what the
+     supervisor recovering from a dropped connection looks like once it has
+     recovered. A healthy stream carries it on its restart count instead,
+     where the number is already saying that something happened and the
+     hover says what. */}}
+{{if .LastError}}
+<span class="metric" title="last error: {{.LastError}}">{{.Restarts}} restarts &#9432;</span>
+{{else}}
 <span class="metric">{{.Restarts}} restarts</span>
-{{if .LastError}}<span class="lasterror">{{.LastError}}</span>{{end}}
+{{end}}
+{{if and .LastError (ne .State "streaming")}}<span class="lasterror">{{.LastError}}</span>{{end}}
 </div>
 {{if .URL}}
 <div class="streamurl-line">
