@@ -40,7 +40,15 @@ import (
 //go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
 var templateFS embed.FS
 
-//go:embed assets
+// Explicit, for the same reason the template list above is, plus one of
+// its own: everything under assets/ is served WITHOUT authentication, so a
+// file that lands in this directory is world readable the moment it exists.
+// A wildcard makes that the default for anything anyone ever drops here; a
+// list makes publishing a file a decision somebody typed. Demonstrated
+// before this was changed: a creds.toml placed in this directory was served
+// to an unauthenticated request with every test still green.
+//
+//go:embed assets/style.css assets/mpegts.js assets/mpegts.js.LICENSE.txt assets/LICENSE-mpegts.txt assets/README.md
 var assetFS embed.FS
 
 // assetSub drops the "assets" prefix so the URL and the file path match.

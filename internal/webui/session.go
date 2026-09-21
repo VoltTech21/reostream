@@ -6,6 +6,7 @@ package webui
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
@@ -101,8 +102,21 @@ type Auth struct {
 
 // Check compares a submitted password in constant time, so a wrong one
 // cannot be found a character at a time by measuring the reply.
+//
+// Hashed first, rather than compared directly. subtle.ConstantTimeCompare
+// returns 0 immediately when the two lengths differ, so comparing the raw
+// strings is constant time in their CONTENT and not in their LENGTH: a
+// guesser could learn how long the real password is by timing replies, and
+// on a page with no rate limit that is a free head start. Two SHA-256 sums
+// are always the same size, so the comparison below cannot short circuit on
+// anything.
+//
+// The claim token compare in internal/control was built to avoid exactly
+// this and this one was not; they now agree.
 func (a Auth) Check(password string) bool {
-	return subtle.ConstantTimeCompare([]byte(password), []byte(a.Password)) == 1
+	got := sha256.Sum256([]byte(password))
+	want := sha256.Sum256([]byte(a.Password))
+	return subtle.ConstantTimeCompare(got[:], want[:]) == 1
 }
 
 func (a Auth) Wrap(h http.Handler) http.Handler {
