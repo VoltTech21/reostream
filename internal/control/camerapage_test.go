@@ -237,7 +237,11 @@ func TestCameraPageShowsAllSixCombinedProperties(t *testing.T) {
 	// shape: an XPath this camera does not actually carry would leave the
 	// field unavailable rather than seeded, exactly the failure this test
 	// exists to catch.
-	osdXML := testXMLHeader + `<body><OsdChannelName><channelId>0</channelId><name>lounge</name><enable>1</enable></OsdChannelName><OsdDatetime><channelId>0</channelId><enable>1</enable></OsdDatetime></body>`
+	// topLeftX/topLeftY are in the real capture on every camera this
+	// project has read, and the two overlay position controls are seeded
+	// from them; a fixture without them would render those controls
+	// unavailable for a reason no real camera has.
+	osdXML := testXMLHeader + `<body><OsdChannelName><channelId>0</channelId><name>lounge</name><enable>1</enable><topLeftX>65536</topLeftX><topLeftY>65536</topLeftY></OsdChannelName><OsdDatetime><channelId>0</channelId><enable>1</enable><topLeftX>1</topLeftX><topLeftY>1</topLeftY></OsdDatetime></body>`
 	ispXML := testXMLHeader + `<body><VideoInput><channelId>0</channelId><bright>120</bright><contrast>110</contrast><saturation>100</saturation></VideoInput><InputAdvanceCfg><channelId>0</channelId><DayNight><mode>auto</mode><IrcutMode>ir</IrcutMode><Threshold>medium</Threshold></DayNight></InputAdvanceCfg></body>`
 	ledXML := testXMLHeader + `<body><LedState><channelId>0</channelId><state>auto</state></LedState></body>`
 	abilityXML := testXMLHeader + `<body><AbilityInfo version="1.1"><userName>admin</userName></AbilityInfo></body>`

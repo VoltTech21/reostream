@@ -167,7 +167,12 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	// test used to fabricate. See groups()'s own comment on why that
 	// mattered: the earlier XPaths matched nothing this camera actually
 	// sends.
-	osdXML := testXMLHeader + `<body><OsdChannelName><channelId>0</channelId><name>lounge</name><enable>1</enable></OsdChannelName><OsdDatetime><channelId>0</channelId><enable>1</enable></OsdDatetime></body>`
+	// topLeftX/topLeftY carry the same pairs the real capture holds: the
+	// camera name bottom right, the timestamp top left. They are part of
+	// this document on every camera this project has read, so a fixture
+	// without them would leave the two position controls unavailable for a
+	// reason no real camera has.
+	osdXML := testXMLHeader + `<body><OsdChannelName><channelId>0</channelId><name>lounge</name><enable>1</enable><topLeftX>65536</topLeftX><topLeftY>65536</topLeftY></OsdChannelName><OsdDatetime><channelId>0</channelId><enable>1</enable><topLeftX>1</topLeftX><topLeftY>1</topLeftY></OsdDatetime></body>`
 	ispXML := testXMLHeader + `<body><VideoInput><channelId>0</channelId><bright>120</bright><contrast>110</contrast><saturation>100</saturation></VideoInput><InputAdvanceCfg><channelId>0</channelId><DayNight><mode>auto</mode><IrcutMode>ir</IrcutMode><Threshold>medium</Threshold></DayNight></InputAdvanceCfg></body>`
 	ledXML := testXMLHeader + `<body><LedState><channelId>0</channelId><state>auto</state></LedState></body>`
 
@@ -424,9 +429,16 @@ func TestCuratedXPathsResolveAgainstRealLiveFixtures(t *testing.T) {
 		"led get": readTestdata(t, "testdata/livefixtures/led.xml"),
 	}
 	want := map[string]string{
-		"OsdChannelName/name":                "Rear Bay",
-		"OsdChannelName/enable":              "0",
-		"OsdDatetime/enable":                 "1",
+		"OsdChannelName/name":   "Rear Bay",
+		"OsdChannelName/enable": "0",
+		"OsdDatetime/enable":    "1",
+		// The overlay corners, from the same real capture: this camera's
+		// timestamp is top left (1,1) and its name bottom right
+		// (65536,65536). See settings.go's corner table.
+		"OsdChannelName/topLeftX":            osdFarEdge,
+		"OsdChannelName/topLeftY":            osdFarEdge,
+		"OsdDatetime/topLeftX":               osdNearEdge,
+		"OsdDatetime/topLeftY":               osdNearEdge,
 		"VideoInput/bright":                  "128",
 		"VideoInput/contrast":                "128",
 		"VideoInput/saturation":              "128",
@@ -449,13 +461,19 @@ func TestCuratedXPathsResolveAgainstRealLiveFixtures(t *testing.T) {
 			if doc == nil {
 				t.Fatalf("field %q's group %q names no block this test has a fixture for (%v)", f.XPath, g.Title, g.Blocks)
 			}
-			got, ok := fieldValue(doc, f.XPath)
-			if !ok {
-				t.Errorf("%s does not resolve against the real fixture for group %q", f.XPath, g.Title)
-				continue
-			}
-			if w, ok := want[f.XPath]; ok && got != w {
-				t.Errorf("%s = %q, want %q from the live fixture", f.XPath, got, w)
+			// Every element the field edits, not only its primary one: a
+			// position field that resolved its topLeftX and invented its
+			// topLeftY would be exactly the failure this test exists to
+			// catch, just one path further along.
+			for _, path := range f.Paths() {
+				got, ok := fieldValue(doc, path)
+				if !ok {
+					t.Errorf("%s does not resolve against the real fixture for group %q", path, g.Title)
+					continue
+				}
+				if w, ok := want[path]; ok && got != w {
+					t.Errorf("%s = %q, want %q from the live fixture", path, got, w)
+				}
 			}
 		}
 	}

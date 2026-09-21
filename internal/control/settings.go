@@ -34,6 +34,38 @@ type Field struct {
 	Label string
 	XPath string
 	Kind  string
+
+	// YPath is the second element a control that edits a PAIR of elements
+	// changes alongside XPath. It is empty for every ordinary field, which
+	// edits exactly one element.
+	//
+	// It exists for Kind "position": an overlay's corner is not one value
+	// on these cameras, it is topLeftX and topLeftY, and either one on its
+	// own is a corner nobody chose. XPath addresses the X, YPath the Y,
+	// and serveApplySetting applies both inside a single read-modify-write
+	// -- see parseEdits.
+	YPath string
+}
+
+// Paths lists every element this field edits, primary first: one path for
+// an ordinary field, two for a position. A "warning" field, which carries
+// no XPath at all, edits nothing and lists nothing.
+func (f Field) Paths() []string {
+	if f.XPath == "" {
+		return nil
+	}
+	if f.YPath == "" {
+		return []string{f.XPath}
+	}
+	return []string{f.XPath, f.YPath}
+}
+
+// FormXPath is what the settings form posts as this field's xpath: the one
+// element it edits, or the comma-separated list of elements it changes
+// together. A single-element field posts exactly the string it always did,
+// so nothing about an existing form's wire format changes.
+func (f Field) FormXPath() string {
+	return strings.Join(f.Paths(), ",")
 }
 
 // Group is one curated section of the settings page, every field editing
@@ -73,6 +105,66 @@ type Group struct {
 // page shown before any write happens, unlike write.go's own wording, which
 // describes a write that already went out.
 const unsafeToRewriteWarning = "unsafe to rewrite: writing this block, even with only one field changed, makes the camera reconfigure its pipeline and interrupts the stream."
+
+// The overlay corner table, and how it was established.
+//
+// Each overlay in the "osd get" block (message 44) carries topLeftX and
+// topLeftY next to its enable flag:
+//
+//	<OsdDatetime>    <enable>1</enable> <topLeftX>1</topLeftX>     <topLeftY>1</topLeftY>     ...
+//	<OsdChannelName> <enable>0</enable> <topLeftX>65536</topLeftX> <topLeftY>65536</topLeftY> ...
+//
+// These are NOT pixel coordinates, despite the names. Read across four
+// live cameras on one fleet, the two fields only ever held 1 or 65536. One
+// camera had its timestamp at topLeftX=65536, topLeftY=1 while the other
+// three had 1,1; pulling a frame off each stream and looking at it settled
+// what that meant: that camera's clock is drawn in the TOP RIGHT and the
+// others' in the top left. Every camera name on that fleet sat at
+// 65536,65536, and every camera name was drawn bottom right. So the pair
+// is a corner encoding, 1 meaning "against this edge" and 65536 "against
+// the far edge":
+//
+//	corner        topLeftX  topLeftY
+//	top left      1         1
+//	top right     65536     1
+//	bottom left   1         65536
+//	bottom right  65536     65536
+//
+// This came from hardware, not from documentation: no Reolink document
+// this project has seen says any of it, and it is written down here so
+// nobody has to pull frames off four cameras a second time to recover it.
+//
+// The honest limit: only those two values were ever OBSERVED. Whether a
+// camera would accept, say, 32768 and centre an overlay is simply not
+// known, and this control does not pretend to know by offering it. An
+// operator who wants to find out can still write topLeftX and topLeftY to
+// anything from the advanced page, where every field of the raw block
+// stays editable; and a camera already reporting a pair this table has no
+// name for keeps it, shown as itself, rather than being snapped to the
+// nearest corner (see cameraPage.Position).
+const (
+	osdNearEdge = "1"
+	osdFarEdge  = "65536"
+)
+
+// osdCorner is one row of the table above: the wording a person picks and
+// the pair of values picking it writes.
+type osdCorner struct {
+	Label string
+	X, Y  string
+}
+
+// osdCorners is that table, in reading order. A function rather than a
+// package variable for the same reason groups() is one: nothing can mutate
+// a caller's copy.
+func osdCorners() []osdCorner {
+	return []osdCorner{
+		{"top left", osdNearEdge, osdNearEdge},
+		{"top right", osdFarEdge, osdNearEdge},
+		{"bottom left", osdNearEdge, osdFarEdge},
+		{"bottom right", osdFarEdge, osdFarEdge},
+	}
+}
 
 // irLivesInImageWarning replaces an earlier, wrong claim that no writable
 // infrared message exists at all. It does: InputAdvanceCfg/DayNight/IrcutMode
@@ -124,7 +216,11 @@ func groups() []Group {
 			Fields: []Field{
 				{Label: "Camera name", XPath: "OsdChannelName/name", Kind: "text"},
 				{Label: "Show camera name", XPath: "OsdChannelName/enable", Kind: "toggle"},
+				// Two elements, one control. See the corner table above for
+				// what the values mean and how that was established.
+				{Label: "Camera name position", XPath: "OsdChannelName/topLeftX", YPath: "OsdChannelName/topLeftY", Kind: "position"},
 				{Label: "Show timestamp", XPath: "OsdDatetime/enable", Kind: "toggle"},
+				{Label: "Timestamp position", XPath: "OsdDatetime/topLeftX", YPath: "OsdDatetime/topLeftY", Kind: "position"},
 			},
 		},
 		{
@@ -380,18 +476,69 @@ func curatedField(block, xpath string) (Field, bool) {
 			continue
 		}
 		for _, f := range g.Fields {
-			if f.XPath == xpath {
-				return f, true
+			// Every path the field edits, not only its primary one: a
+			// position field's topLeftY is exactly as curated as its
+			// topLeftX, and a write naming it must pass this check rather
+			// than be rejected as something the page never declared.
+			for _, p := range f.Paths() {
+				if p == xpath {
+					return f, true
+				}
 			}
 		}
 	}
 	return Field{}, false
 }
 
+// edit is one element a write changes: where it is and what it becomes.
+type edit struct {
+	XPath string
+	Value string
+}
+
+// parseEdits turns the settings form's xpath and value into the list of
+// element changes one write must carry.
+//
+// One control, one form, one write -- but some controls are more than one
+// element. An overlay's position is topLeftX AND topLeftY, and a browser
+// select can only post a single value, so the form names its elements in
+// xpath as a comma-separated list (Field.FormXPath) and posts the values in
+// the same order. A form naming one element posts exactly the two plain
+// strings it always did and comes back out of here as exactly one edit.
+//
+// The xpath list governs the split, never the value. A single-element write
+// is not split at all, so a camera name containing a comma still arrives
+// whole; a two-element write splits the value into exactly two parts. A
+// value list that does not have one part per path is refused rather than
+// padded: half a position is a corner nobody chose.
+func parseEdits(xpathList, valueList string) ([]edit, error) {
+	paths := strings.Split(xpathList, ",")
+	if len(paths) == 1 {
+		return []edit{{XPath: paths[0], Value: valueList}}, nil
+	}
+	values := strings.SplitN(valueList, ",", len(paths))
+	if len(values) != len(paths) {
+		return nil, fmt.Errorf("this control changes %d fields together but %d values were posted", len(paths), len(values))
+	}
+	edits := make([]edit, len(paths))
+	for i := range paths {
+		edits[i] = edit{XPath: paths[i], Value: values[i]}
+	}
+	return edits, nil
+}
+
 // serveApplySetting is the settings form's POST: read the field's block
-// fresh, replace only the one field being changed with setField, and write
+// fresh, replace the field or fields being changed with setField, and write
 // the result through writeBlock, the same path serveWrite already uses for
 // the raw view.
+//
+// One read, every change, one write. A control that edits two elements at
+// once (an overlay's corner) must not become two read-modify-write round
+// trips: a camera that accepted the first and refused the second would
+// leave the overlay in a corner nobody picked. So every edit is applied to
+// the one document this handler read, and if any of them cannot be applied
+// nothing is sent at all -- setField is pure, so the whole document is
+// either finished or abandoned before a single byte goes to the camera.
 //
 // This is not a second write path. Nothing here calls baichuan.WriteConfig
 // itself; writeBlock does, which is what makes a curated edit inherit
@@ -416,13 +563,27 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	block := r.FormValue("block")
-	xpath := r.FormValue("xpath")
-	value := r.FormValue("value")
 
-	field, ok := curatedField(block, xpath)
-	if !ok {
-		http.Error(w, fmt.Sprintf("%s %s is not a curated field", block, xpath), http.StatusBadRequest)
+	edits, err := parseEdits(r.FormValue("xpath"), r.FormValue("value"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	// Every posted path is checked against groups() before anything is
+	// read, for the same reason one always was: nothing about an HTTP
+	// request stops it naming any path at all, and a write from this form
+	// may only ever land on a field this page itself curated. A list makes
+	// that check a loop, not a weaker rule.
+	var field Field
+	for i, e := range edits {
+		f, ok := curatedField(block, e.XPath)
+		if !ok {
+			http.Error(w, fmt.Sprintf("%s %s is not a curated field", block, e.XPath), http.StatusBadRequest)
+			return
+		}
+		if i == 0 {
+			field = f
+		}
 	}
 	pair, ok := pairForName(block)
 	if !ok {
@@ -466,18 +627,28 @@ func (s *Server) serveApplySetting(w http.ResponseWriter, r *http.Request) {
 	back := returnTo(r, "/cameras/"+url.PathEscape(cam.Name))
 	subject := fmt.Sprintf("%s: %s", cam.Name, lowerFirst(field.Label))
 
-	body, err := setField(doc, xpath, value)
-	if err != nil {
-		// The inferred image XPaths in particular may not match this
-		// model's actual schema. That must read as a refusal, the same
-		// vocabulary a rejected write already uses, never as a silent
-		// success: nothing was sent to the camera at all.
-		s.setFlash(w, r, flashFor(subject, WriteResult{
-			Outcome: "refused",
-			Detail:  fmt.Sprintf("could not apply %s to the current document: %v", xpath, err),
-		}))
-		http.Redirect(w, r, back, http.StatusSeeOther)
-		return
+	// Every edit onto the one document just read, in order. Each setField
+	// returns a fresh slice, so a later one that fails leaves the earlier
+	// ones nowhere but in a local nobody sends.
+	body := doc
+	for _, e := range edits {
+		next, setErr := setField(body, e.XPath, e.Value)
+		if setErr != nil {
+			// The inferred image XPaths in particular may not match this
+			// model's actual schema. That must read as a refusal, the same
+			// vocabulary a rejected write already uses, never as a silent
+			// success: nothing was sent to the camera at all. For a
+			// multi-element control this is also what keeps it whole --
+			// one unappliable half refuses the entire change rather than
+			// writing the other half on its own.
+			s.setFlash(w, r, flashFor(subject, WriteResult{
+				Outcome: "refused",
+				Detail:  fmt.Sprintf("could not apply %s to the current document: %v", e.XPath, setErr),
+			}))
+			http.Redirect(w, r, back, http.StatusSeeOther)
+			return
+		}
+		body = next
 	}
 
 	result, err := s.writeBlock(ctx, cam, pair.Set, body, true)

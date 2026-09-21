@@ -107,12 +107,38 @@
 */}}
 <form method="post" action="/cameras/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
 <input type="hidden" name="block" value="{{index $.ResolvedBlock $group.Title}}">
-<input type="hidden" name="xpath" value="{{.XPath}}">
+{{/*
+  FormXPath, not XPath: a control that changes two elements together (an
+  overlay's corner) names both here, comma separated, and the handler
+  applies them inside one read-modify-write. A one element field posts
+  exactly the string it always did.
+*/}}
+<input type="hidden" name="xpath" value="{{.FormXPath}}">
 {{if eq .Kind "toggle"}}
 <select name="value">
 <option value="0" {{if eq $current "0"}}selected{{end}}>off</option>
 <option value="1" {{if eq $current "1"}}selected{{end}}>on</option>
 </select>
+{{else if eq .Kind "position"}}
+{{/*
+  Where an overlay sits. One select, but two elements on the camera
+  (topLeftX and topLeftY): the option values carry both, in the same order
+  the hidden xpath above names them, so one submission is one write. See
+  settings.go's corner table for what the numbers mean and how that was
+  worked out.
+
+  A camera reporting a pair the table has no name for keeps it, selected and
+  spelled out, rather than being snapped to a corner nobody chose.
+*/}}
+{{$pos := $.Position .}}
+<select name="value">
+{{if $pos.Unknown}}<option value="{{$pos.Unknown}}" selected>{{$pos.Unknown}} (not a known corner)</option>{{end}}
+{{range $pos.Options}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+{{if $pos.Unknown}}<p class="hint">this camera reports {{$pos.Unknown}}, which is not one of the four
+positions this project has ever seen a camera use. only 1 and 65536 were ever observed, so whether
+anything in between works is unknown: picking a corner replaces this pair, and topLeftX and topLeftY
+stay editable as themselves under <a href="/cameras/{{$.Camera.Name}}/advanced">every block, as XML</a>.</p>{{end}}
 {{else if eq .Kind "number"}}
 {{/*
   Brightness, contrast and saturation are far easier to judge by dragging

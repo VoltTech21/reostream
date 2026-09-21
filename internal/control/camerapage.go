@@ -139,6 +139,56 @@ func (p cameraPage) SliderMax(current string) int {
 	return sliderCeil
 }
 
+// positionOption is one corner as the select draws it: the wording a
+// person reads, the "x,y" pair choosing it posts (in Field.Paths order, so
+// it lines up with the xpath list the same form carries), and whether the
+// camera is holding it right now.
+type positionOption struct {
+	Label    string
+	Value    string
+	Selected bool
+}
+
+// positionView is one overlay-position control, ready to render.
+//
+// Unknown is empty in the ordinary case. It is set when the camera reports
+// a topLeftX/topLeftY pair the corner table has no name for, and then it
+// carries that pair verbatim, as the currently selected option. The point
+// is that an unfamiliar position is SHOWN, never rounded: snapping it to
+// the nearest corner would silently throw away a position somebody chose,
+// possibly by a route this project knows nothing about, and would do it at
+// the moment they opened the page to look. The four corners are still
+// offered beneath it, so choosing one remains one click.
+type positionView struct {
+	Options []positionOption
+	Unknown string
+}
+
+// Position is camera.html's view of one Kind "position" field: the four
+// corners, with whichever one the camera currently holds selected, or the
+// camera's own raw pair when it holds something this project has never
+// seen.
+func (p cameraPage) Position(f Field) positionView {
+	x := p.Values[f.XPath]
+	y := p.Values[f.YPath]
+
+	view := positionView{}
+	known := false
+	for _, c := range osdCorners() {
+		selected := c.X == x && c.Y == y
+		known = known || selected
+		view.Options = append(view.Options, positionOption{
+			Label:    c.Label,
+			Value:    c.X + "," + c.Y,
+			Selected: selected,
+		})
+	}
+	if !known {
+		view.Unknown = x + "," + y
+	}
+	return view
+}
+
 // cameraGroupFor finds the dashboard's cameraGroup for one camera by name,
 // so a single-camera page can show the same stream state and video tile
 // the dashboard already computes, without a second Rows/Tile join.
@@ -250,10 +300,21 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 				if f.Kind == "warning" {
 					continue
 				}
-				if v, ok := fieldValue(doc, f.XPath); ok {
-					page.Values[f.XPath] = v
-				} else {
-					page.Unavailable[f.XPath] = fmt.Sprintf("%s does not appear in %s on this camera", f.XPath, pair.Name)
+				// Every element the field edits, not just its primary one:
+				// a position control is only seedable, and only writable,
+				// when BOTH of its elements resolved. A missing half is
+				// recorded against the field's primary path as well, which
+				// is the key the template asks about, so the control is
+				// replaced by the explanation rather than rendered half
+				// blank.
+				for _, path := range f.Paths() {
+					if v, ok := fieldValue(doc, path); ok {
+						page.Values[path] = v
+						continue
+					}
+					reason := fmt.Sprintf("%s does not appear in %s on this camera", path, pair.Name)
+					page.Unavailable[path] = reason
+					page.Unavailable[f.XPath] = reason
 				}
 			}
 		}
