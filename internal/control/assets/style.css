@@ -257,8 +257,15 @@ legend { color: var(--muted); padding: 0 .4rem; }
 
 .confidence-proven { color: var(--proven); }
 .confidence-unverified { color: var(--partial); }
-.confidence-known-inert { color: var(--refused); }
-.confidence-unsafe-to-rewrite { color: var(--refused); }
+/* These two used to be the same red, which made them the same word to
+   anyone reading quickly -- on a page whose buttons write to a camera.
+   They mean very different things: "known inert" is a write that is safe to
+   send and simply does nothing, "unsafe to rewrite" is a write that
+   interrupts the stream. Inert is muted, because it is a shrug; unsafe
+   keeps the red and is the only one of the four that is also bold, so it
+   reads as a warning without relying on colour alone. */
+.confidence-known-inert { color: var(--muted); }
+.confidence-unsafe-to-rewrite { color: var(--refused); font-weight: 600; }
 
 /* Status cards (the dashboard). One card per CAMERA, whatever number of
    streams it pulls: the picture on the left, and everything that camera is

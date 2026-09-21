@@ -314,6 +314,57 @@ func (s *Server) wrap(h http.Handler) http.Handler {
 // configured camera with its stream state and a link into it; /cameras/{name}
 // is that one camera, its stream state and video, then its curated
 // settings.
+// routePatterns is every pattern Handler registers, in registration
+// order, and publicRoutes is the subset deliberately left outside the
+// auth wrapper. They exist so a test can ask what the router serves
+// rather than compare it against a list somebody has to remember to
+// update: a test written to catch a forgotten auth wrapper cannot do
+// that while it is itself hand maintained, which is how GET /stream/
+// came to be missing from it. See routes_test.go.
+//
+// Kept beside Handler deliberately. If you add a route there and not
+// here, the test below fails and names it.
+var routePatterns = []string{
+	"GET /claim",
+	"POST /claim",
+	"GET /login",
+	"POST /login",
+	"GET /{$}",
+	"GET /logs",
+	"GET /logs/history",
+	"GET /logs/stream",
+	"GET /config",
+	"POST /config",
+	"GET /cameras",
+	"POST /cameras/add",
+	"GET /cameras/{name}",
+	"POST /cameras/{name}/settings",
+	"GET /cameras/{name}/osd",
+	"POST /cameras/{name}/floodlight",
+	"GET /cameras/{name}/time",
+	"POST /cameras/{name}/time",
+	"POST /cameras/{name}/timezone",
+	"GET /cameras/{name}/accounts",
+	"GET /cameras/{name}/advanced",
+	"POST /cameras/{name}/write/{id}",
+	"GET /setup",
+	"GET /setup/urls",
+	"POST /setup/probe",
+	"GET /assets/",
+	"GET /stream/",
+}
+
+// publicRoutes are the four that must answer without a session: the two
+// claim routes, because while an install is unclaimed there is no
+// password for the wrapper to check, and the two login routes, because
+// that is where the password is entered. Anything else here is a hole.
+var publicRoutes = map[string]bool{
+	"GET /claim":  true,
+	"POST /claim": true,
+	"GET /login":  true,
+	"POST /login": true,
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// The claim routes sit outside the auth wrapper on purpose. While the
