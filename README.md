@@ -69,9 +69,9 @@ serving path. Every bug worth avoiding here lived in one of those.
 
 ## Streams
 
-Reolink cameras carry three streams, not the two the app shows. `extern` is the
-undocumented middle option, typically 896x512, which is useful when the main stream is 4K
-and the substream is too small to be worth looking at.
+Reolink cameras carry three streams. `extern` is the middle one, typically 896x512,
+which is useful when the main stream is 4K and the substream is too small to be worth
+looking at. Most third-party clients only offer main and sub.
 
 | Endpoint | Stream |
 |---|---|

@@ -96,7 +96,7 @@ func previewXML(channel, handle int, streamType string) ([]byte, error) {
 }
 
 // StreamKind names the three streams a camera serves. externStream is the
-// "balanced" stream, which the Reolink apps do not expose.
+// "balanced" middle stream, which most third-party clients leave out.
 const (
 	StreamMain   = "mainStream"
 	StreamSub    = "subStream"

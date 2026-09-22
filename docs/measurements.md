@@ -57,13 +57,13 @@ the same fleet showed 1 to 3 per 25 seconds.
 
 ## Three streams per camera
 
-Cameras carry three streams, not the two the Reolink app exposes. Measured on one camera:
+Cameras carry three streams. Measured on one camera:
 
 | stream | codec | resolution |
 |---|---|---|
 | sub | H.264 | 640x360 |
 | main | HEVC | 3840x2160 |
-| extern (undocumented) | H.264 | 896x512 |
+| extern | H.264 | 896x512 |
 
 Frame counts from the Go client, 20 second captures: sub delivered 199 frames with 0
 decode errors, main delivered 497 frames with 1.
