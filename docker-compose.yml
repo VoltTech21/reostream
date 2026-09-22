@@ -9,8 +9,11 @@
 # is a worse health check than none.
 services:
   reostream:
-    image: reostream:latest
-    build: .
+    image: ghcr.io/volttech21/reostream:latest
+    # Uncomment to build from this checkout instead of pulling the
+    # published image. Without it, `docker compose up` pulls, which is
+    # what someone who only downloaded this file wants.
+    # build: .
     restart: unless-stopped
     ports:
       - "8560:8560"
