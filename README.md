@@ -218,8 +218,8 @@ Not yet done, and worth being direct about:
   place, since they have no RTSP server at all, and they behave differently from wired
   cameras: they sleep, wake on motion, and send battery-state messages the protocol
   client has never seen.
-- No Docker image is published yet, though a Dockerfile now exists; see Deployment
-  below.
+- Container images are built and pushed only when a release is tagged, so a commit on
+  main can be ahead of `:latest`. See Deployment below for building your own.
 
 See `docs/design/` for the design and `docs/protocol.md` for what the wire actually
 does, which differs from the published documentation in several places.
