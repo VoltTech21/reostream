@@ -52,7 +52,7 @@
 
 <section>
 <h2>Timezone</h2>
-<p class="hint">Written over CGI SetTime, not Baichuan: no set-time message exists in the recovered table, so this is the only path there is. Raw CGI value; the sign convention has not been confirmed against real hardware, so send back what a camera's own page reports rather than converting it.</p>
+<p class="hint">Written over CGI SetTime, not Baichuan: no set-time message exists in the recovered table, so this is the only path there is. Raw CGI value. The sign convention IS confirmed: a camera reporting 21600 was showing 09:15:29 in its overlay while the host clock read 14:15:34 UTC, so the field counts seconds west of UTC and 21600 is UTC&minus;06:00.</p>
 {{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
 <p>The camera reports <strong>{{.TimeZoneLabel}}</strong>, which it holds as
 <code>{{.TimeZone}}</code> &mdash; seconds <em>west</em> of UTC, so the number and the

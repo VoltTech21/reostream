@@ -22,21 +22,27 @@
 <div class="card">
 <h2>don't know the address?</h2>
 <p>reostream can try every address on your network and see which ones answer on port 9000, the port these cameras speak on. it opens one connection to every address in the range, so it is something you start, never something that happens on its own. it takes about half a minute.</p>
-{{if .Ranges}}
+{{/* Editable, not fixed, and never a dead end. The detected ranges come
+     from this daemon's own interfaces, and in the shipped container those
+     are docker's bridge network -- 172.17.0.0/24 rather than the network
+     the cameras are on. A container cannot know the operator's LAN, so the
+     detected values are offered as suggestions and the operator has the
+     last word. The old version rendered a fixed range with no way to change
+     it, which on the deployment this project actually ships was a sweep of
+     the wrong network with no recourse. */}}
 <form id="discover-form">
-{{if gt (len .Ranges) 1}}
-<label>which network <select name="range">
-{{range .Ranges}}<option value="{{.}}">{{.}}</option>{{end}}
-</select></label>
-{{else}}{{range .Ranges}}
-<input type="hidden" name="range" value="{{.}}">
-<p>range: <code>{{.}}</code></p>
-{{end}}{{end}}
+<label>network to search
+<input name="range" list="rangelist" value="{{if .Ranges}}{{index .Ranges 0}}{{end}}"
+  placeholder="192.168.1.0/24" required>
+</label>
+<datalist id="rangelist">
+{{range .Ranges}}<option value="{{.}}">{{end}}
+</datalist>
+<p class="hint">a private range, no larger than a /24. if reostream is running in a
+container, what it detects is the container's own network rather than yours &mdash; the
+address of a camera you already have is the quickest way to know what to type here.</p>
 <button type="submit">find cameras on this network</button>
 </form>
-{{else}}
-<p class="state-down">this machine has no private network address, so there is nothing to sweep.</p>
-{{end}}
 <div id="discover-result"></div>
 </div>
 
