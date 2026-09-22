@@ -147,7 +147,7 @@ about the daemon's own failure modes rather than about the wire format.
 
 ## The balanced stream, measured 2026-09-08
 
-Reolink cameras carry a third stream the app does not expose. The firmware calls it
+Reolink cameras carry a third stream most third-party clients leave out. The firmware calls it
 `externStream` and has `EXTERNSTREAM_720P_SET`, implying its resolution is settable.
 Neolink never implemented it, so on this fleet it had never been reachable.
 

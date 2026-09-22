@@ -91,7 +91,7 @@ call needs the screen number to say which sub view to move. Unresolved.
 ## The balanced stream
 
 Alongside `mainStream` and `subStream` the cameras answer `externStream`, the "balanced"
-stream the Reolink apps do not expose: roughly 896x512 H.264 at about 1 Mbps, with audio.
+stream most third-party clients leave out: roughly 896x512 H.264 at about 1 Mbps, with audio.
 It is a useful middle option on the six single lens cameras.
 
 The fisheye does not serve it. A request returns an empty video message and then the
