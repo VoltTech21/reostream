@@ -49,7 +49,7 @@ off them, and a fisheye model here loses about 21% of its frames over RTSP.
 
 Neolink solved this first and deserves the credit for making the protocol legible. It has
 not had a commit since January 2025 and has 124 open issues, including a memory leak
-reported since 2022. reostream is a fresh implementation rather than a fork.
+reported since 2022. reostream is a fresh implementation, not a fork.
 
 ## What it does
 
@@ -118,7 +118,7 @@ consumer's own timeout fires. Running both keeps both properties.
 
 `extern` is `externStream` on the wire, 896x512 H.264 at roughly 1 Mbps. It is not
 documented by Reolink and Neolink never implemented it. It sits between the 4K main
-stream and the sub thumbnail, and being H.264 rather than HEVC it avoids the browser
+stream and the sub thumbnail, and being H.264 not HEVC it avoids the browser
 codec problem that main runs into. See docs/measurements.md for the four-camera
 measurement.
 
@@ -135,8 +135,8 @@ config file at all:
    memory only: restarting the container before it is claimed prints a new one and the
    old one stops working.
 3. Open that URL and enter the token. The password field arrives already filled in with
-   a password generated for that render -- 16 characters of `crypto/rand` from a
-   31-character alphabet, 79.3 bits -- and accepting it as it stands is the recommended
+   a password generated for that render, 16 characters of `crypto/rand` from a
+   31-character alphabet, 79.3 bits. Accepting it as it stands is the recommended
    answer: it is the only thing that makes the password strong by construction, and
    nothing on this page is rate limited. A password you type instead must be at least 16
    characters. Either way, submitting writes `/data/config.toml` inside the container and
@@ -146,8 +146,8 @@ config file at all:
 
    If you edit by hand, **add** the `[[camera]]` block to the file that is already
    there; do not replace the file with this fragment. A config with no `[control]`
-   section is treated as not yet claimed, which is deliberate -- it is what stops a
-   half-written file leaving the page open to anyone -- but it means overwriting your
+   section is treated as not yet claimed. That is deliberate, and it is what stops a
+   half-written file leaving the page open to anyone, but it means overwriting your
    config with the block below would send you back to the claim screen with no way in
    except editing the file again.
 
@@ -165,7 +165,7 @@ streams = ["main", "sub"]
 ```
 
 A `password` beginning with `$` is read from that environment variable. Unknown keys are
-an error at startup rather than a warning, so a typo fails at boot instead of serving 404s
+an error at startup, not a warning, so a typo fails at boot instead of serving 404s
 at three in the morning.
 
 ## Using it with Frigate
@@ -189,12 +189,12 @@ WebRTC and browsers cannot play HEVC over WebRTC. Detect and record do not go th
 ## Status
 
 The daemon runs from a TOML config file, one `[[camera]]` block per camera, with
-`$ENVVAR` password references and unknown keys rejected at startup rather than ignored.
+`$ENVVAR` password references and unknown keys rejected at startup instead of ignored.
 Each stream is one supervised goroutine: backoff starts at 1s, doubles up to a 15s
 ceiling, and resets once a connection has stayed up for more than a minute, so a flaky
 camera does not carry a long backoff into an unrelated later failure. A restart never
 overlaps the connection it is replacing. Audio is carried on its own PID with the same
-clock as video. A slow client is disconnected rather than buffered; verified against a
+clock as video. A slow client is disconnected, never buffered; verified against a
 live camera on a 280 kbps stream, dropped at about 65 seconds with memory flat
 throughout.
 
@@ -205,7 +205,7 @@ errors. See docs/measurements.md for the full numbers.
 
 A 7 hour soak over all 23 streams held 23/23 connected with zero restarts, zero dropped
 clients and zero dropped audio frames, and resident memory oscillated inside a 29-59 MB
-band rather than climbing. That band matters more than its width: an unbounded buffer is
+band instead of climbing. The band matters more than its width: an unbounded buffer is
 the failure this project exists to avoid.
 
 Not yet done, and worth being direct about:
@@ -238,10 +238,10 @@ password = "$REOSTREAM_CONTROL_PASSWORD"
 
 Absent the section this daemon starts no control listener of its own. That is not the
 same as "nothing changes": a container image started with no config at all serves the
-page anyway, on 0.0.0.0:8562, so there is somewhere to claim the install from -- see
+page anyway, on 0.0.0.0:8562, so there is somewhere to claim the install from; see
 Configuration above. While a config file exists but names no `[control]` password the
 page stays behind its claim screen and serves nothing else, so an old config carried
-over from before this feature is closed rather than open. Write a `[control]` section
+over from before this feature is closed, not open. Write a `[control]` section
 with a password into it and the running daemon picks that up on its next request, with
 no restart.
 
@@ -255,7 +255,7 @@ the only credential in this daemon, so a firewall rule that opens streaming to a
 never has to also decide whether that recorder should be able to change the config.
 
 The page shows one row per stream translated from `/api/status` into a state
-(streaming, no video, reconnecting, down) rather than raw booleans, plays each stream's
+(streaming, no video, reconnecting, down) instead of raw booleans, plays each stream's
 video live in the browser, edits the config with the same parser the daemon boots with
 so an invalid save is rejected before it is written, and tails the daemon's own logs.
 
@@ -264,9 +264,9 @@ Each camera has its own page: what the camera says it is and what this login may
 it, what every read this daemon knows answers, a curated set of settings that can
 actually be changed, the floodlight, its NTP server and timezone, and an advanced view
 of every readable block with the raw write behind it. Nothing there is presented as more
-certain than it is: each writable pair carries a confidence -- proven, unverified, known
-inert, unsafe to rewrite -- from what was actually observed on a camera rather than from
-a 200, and a write that answers 200 is reported as "accepted" and not as "confirmed"
+certain than it is: each writable pair carries a confidence, one of proven, unverified, known
+inert or unsafe to rewrite, taken from what was actually observed on a camera and not
+from a 200, and a write that answers 200 is reported as "accepted" and not as "confirmed"
 unless it was read back. NTP and timezone can be applied to the whole fleet at once,
 per-camera result by per-camera result. See docs/control.md.
 Saving diffs the old config against the new and reloads only what changed: an unchanged
@@ -302,7 +302,7 @@ reocam -address 192.0.2.50 -password secret probe
 
 `probe` sends every read this tool knows and reports what the camera answered, because
 no table can say what a given model implements. A message a camera does not have comes
-back 405 rather than failing the connection, so asking is safe and is the only honest
+back 405 instead of failing the connection, so asking is safe and is the only honest
 way to find out.
 
 Across three models here, a fixed 8 MP bullet, a fisheye and a dual lens pano, 89 of 103
@@ -318,10 +318,10 @@ reocam -address ... floodlight motion
 ```
 
 The message ids come from a dispatch table inside Reolink's own firmware, recovered
-statically rather than from a packet capture: 246 ids with the names the firmware gives
+statically, not from a packet capture: 246 ids with the names the firmware gives
 them, in `docs/msgids.json`. Eight of them are confirmed against live cameras, which is
 what makes the rest credible. The table is explicitly not exhaustive, and a camera
-dispatches with a switch rather than a table, so ids it accepts that no NVR sends will
+dispatches with a switch and not a table, so ids it accepts that no NVR sends will
 not appear.
 
 **Never write a document this tool invented.** The only correct body for a write is what

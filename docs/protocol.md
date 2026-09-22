@@ -187,14 +187,14 @@ r2, and its failure path calls `rpc_msg_name(5)` to name the message it could no
 The error is that there are **two numbering schemes in the same binaries**, and
 `rpc_msg_name` reads the wrong one for this purpose. Alongside the Baichuan dispatch
 table there are 724 `MSG_*` strings belonging to the device's internal IPC bus. Index 5
-of that pool is `MSG_APP_HB` — an application heartbeat, on a message bus that never
+of that pool is `MSG_APP_HB`, an application heartbeat on a message bus that never
 reaches the wire. The name matched, so the id looked confirmed.
 
 That also explains the symptom this section documented and could not account for.
 
 **Every camera answered 421.** They were being asked to begin playback of recorded video
 on a connection with no replay session, and declining. Not a heartbeat they would not
-serve — a different message entirely. The observation that the document was understood
+serve, a different message entirely. The observation that the document was understood
 and the camera was "declining for some other reason" was right; the other reason was that
 the document had nothing to do with the id it was sent under.
 

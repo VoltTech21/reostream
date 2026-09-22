@@ -83,7 +83,7 @@ func saveConfig(path, text string, checkFleet func([]config.Camera) error) error
 	// that case works; it is a harmless no-op every other time, when the
 	// directory is already there. 0700 because the directory exists only
 	// to hold config.toml, which is created at 0600 below and full of
-	// camera credentials — no group or other access to either.
+	// camera credentials, so no group or other access to either.
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

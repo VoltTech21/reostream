@@ -11,7 +11,7 @@ import (
 //
 // Several tests built a config with no [control] section. On an unclaimed
 // install every route answers 303 to /claim, so those tests never reached
-// the handler they were written for — and because they asserted only that
+// the handler they were written for, and because they asserted only that
 // nothing had been destroyed, they passed anyway.
 //
 // writeTestConfig now writes allow_no_password, which makes the install

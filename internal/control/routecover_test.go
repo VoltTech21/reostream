@@ -13,8 +13,8 @@ import (
 // TestNoRouteEscapesTheAuthWrapper asks the ROUTER what it serves and
 // checks every pattern, rather than walking a list a person maintains.
 //
-// The hand-written list this replaces omitted GET /stream/ — the one
-// conditionally registered route — so the test whose entire job was to
+// The hand-written list this replaces omitted GET /stream/, the one
+// conditionally registered route, so the test whose entire job was to
 // catch a forgotten auth wrapper could not have caught one there. A list
 // that has to be remembered is not a guard.
 //
