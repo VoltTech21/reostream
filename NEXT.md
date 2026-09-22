@@ -168,7 +168,7 @@ Known gaps, honestly:
 ## Wanted, not started
 
 - **A camera control surface**, separate from this daemon. Started, and staying in this
-  repository rather than splitting out; see the release document for why. `cmd/reocam` reads
+  repository rather than splitting out, because it shares the protocol client. `cmd/reocam` reads
   103 configuration blocks, probes what a model implements, and writes. Writes are
   confirmed on two messages, OSD and LED, each read back on a fresh connection; the other
   52 read/write pairs use the same message shape and are untested. It stays out of
@@ -180,4 +180,5 @@ Known gaps, honestly:
 - `MaxMessageSize` is pinned to today's maximum camera resolution. It rejects an oversize
   header loudly rather than corrupting, so a future higher resolution camera fails clearly at
   dial time rather than silently.
-- No published container image yet, though the Dockerfile exists.
+- Container images and binaries are published only on a tagged release, so main can be
+  ahead of what `:latest` serves.

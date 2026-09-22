@@ -329,9 +329,9 @@ func claimConfigText(password string) string {
 #
 # The listen addresses are the ones this daemon was already running on: an
 # install is only claimable while it has no config at all, which is exactly
-# when reostream falls back to these two defaults. A -listen flag on the
-# command line still overrides the first one; if you pass one, change the
-# line below to match it.
+# when reostream falls back to these two defaults. -listen and
+# -control-listen on the command line still override them; if you pass
+# either, change the matching line below so the two agree.
 #
 # Add cameras from the Setup page, or by hand as [[camera]] blocks.
 

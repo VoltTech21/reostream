@@ -24,6 +24,8 @@ is no config file to write first and no password to choose in advance.
 
 Point your recorder at `http://<this-host>:8560/<camera>.ts`.
 
+No Docker? Every release also carries a plain static binary; see Deployment.
+
 If you want to read why any of this exists before running it, carry on below.
 Configuration has the same four steps in more detail.
 
@@ -361,6 +363,29 @@ as a non-root user; see `docker-compose.yml` for an example that mounts a data d
 and publishes the streaming and control ports. Nothing is baked into the image: a fresh
 install has no config and no password until it is claimed through the control page, per
 the Configuration section above.
+
+If you would rather not run a container, every tagged release also carries plain
+binaries for linux/amd64 and linux/arm64. Download the one for your machine, put it
+somewhere on the path, and run it:
+
+```
+curl -fsSL -o reostream \
+  https://github.com/VoltTech21/reostream/releases/latest/download/reostream-linux-amd64
+chmod +x reostream
+./reostream -data ./reostream-data
+```
+
+It prints the same claim token the container does. There is no config file to write
+first, and nothing to install alongside it: the binary is static and has no runtime
+dependencies.
+
+To build it yourself instead, you need Go 1.26 and nothing else:
+
+```
+git clone https://github.com/VoltTech21/reostream
+cd reostream
+go build ./cmd/reostream
+```
 
 For a plain Linux host, `contrib/reostream.service` is a systemd unit. It claims the
 same way the container does: it passes `-data /var/lib/reostream`, systemd creates that

@@ -229,7 +229,7 @@ func TestANonPrivateRangeIsRefused(t *testing.T) {
 		"8.8.8.0/24",     // public
 		"203.0.113.0/24", // documentation range, still public
 		"100.64.0.0/24",  // carrier-grade NAT: not RFC1918, not ours
-		"10.0.0.0/16", // private but far too large
+		"172.16.0.0/16",  // private but far too large
 		"10.0.0.0/8",     // likewise
 		"::1/128",        // not IPv4
 		"not-a-range",    // not a range at all

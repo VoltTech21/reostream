@@ -133,6 +133,10 @@ type daemon struct {
 	supCtx    context.Context
 	cancelSup context.CancelFunc
 	runDone   <-chan error
+	// firstRunMsg is the claim block a fresh install prints, empty once
+	// claimed. Kept so a test can read the URL an operator is actually
+	// told to open, which is the thing that has to track -control-listen.
+	firstRunMsg string
 }
 
 // startup resolves the config -- including the no-config first-run path --
@@ -237,7 +241,19 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 	var controlSrv *http.Server
 	var controlLn net.Listener
 	var claimToken string
-	if cfg.Control != nil && cfg.Control.Listen != "" {
+	// The address the page will really be on. -control-listen has to be
+	// resolved once, here, because three separate things need the same
+	// answer: the listener, the log line, and the claim message a first
+	// run prints. Reading cfg.Control.Listen in any of them sends an
+	// operator who moved the port to a URL that answers nothing.
+	controlListen := ""
+	if cfg.Control != nil {
+		controlListen = cfg.Control.Listen
+	}
+	if controlListenOverride != "" {
+		controlListen = controlListenOverride
+	}
+	if cfg.Control != nil && controlListen != "" {
 		ctl, err := control.New(control.Options{
 			Password:        cfg.Control.Password,
 			AllowNoPassword: cfg.Control.AllowNoPassword,
@@ -253,10 +269,6 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 			return nil, fmt.Errorf("control: %w", err)
 		}
 		claimToken = ctl.ClaimToken()
-		controlListen := cfg.Control.Listen
-		if controlListenOverride != "" {
-			controlListen = controlListenOverride
-		}
 		// Listen here rather than inside ListenAndServe, so the address the
 		// kernel actually chose is knowable. With ":0" that is the only way
 		// to find the port, which is what lets a test exercise this path
@@ -275,7 +287,7 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 		// stream needs its own signal to know to stop.
 		controlSrv.RegisterOnShutdown(ctl.Close)
 		go func() {
-			log.Printf("reostream: control listening on %s", cfg.Control.Listen)
+			log.Printf("reostream: control listening on %s", controlLn.Addr())
 			if err := controlSrv.Serve(controlLn); err != nil && err != http.ErrServerClosed {
 				log.Printf("reostream: control: %v", err)
 			}
@@ -285,12 +297,16 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 	// After the control server, so the message can carry its claim token,
 	// and before anything blocks: a fresh install must say what it is and
 	// keep saying it until something claims it.
+	firstRunMsg := ""
 	if firstRun {
-		controlListen := ""
-		if cfg.Control != nil {
-			controlListen = cfg.Control.Listen
+		// The bound address, not the requested one: with a ":0" port the
+		// kernel chose it, and that is the only form an operator can open.
+		shown := controlListen
+		if controlLn != nil {
+			shown = controlLn.Addr().String()
 		}
-		msg := firstRunMessage(configPath, controlListen, claimToken)
+		msg := firstRunMessage(configPath, shown, claimToken)
+		firstRunMsg = msg
 		printFirstRun(msg)
 		go firstRunLoop(supCtx, configPath, msg)
 	}
@@ -310,15 +326,16 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 	}()
 
 	return &daemon{
-		cfg:        cfg,
-		sup:        sup,
-		rtspSrv:    rtspSrv,
-		controlSrv: controlSrv,
-		controlLn:  controlLn,
-		httpSrv:    httpSrv,
-		supCtx:     supCtx,
-		cancelSup:  cancelSup,
-		runDone:    runDone,
+		firstRunMsg: firstRunMsg,
+		cfg:         cfg,
+		sup:         sup,
+		rtspSrv:     rtspSrv,
+		controlSrv:  controlSrv,
+		controlLn:   controlLn,
+		httpSrv:     httpSrv,
+		supCtx:      supCtx,
+		cancelSup:   cancelSup,
+		runDone:     runDone,
 	}, nil
 }
 

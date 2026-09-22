@@ -1,9 +1,11 @@
 # Build and publish the container image.
 #
 # The README's quickstart tells a stranger to run
-# ghcr.io/volttech21/reostream:latest. That line is a promise, and this is
-# what keeps it: a tag push builds the image and pushes it, so the thing
-# people are told to run is built from a commit anyone can go and read.
+# ghcr.io/volttech21/reostream:latest, and its Deployment section offers a
+# plain binary to anyone who would rather not run a container. Both lines
+# are promises, and this is what keeps them: a tag push builds the image
+# and the binaries, so the thing people are told to run is built from a
+# commit anyone can go and read.
 #
 # Runs the tests first. An image that ships from a red tree is worse than no
 # image, because the failure arrives on somebody else's cameras.
@@ -73,3 +75,36 @@ jobs:
           # because a Pi is the other obvious place to run it, and the
           # binary is pure Go with no cgo, so it costs only build time.
           platforms: linux/amd64,linux/arm64
+
+  binaries:
+    needs: test
+    runs-on: ubuntu-latest
+    # Uploading to a release writes to the repository, which the read-only
+    # default above does not allow.
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+      - name: build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          # No cgo anywhere in the tree, so this cross-compiles without a
+          # toolchain for the target and the result has no runtime deps.
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -ldflags "-s -w" \
+            -o reostream-linux-${{ matrix.goarch }} ./cmd/reostream
+      - name: attach to the release
+        # Only a real tag has a release to attach to; a manual run builds
+        # the binaries as a check and stops there.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: reostream-linux-${{ matrix.goarch }}

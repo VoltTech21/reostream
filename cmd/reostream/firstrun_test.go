@@ -210,3 +210,37 @@ func TestTheClaimTokenIsNeverWrittenToDisk(t *testing.T) {
 		}
 	}
 }
+
+// TestTheClaimMessageFollowsTheControlListenOverride pins a bug found by
+// running the released binary the way the README tells a stranger to run
+// it. -control-listen moved the listener, but the claim block and the
+// startup log line both still read cfg.Control.Listen, so a first run on
+// any port but 8562 printed a URL that answers nothing, and that URL is
+// the only way in, since the token is shown nowhere else.
+func TestTheClaimMessageFollowsTheControlListenOverride(t *testing.T) {
+	dir := t.TempDir()
+	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "")
+	if err != nil {
+		t.Fatalf("startup: %v", err)
+	}
+	t.Cleanup(func() {
+		d.cancelSup()
+		if d.controlSrv != nil {
+			d.controlSrv.Close()
+		}
+		d.httpSrv.Close()
+	})
+
+	if d.firstRunMsg == "" {
+		t.Fatal("a fresh data directory produced no first-run message")
+	}
+	// ":0" means the kernel picked the port, so the bound address is the
+	// only correct answer and 8562 is definitely the wrong one.
+	bound := d.controlLn.Addr().String()
+	if !strings.Contains(d.firstRunMsg, bound) {
+		t.Fatalf("the claim message does not name the address the page is on (%s):\n%s", bound, d.firstRunMsg)
+	}
+	if strings.Contains(d.firstRunMsg, ":8562") {
+		t.Fatalf("the claim message names the default port despite an override:\n%s", d.firstRunMsg)
+	}
+}
