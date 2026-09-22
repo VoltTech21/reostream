@@ -1,0 +1,39 @@
+{{define "discover"}}
+{{if .Err}}
+<p class="state-down">{{.Err}}</p>
+{{else}}
+<p>swept {{.Scanned}} addresses in {{.Range}} on port 9000.</p>
+{{if .Configured}}
+<p>{{.Configured}} of them answered but are already added, so they were left alone.</p>
+{{end}}
+{{if not .Found}}
+<p>nothing else answered. a camera has to be powered on and on this network to be found here; if you know its address, type it above instead.</p>
+{{else}}
+{{range .Found}}
+<div class="card">
+<p><strong>{{.Address}}</strong>
+{{if .Report.Err}}<span class="state-down">{{.Report.Err}}</span>{{else}}&mdash; {{.Report.Model}}{{end}}</p>
+{{if .Report.Streams}}
+<table>
+<tr><th>stream</th><th>codec</th><th>resolution</th></tr>
+{{range .Report.Streams}}
+<tr>
+<td>{{.Name}}</td>
+{{if .Absent}}
+<td colspan="2">not offered by this camera</td>
+{{else if .Undetermined}}
+<td colspan="2" class="state-undetermined">could not determine: {{.Reason}}</td>
+{{else}}
+<td>{{.Codec}}</td>
+<td>{{.Width}}x{{.Height}}</td>
+{{end}}
+</tr>
+{{end}}
+</table>
+{{end}}
+<button type="button" class="use-found" data-address="{{.Address}}" data-streams="{{range .Report.Streams}}{{if and (not .Absent) (not .Undetermined)}}{{.Name}} {{end}}{{end}}">use this one</button>
+</div>
+{{end}}
+{{end}}
+{{end}}
+{{end}}

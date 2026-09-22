@@ -37,7 +37,7 @@ import (
 // renders with the wrong chrome. Any template added under templates/ must
 // be added to this list too.
 //
-//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
+//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/discover.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
 var templateFS embed.FS
 
 // Explicit, for the same reason the template list above is, plus one of
@@ -215,8 +215,23 @@ type Server struct {
 	// tabs, a double click, or a browser retry from running two
 	// probeCamera calls for the same unconfigured address at once, each
 	// dialling up to four real connections to it. See beginProbe.
+	//
+	// sweeping is the same idea for the network sweep on the setup page,
+	// except there is one slot for the whole daemon rather than one per
+	// address: a probe's hazard is scoped to the camera it dials, but a
+	// sweep's is the load it puts on the wire, and two sweeps of two
+	// different ranges put twice as much of it on the same wire. It lives
+	// under inFlightMu with the probe set because it is the same claim
+	// discipline; see beginSweep in discover.go.
 	inFlightMu     sync.Mutex
 	inFlightProbes map[string]bool
+	sweeping       bool
+
+	// sweepPort is the port the network sweep dials, 0 meaning 9000.
+	// Tests set it so they can sweep loopback against a listener they
+	// bound themselves; a real install never sets it, because a Reolink
+	// camera never serves Baichuan anywhere else.
+	sweepPort int
 }
 
 // New builds the control server. It returns an error rather than panicking
@@ -350,6 +365,7 @@ var routePatterns = []string{
 	"GET /setup",
 	"GET /setup/urls",
 	"POST /setup/probe",
+	"POST /setup/discover",
 	"GET /assets/",
 	"GET /stream/",
 }
@@ -408,6 +424,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /setup", s.wrap(http.HandlerFunc(s.serveSetup)))
 	mux.Handle("GET /setup/urls", s.wrap(http.HandlerFunc(s.serveURLs)))
 	mux.Handle("POST /setup/probe", s.wrap(http.HandlerFunc(s.serveProbe)))
+	// Never a GET, and never run on its own: this opens a TCP connection
+	// to every address in a /24, which is a thing a person chooses to do
+	// to their own network, not something a page does because it loaded.
+	mux.Handle("POST /setup/discover", s.wrap(http.HandlerFunc(s.serveDiscover)))
 	// Assets are served WITHOUT auth, deliberately, and it is the one
 	// route on this page that is. Behind s.wrap the stylesheet request
 	// itself answered 303 /login, so the login screen -- the page an

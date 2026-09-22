@@ -95,7 +95,17 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 }
 
 func (s *Server) serveSetup(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "setup.html", struct{ Title string }{Title: "Setup"})
+	// Ranges is what the sweep button will offer. Reading the interface
+	// list is local and opens no connection, so it is safe to do on every
+	// page load; the sweep itself is not, which is why the button posts
+	// rather than this page dialling anything. More than one means this
+	// machine is on more than one private network and only the operator
+	// knows which one the cameras are on, so the page asks rather than
+	// picking.
+	s.render(w, "setup.html", struct {
+		Title  string
+		Ranges []string
+	}{Title: "Setup", Ranges: localSweepRanges()})
 }
 
 func (s *Server) serveURLs(w http.ResponseWriter, r *http.Request) {

@@ -18,20 +18,95 @@
 </form>
 <p><a href="/setup/urls">I have added my cameras, show me the URLs</a></p>
 </div>
+
+<div class="card">
+<h2>don't know the address?</h2>
+<p>reostream can try every address on your network and see which ones answer on port 9000, the port these cameras speak on. it opens one connection to every address in the range, so it is something you start, never something that happens on its own. it takes about half a minute.</p>
+{{if .Ranges}}
+<form id="discover-form">
+{{if gt (len .Ranges) 1}}
+<label>which network <select name="range">
+{{range .Ranges}}<option value="{{.}}">{{.}}</option>{{end}}
+</select></label>
+{{else}}{{range .Ranges}}
+<input type="hidden" name="range" value="{{.}}">
+<p>range: <code>{{.}}</code></p>
+{{end}}{{end}}
+<button type="submit">find cameras on this network</button>
+</form>
+{{else}}
+<p class="state-down">this machine has no private network address, so there is nothing to sweep.</p>
+{{end}}
+<div id="discover-result"></div>
+</div>
+
 <script>
 const probeForm = document.getElementById('probe-form');
 const result = document.getElementById('result');
 const add = document.getElementById('add-camera');
+
+// Copy what the operator typed into the hidden add-camera fields. The
+// password lives only here, in the form the operator filled in: no
+// response from the server ever carries it back.
+function carryCredentials() {
+  document.getElementById('add-address').value = probeForm.address.value;
+  document.getElementById('add-username').value = probeForm.username.value;
+  document.getElementById('add-password').value = probeForm.password.value;
+}
+
 probeForm.addEventListener('submit', async e => {
   e.preventDefault();
   const body = new URLSearchParams(new FormData(probeForm));
   result.innerHTML = 'Asking the camera...';
   const resp = await fetch('/setup/probe', {method: 'POST', body});
   result.innerHTML = await resp.text();
-  document.getElementById('add-address').value = probeForm.address.value;
-  document.getElementById('add-username').value = probeForm.username.value;
-  document.getElementById('add-password').value = probeForm.password.value;
+  carryCredentials();
   add.hidden = result.querySelector('table') === null;
+});
+
+const discoverForm = document.getElementById('discover-form');
+const discoverResult = document.getElementById('discover-result');
+if (discoverForm) {
+  discoverForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = new URLSearchParams(new FormData(discoverForm));
+    // The sweep probes what it finds, and a probe needs a login, so it is
+    // given the same username and password typed above. They are used for
+    // the probe and nothing else.
+    body.set('username', probeForm.username.value);
+    body.set('password', probeForm.password.value);
+    const button = discoverForm.querySelector('button');
+    button.disabled = true;
+    discoverResult.innerHTML = 'looking...';
+    try {
+      const resp = await fetch('/setup/discover', {method: 'POST', body});
+      discoverResult.innerHTML = await resp.text();
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+// "use this one" fills in the existing add-camera form with what the sweep
+// already learned, rather than probing the same camera a second time.
+document.addEventListener('click', e => {
+  const button = e.target.closest('.use-found');
+  if (!button) return;
+  probeForm.address.value = button.dataset.address;
+  carryCredentials();
+  // Replace any stream boxes left from an earlier pick, so switching
+  // cameras cannot carry the previous one's streams across.
+  add.querySelectorAll('input[name="streams"]').forEach(el => el.remove());
+  for (const name of (button.dataset.streams || '').split(' ')) {
+    if (!name) continue;
+    const el = document.createElement('input');
+    el.type = 'hidden';
+    el.name = 'streams';
+    el.value = name;
+    add.appendChild(el);
+  }
+  add.hidden = false;
+  document.getElementById('add-label').focus();
 });
 </script>
 {{end}}

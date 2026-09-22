@@ -75,6 +75,7 @@ func TestEveryRouteExceptLoginIsAuthenticated(t *testing.T) {
 		{"GET", "/setup"},
 		{"GET", "/setup/urls"},
 		{"POST", "/setup/probe"},
+		{"POST", "/setup/discover"},
 	}
 
 	s := newTestServer(t, Options{Password: "hunter2", ConfigPath: writeTestConfig(t, "one")})
