@@ -61,14 +61,23 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           # :latest only ever moves on a real tag, never on a branch push,
           # so the quickstart cannot start handing people a work in progress.
+          #
+          # The branch entry exists because buildx refuses to run at all
+          # with an empty tag list, which is what the two semver patterns
+          # produce on anything that is not a tag. It is never pushed: the
+          # push below is gated on the same condition as :latest.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=ref,event=branch
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          # A manual run builds both architectures as a check and pushes
+          # nothing, so the registry only ever gains images that came from
+          # a tag someone made deliberately.
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # The recorder hosts this is built for are amd64; arm64 is here
