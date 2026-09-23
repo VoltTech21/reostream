@@ -115,11 +115,55 @@ func h264NALHeaderValid(b []byte) bool {
 	return false
 }
 
+// h264StartsAccessUnit reports whether b begins a NAL that can legitimately
+// be the first one of a keyframe: parameter sets, or the delimiter and SEI
+// that may precede them. An IDR slice is deliberately not here, because on
+// these cameras the picture always opens with its parameter sets.
+func h264StartsAccessUnit(b []byte) bool {
+	if !h264NALHeaderValid(b) {
+		return false
+	}
+	switch b[0] & 0x1f {
+	case 6, 7, 9:
+		return true
+	}
+	return false
+}
+
 // h264FirstNAL returns the offset of the first start code that begins a
 // valid H.264 NAL, skipping false start codes in the prefix metadata.
-func h264FirstNAL(b []byte) int {
+//
+// keyframe narrows what counts. Tightening the header check cut this
+// corruption by about 94% on the live fleet, from 30 discarded recording
+// segments an hour to 2, but it could not go further on its own: an
+// ordinary P-frame slice is nal_unit_type 1 with any nal_ref_idc, four byte
+// values that metadata hits by chance, and rejecting those would reject
+// real frames.
+//
+// What makes the rest reachable is that the damage is not uniform. A
+// recording segment begins at a keyframe, so a segment is only ruined when
+// the corruption lands on an I-frame; the same bytes inside a P-frame cost
+// one picture and nothing else. An I-frame's first NAL is never a plain
+// slice on these cameras, so for those the search can insist on a parameter
+// set and shut the door P-frames have to leave open.
+//
+// The strict pass falls back to the general one rather than failing: a
+// camera that opens a keyframe some other way then behaves exactly as it
+// did before, instead of having its metadata treated as picture.
+func h264FirstNAL(b []byte, keyframe bool) int {
+	if keyframe {
+		if i := h264SearchNAL(b, h264StartsAccessUnit); i >= 0 {
+			return i
+		}
+	}
+	return h264SearchNAL(b, h264NALHeaderValid)
+}
+
+// h264SearchNAL returns the offset of the first start code whose NAL header
+// satisfies ok.
+func h264SearchNAL(b []byte, ok func([]byte) bool) int {
 	for i := 0; i+5 <= len(b); i++ {
-		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 && h264NALHeaderValid(b[i+4:]) {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 && ok(b[i+4:]) {
 			return i
 		}
 	}
@@ -267,7 +311,7 @@ func (d *Depacketiser) Next() (Frame, bool) {
 			case "H265", "h265":
 				prefix = hevcFirstNAL(region)
 			case "H264", "h264":
-				prefix = h264FirstNAL(region)
+				prefix = h264FirstNAL(region, kind == FrameIFrame)
 			default:
 				prefix = indexStartCode(region)
 			}

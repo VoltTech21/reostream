@@ -84,3 +84,61 @@ func TestFrameWithCapturedJunkInPrefixYieldsTheWholePicture(t *testing.T) {
 		}
 	}
 }
+
+// A keyframe's picture opens with its parameter sets on these cameras, so
+// the prefix search for an I-frame can insist on one. This is what closes
+// the door the header check cannot: nal_unit_type 1 with any nal_ref_idc is
+// a legitimate P-frame slice, so those four byte values have to be accepted
+// in general, and metadata hits them by chance.
+//
+// Segments begin at keyframes, so an I-frame is the only place this
+// corruption costs a whole recording segment rather than one picture.
+func TestAKeyframePrefixIsNotEndedByASliceHeader(t *testing.T) {
+	// 0x41 is a perfectly valid non-IDR slice header, and the general check
+	// accepts it. In an I-frame's prefix it is metadata.
+	junk := []byte{0x41, 0x9a, 0x01, 0x40, 0x14}
+	picture := append([]byte{0, 0, 0, 1, 0x67, 0x64, 0x00, 0x33, 0xac},
+		bytes.Repeat([]byte{0x88}, 48)...)
+
+	meta := bytes.Repeat([]byte{0xCC}, 20)
+	body := append(append(append(meta, 0, 0, 0, 1), junk...), picture...)
+
+	buf := make([]byte, 32)
+	copy(buf[0:4], magicIFrame)
+	copy(buf[4:8], []byte("H264"))
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(picture)))
+	buf = append(buf, body...)
+
+	var d Depacketiser
+	d.Write(buf, true)
+	f, ok := d.Next()
+	if !ok {
+		t.Fatal("no frame came out")
+	}
+	if !bytes.Equal(f.Video(), picture) {
+		t.Errorf("got %d bytes starting %x, want the %d byte picture starting %x",
+			len(f.Video()), f.Video()[:min(6, len(f.Video()))], len(picture), picture[:6])
+	}
+}
+
+// The fallback: a camera whose keyframe does not open with a parameter set
+// must still work, rather than having its metadata treated as picture.
+func TestAKeyframeOpeningWithAnIDRStillParses(t *testing.T) {
+	picture := append([]byte{0, 0, 0, 1, 0x65}, bytes.Repeat([]byte{0x88}, 40)...)
+
+	buf := make([]byte, 32)
+	copy(buf[0:4], magicIFrame)
+	copy(buf[4:8], []byte("H264"))
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(picture)))
+	buf = append(buf, picture...)
+
+	var d Depacketiser
+	d.Write(buf, true)
+	f, ok := d.Next()
+	if !ok {
+		t.Fatal("no frame came out")
+	}
+	if !bytes.Equal(f.Video(), picture) {
+		t.Errorf("got %x, want %x", f.Video()[:min(8, len(f.Video()))], picture[:8])
+	}
+}
