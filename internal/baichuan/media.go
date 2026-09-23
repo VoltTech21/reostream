@@ -63,23 +63,63 @@ func hevcFirstNAL(b []byte) int {
 	return -1
 }
 
-// h264NALHeaderValid reports whether the byte after a start code is a
-// well-formed H.264 NAL header: forbidden_zero_bit clear and a defined
-// nal_unit_type (1-23). The fisheye is H.264 and carries the same false
-// start codes in its prefix metadata as the HEVC cameras.
-func h264NALHeaderValid(b0 byte) bool {
-	if b0&0x80 != 0 {
+// h264Profiles are the profile_idc values defined by the H.264 spec. A byte
+// that is not one of these cannot begin a real SPS, which is the check that
+// tells a true SPS from prefix metadata that happens to look like one.
+var h264Profiles = map[byte]bool{
+	44: true, 66: true, 77: true, 83: true, 86: true, 88: true, 100: true,
+	110: true, 118: true, 122: true, 128: true, 134: true, 135: true,
+	138: true, 139: true, 244: true,
+}
+
+// h264NALHeaderValid reports whether b begins a well-formed H.264 NAL for
+// these cameras, where b starts at the NAL header byte.
+//
+// The first version of this checked only forbidden_zero_bit and
+// nal_unit_type 1-23, which accepts 23 of the 128 bytes a forbidden-zero
+// byte can hold. Prefix metadata clears that bar about one frame in two
+// thousand: a measured capture of the fisheye carried
+//
+//	42 98 a7 fb 09 00 01 01 00 01 02 02 00 f5 04 00 ...
+//
+// where 0x42 is nal_unit_type 2, and another carried 0x27, an SPS whose
+// profile_idc was 123. Each one ended the prefix search early, so the
+// metadata was published as if it were the start of the picture. ffmpeg
+// then reported "non-existing PPS 1 referenced" or rejected the SPS, and
+// Frigate discarded the recording segment that began there as having no
+// video stream. Roughly one segment every two minutes, on the only H.264
+// camera in the fleet, for months.
+//
+// So this now spends every constraint the header offers, the way the HEVC
+// check does:
+//
+//   - only the six NAL types these cameras emit
+//   - nal_ref_idc non-zero on SPS, PPS and IDR, which the spec requires,
+//     and zero on SEI and AUD, which it also requires
+//   - for an SPS, a profile_idc the spec defines
+func h264NALHeaderValid(b []byte) bool {
+	if len(b) == 0 || b[0]&0x80 != 0 {
 		return false
 	}
-	t := b0 & 0x1f
-	return t >= 1 && t <= 23
+	ref := (b[0] >> 5) & 0x03
+	switch b[0] & 0x1f {
+	case 1: // non-IDR slice: may be disposable, so any nal_ref_idc
+		return true
+	case 5, 8: // IDR slice, PPS
+		return ref != 0
+	case 7: // SPS
+		return ref != 0 && len(b) >= 2 && h264Profiles[b[1]]
+	case 6, 9: // SEI, access unit delimiter
+		return ref == 0
+	}
+	return false
 }
 
 // h264FirstNAL returns the offset of the first start code that begins a
 // valid H.264 NAL, skipping false start codes in the prefix metadata.
 func h264FirstNAL(b []byte) int {
 	for i := 0; i+5 <= len(b); i++ {
-		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 && h264NALHeaderValid(b[i+4]) {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 && h264NALHeaderValid(b[i+4:]) {
 			return i
 		}
 	}

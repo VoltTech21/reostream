@@ -140,8 +140,12 @@ func TestDepacketiserOnRealCapture(t *testing.T) {
 // stream otherwise looked healthy.
 func TestDepacketiserAccountsForAFramePrefix(t *testing.T) {
 	prefix := bytes.Repeat([]byte{0xAB}, 104)
-	picture := append([]byte{0, 0, 0, 1}, []byte("first picture")...)
-	second := append([]byte{0, 0, 0, 1}, []byte("second picture")...)
+	// 0x65 is an IDR slice header and 0x41 a non-IDR one. The picture bytes
+	// have to begin with a NAL header the parser accepts: it now validates
+	// one before treating a start code as the end of the prefix, so plain
+	// text after the start code is correctly not a picture.
+	picture := append([]byte{0, 0, 0, 1, 0x65}, []byte("first picture")...)
+	second := append([]byte{0, 0, 0, 1, 0x41}, []byte("second picture")...)
 
 	// The size field covers the picture, not the prefix, so build the header
 	// from the picture alone and splice the prefix in behind it.
