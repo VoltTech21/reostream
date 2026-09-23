@@ -187,6 +187,11 @@ func newCGIFloodlightCamera(t *testing.T, mode, state int) *cgiFloodlightCamera 
 		case "GetWhiteLed":
 			w.Write([]byte(`[{"cmd":"GetWhiteLed","code":0,"value":{"WhiteLed":{"mode":` +
 				strconv.Itoa(mode) + `,"state":` + strconv.Itoa(state) + `,"bright":50}}}]`))
+		case "GetImage", "GetOsd":
+			// The camera page's factory-defaults read. Answered the way a
+			// camera reports a command it does not support, which offers
+			// no resets and is all these tests need.
+			w.Write([]byte(`[{"cmd":"` + r.URL.Query().Get("cmd") + `","code":1,"error":{"detail":"not support","rspCode":-9}}]`))
 		default:
 			t.Errorf("cgiFloodlightCamera: unexpected cmd %q", r.URL.Query().Get("cmd"))
 		}
@@ -364,18 +369,18 @@ func TestCameraPageShowsAllSixCombinedProperties(t *testing.T) {
 	// the camera merely reports, and those are collapsed. A future edit
 	// that puts the reference tables back above the settings must fail
 	// here, not just look wrong to whoever next opens the page.
-	settingsAt := strings.Index(body, "<h2>Settings</h2>")
+	settingsAt := strings.Index(body, "<h2>Camera name and overlay</h2>")
 	reportsAt := strings.Index(body, "what this camera reports")
 	if settingsAt < 0 || reportsAt < 0 {
-		t.Fatalf("camera page is missing the Settings heading or the collapsed reports section:\n%s", body)
+		t.Fatalf("camera page is missing the first settings group or the collapsed reports section:\n%s", body)
 	}
 	if settingsAt > reportsAt {
 		t.Errorf("the camera's reference tables come before the settings again")
 	}
-	if !strings.Contains(body, `<details class="reports">`) {
+	if !strings.Contains(body, `<details class="card reports">`) {
 		t.Errorf("what the camera reports is not inside a details section:\n%s", body)
 	}
-	if strings.Contains(body, `<details class="reports" open`) {
+	if strings.Contains(body, `<details class="card reports" open`) {
 		t.Errorf("the reports section is open by default; it is reference, not a control")
 	}
 
@@ -385,14 +390,14 @@ func TestCameraPageShowsAllSixCombinedProperties(t *testing.T) {
 	if !strings.Contains(body, "Floodlight") {
 		t.Errorf("camera page does not render the Floodlight section")
 	}
-	if !strings.Contains(body, `value="on" selected`) {
+	if !strings.Contains(body, `value="on" checked`) {
 		t.Errorf("camera page does not show the floodlight's current state as selected:\n%s", body)
 	}
 
 	// 6: the advanced/raw-blocks link, which only renders inside the
 	// {{if .Probes}} block once probeCamera has actually completed a
 	// sweep, never when a camera never dialled leaves Probes nil.
-	if !strings.Contains(body, `<a href="/cameras/one/advanced">every block, as XML</a>`) {
+	if !strings.Contains(body, `<a href="/cameras/one/advanced">every document this camera has</a>`) {
 		t.Errorf("camera page does not link to the advanced/raw-blocks view:\n%s", body)
 	}
 }

@@ -1,91 +1,134 @@
 {{define "body"}}
-<h1>Set up reostream</h1>
-<div class="card">
-<p>Add a camera. reostream will connect to it and report what it is before anything is saved.</p>
+<div class="onboard">
+<div class="steps">
+<div class="step"><span class="n">1</span>Claim</div>
+<div class="step" aria-current="step"><span class="n">2</span>Add a camera</div>
+<div class="step"><span class="n">3</span>Point your recorder at it</div>
+</div>
+
+<h1>Add your first camera</h1>
+<p class="subtitle">reostream connects and tells you what the camera is before anything is saved.</p>
+
 <form id="probe-form">
-<label>Address <input name="address" placeholder="192.168.1.50" required></label>
-<label>Username <input name="username" value="admin"></label>
-<label>Password <input type="password" name="password"></label>
-<button type="submit">Ask this camera</button>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<label class="field"><span class="label">Address</span><input name="address" placeholder="192.168.1.50" required></label>
+<label class="field"><span class="label">Call it</span><input name="name" id="add-label" required></label>
+<label class="field"><span class="label">Username</span><input name="username" value="admin"></label>
+<label class="field"><span class="label">Password</span><input type="password" name="password"></label>
+</div>
+<button type="submit" class="quiet">Discover</button>
 </form>
+
+{{/* What the probe found, and which of it to pull. Every stream the
+     camera has is ticked: a camera added with no streams is the one
+     mistake this page can make that looks like success. */}}
 <div id="result"></div>
+
 <form id="add-camera" method="post" action="/cameras/add" hidden>
 <input type="hidden" name="address" id="add-address">
 <input type="hidden" name="username" id="add-username">
 <input type="hidden" name="password" id="add-password">
-<label>Call it <input name="name" id="add-label" required></label>
-<button type="submit">Add this camera</button>
+<input type="hidden" name="name" id="add-name">
+<div id="streams" class="card"></div>
+<button type="submit">Add</button>
 </form>
-<p><a href="/setup/urls">I have added my cameras, show me the URLs</a></p>
+
+<p class="hint"><a href="/setup/urls">I have added my cameras, show me the URLs</a></p>
 </div>
 
 <div class="card">
-<h2>don't know the address?</h2>
-<p>reostream can try every address on your network and see which ones answer on port 9000, the port these cameras speak on. it opens one connection to every address in the range, so it is something you start, never something that happens on its own. it takes about half a minute.</p>
+<h2>Don't know the address?</h2>
+<p class="hint">reostream can try every address on your network and see which ones answer on
+port 9000, the port these cameras speak. It opens one connection to every address in the
+range, so it is something you start, never something that happens on its own. It takes
+about half a minute.</p>
+
 {{/* Editable, not fixed, and never a dead end. The detected ranges come
      from this daemon's own interfaces, and in the shipped container those
-     are docker's bridge network -- 172.17.0.0/24 rather than the network
-     the cameras are on. A container cannot know the operator's LAN, so the
+     are docker's bridge network, 172.17.0.0/24 rather than the network the
+     cameras are on. A container cannot know the operator's LAN, so the
      detected values are offered as suggestions and the operator has the
-     last word. The old version rendered a fixed range with no way to change
-     it, which on the deployment this project actually ships was a sweep of
-     the wrong network with no recourse. */}}
+     last word. An earlier version rendered a fixed range with no way to
+     change it, which on the deployment this project actually ships was a
+     sweep of the wrong network with no recourse. */}}
 <form id="discover-form">
-<label>network to search
+<label class="field"><span class="label">Network to search</span>
 <input name="range" list="rangelist" value="{{if .Ranges}}{{index .Ranges 0}}{{end}}"
-  placeholder="192.168.1.0/24" required>
-</label>
+  placeholder="192.168.1.0/24" required></label>
 <datalist id="rangelist">
 {{range .Ranges}}<option value="{{.}}">{{end}}
 </datalist>
-<p class="hint">a private range, no larger than a /24. if reostream is running in a
-container, what it detects is the container's own network rather than yours &mdash; the
-address of a camera you already have is the quickest way to know what to type here.</p>
-<button type="submit">find cameras on this network</button>
+<p class="hint">A private range, no larger than a /24. If reostream is running in a
+container, what it detects is the container's own network rather than yours: the address
+of a camera you already have is the quickest way to know what to type here.</p>
+<button type="submit" class="quiet">Find cameras on this network</button>
 </form>
 <div id="discover-result"></div>
 </div>
 
 <script>
-const probeForm = document.getElementById('probe-form');
-const result = document.getElementById('result');
-const add = document.getElementById('add-camera');
+var probeForm = document.getElementById('probe-form');
+var result = document.getElementById('result');
+var add = document.getElementById('add-camera');
+var streams = document.getElementById('streams');
 
-// Copy what the operator typed into the hidden add-camera fields. The
-// password lives only here, in the form the operator filled in: no
-// response from the server ever carries it back.
+probeForm.addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var body = new URLSearchParams(new FormData(probeForm));
+  result.innerHTML = '<p class="hint">Asking the camera&hellip;</p>';
+  var resp = await fetch('/setup/probe', {method: 'POST', body: body, headers: {'Accept': 'application/json'}});
+  var found = await resp.json();
+  render(found);
+});
+
+function render(found) {
+  if (found.error) {
+    result.innerHTML = '<p class="outcome-refused"></p>';
+    result.querySelector('p').textContent = found.error;
+    add.hidden = true;
+    return;
+  }
+  result.innerHTML = '';
+  streams.innerHTML = '<div class="discovered"></div>';
+  var list = streams.firstChild;
+  found.streams.forEach(function (s) {
+    var label = document.createElement('label');
+    label.innerHTML = '<input type="checkbox" name="streams" checked>' +
+      '<span class="name"></span><span class="what"></span>';
+    label.querySelector('input').value = s.name;
+    label.querySelector('.name').textContent = s.name;
+    label.querySelector('.what').textContent = s.detail;
+    list.appendChild(label);
+  });
+  carryCredentials();
+  add.hidden = false;
+}
+
+// The password lives only in the form the operator filled in: no response
+// from the server ever carries it back.
 function carryCredentials() {
   document.getElementById('add-address').value = probeForm.address.value;
   document.getElementById('add-username').value = probeForm.username.value;
   document.getElementById('add-password').value = probeForm.password.value;
+  document.getElementById('add-name').value = probeForm.name.value;
 }
 
-probeForm.addEventListener('submit', async e => {
-  e.preventDefault();
-  const body = new URLSearchParams(new FormData(probeForm));
-  result.innerHTML = 'Asking the camera...';
-  const resp = await fetch('/setup/probe', {method: 'POST', body});
-  result.innerHTML = await resp.text();
-  carryCredentials();
-  add.hidden = result.querySelector('table') === null;
-});
-
-const discoverForm = document.getElementById('discover-form');
-const discoverResult = document.getElementById('discover-result');
+var discoverForm = document.getElementById('discover-form');
+var discoverResult = document.getElementById('discover-result');
 if (discoverForm) {
-  discoverForm.addEventListener('submit', async e => {
+  discoverForm.addEventListener('submit', async function (e) {
     e.preventDefault();
-    const body = new URLSearchParams(new FormData(discoverForm));
+    var body = new URLSearchParams(new FormData(discoverForm));
     // The sweep probes what it finds, and a probe needs a login, so it is
     // given the same username and password typed above. They are used for
     // the probe and nothing else.
     body.set('username', probeForm.username.value);
     body.set('password', probeForm.password.value);
-    const button = discoverForm.querySelector('button');
+    var button = discoverForm.querySelector('button');
     button.disabled = true;
-    discoverResult.innerHTML = 'looking...';
+    discoverResult.innerHTML = '<p class="hint">Looking&hellip;</p>';
     try {
-      const resp = await fetch('/setup/discover', {method: 'POST', body});
+      var resp = await fetch('/setup/discover', {method: 'POST', body: body});
       discoverResult.innerHTML = await resp.text();
     } finally {
       button.disabled = false;
@@ -93,25 +136,15 @@ if (discoverForm) {
   });
 }
 
-// "use this one" fills in the existing add-camera form with what the sweep
-// already learned, rather than probing the same camera a second time.
-document.addEventListener('click', e => {
-  const button = e.target.closest('.use-found');
+// "Use this one" fills in the add-camera form from what the sweep already
+// learned, rather than probing the same camera a second time. It goes
+// through render() so the stream list is built once, in one place.
+document.addEventListener('click', function (e) {
+  var button = e.target.closest('.use-found');
   if (!button) return;
   probeForm.address.value = button.dataset.address;
-  carryCredentials();
-  // Replace any stream boxes left from an earlier pick, so switching
-  // cameras cannot carry the previous one's streams across.
-  add.querySelectorAll('input[name="streams"]').forEach(el => el.remove());
-  for (const name of (button.dataset.streams || '').split(' ')) {
-    if (!name) continue;
-    const el = document.createElement('input');
-    el.type = 'hidden';
-    el.name = 'streams';
-    el.value = name;
-    add.appendChild(el);
-  }
-  add.hidden = false;
+  var names = (button.dataset.streams || '').split(' ').filter(Boolean);
+  render({streams: names.map(function (n) { return {name: n, detail: ''}; })});
   document.getElementById('add-label').focus();
 });
 </script>

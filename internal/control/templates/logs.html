@@ -1,18 +1,41 @@
 {{define "body"}}
 <h1>Logs</h1>
+<p class="subtitle">Live from the daemon. Filter by camera.</p>
 <div class="card">
-<label>Filter <input id="filter" placeholder="camera name"></label>
-<pre id="log" style="max-height:70vh;overflow:auto;border:1px solid var(--line);padding:.5rem;border-radius:6px"></pre>
+<div class="filters" id="filters">
+<button type="button" data-filter="" aria-pressed="true">all</button>
+{{range fleet}}<button type="button" data-filter="{{.Name}}" aria-pressed="false">{{.Name}}</button>{{end}}
+</div>
+<pre class="log" id="log"></pre>
 </div>
 <script>
-const log = document.getElementById('log');
-const filter = document.getElementById('filter');
-function add(line) {
-  if (filter.value && !line.includes(filter.value)) return;
-  log.textContent += line + '\n';
-  log.scrollTop = log.scrollHeight;
-}
-fetch('/logs/history').then(r => r.json()).then(lines => lines.forEach(add));
-new EventSource('/logs/stream').onmessage = e => add(e.data);
+// The filter is a row of chips rather than a text box: on a fleet the
+// thing being filtered for is almost always a camera name, and the names
+// are already known to this page.
+(function () {
+  var log = document.getElementById('log');
+  var filter = '';
+  var lines = [];
+
+  function render() {
+    log.textContent = lines.filter(function (l) { return !filter || l.indexOf(filter) !== -1; }).join('\n') + '\n';
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function add(line) { lines.push(line); render(); }
+
+  document.querySelectorAll('#filters button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      filter = b.dataset.filter;
+      document.querySelectorAll('#filters button').forEach(function (o) {
+        o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+      });
+      render();
+    });
+  });
+
+  fetch('/logs/history').then(function (r) { return r.json(); }).then(function (ls) { lines = ls.slice(); render(); });
+  new EventSource('/logs/stream').onmessage = function (e) { add(e.data); };
+})();
 </script>
 {{end}}

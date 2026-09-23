@@ -98,14 +98,8 @@ func TestImageGroupIsMarkedUnsafeToRewrite(t *testing.T) {
 		if !baichuan.UnsafeToRewrite(pair.Set) {
 			t.Fatalf("group %q's block %q is not unsafe to rewrite, but this test assumed it was", g.Title, "isp get")
 		}
-		hasWarning := false
-		for _, f := range g.Fields {
-			if f.Kind == "warning" {
-				hasWarning = true
-			}
-		}
-		if !hasWarning {
-			t.Fatalf("group %q edits an unsafe-to-rewrite block with no warning field", g.Title)
+		if !g.InterruptsStream {
+			t.Fatalf("group %q edits an unsafe-to-rewrite block but is not marked InterruptsStream", g.Title)
 		}
 	}
 	if !found {
@@ -210,7 +204,7 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	}
 	html := string(raw)
 
-	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night mode", "Infrared cut filter", unsafeToRewriteWarning} {
+	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night mode", "Infrared cut filter", "INTERRUPTS THE STREAM"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render the %q field", want)
 		}

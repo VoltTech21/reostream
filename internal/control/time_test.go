@@ -215,15 +215,12 @@ func TestServeTimeRendersNTPAndTheTimezoneForm(t *testing.T) {
 		"pool.ntp.org",
 		"-28800",
 		"Timezone",
-		// The timezone write is a CGI write and the page must keep saying
-		// so, plus the warning that the sign convention is unverified.
-		"CGI SetTime",
-		// The page used to say the sign convention was unconfirmed while
-		// the paragraph below it gave the confirmed derivation -- both on
-		// screen at once. It is confirmed: a camera reporting 21600 showed
-		// 09:15:29 against a host clock of 14:15:34 UTC.
-		"sign convention IS confirmed",
-		"seconds west of UTC",
+		// Both writes go over CGI and the page must keep saying so. The raw
+		// seconds-west field, and the sign-convention warning that went
+		// with it, left the page when the picker started naming zones: the
+		// derivation lives in docs/measurements.md, and the page now says
+		// the zone by name instead.
+		"camera's CGI API",
 		// Both forms, and both every-camera boxes.
 		`action="/cameras/cam1/time"`,
 		`action="/cameras/cam1/timezone"`,

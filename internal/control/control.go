@@ -48,7 +48,7 @@ var templateFS embed.FS
 // before this was changed: a creds.toml placed in this directory was served
 // to an unauthenticated request with every test still green.
 //
-//go:embed assets/style.css assets/mpegts.js assets/mpegts.js.LICENSE.txt assets/LICENSE-mpegts.txt assets/README.md
+//go:embed assets/style.css assets/dashboard.js assets/settings.js assets/mpegts.js assets/mpegts.js.LICENSE.txt assets/LICENSE-mpegts.txt assets/README.md
 var assetFS embed.FS
 
 // assetSub drops the "assets" prefix so the URL and the file path match.
@@ -244,14 +244,19 @@ func New(opts Options) (*Server, error) {
 	// have to carry. A page that cannot read the config renders its
 	// sidebar without a fleet list rather than failing the whole render.
 	funcs := template.FuncMap{
-		"fleet": func() []Camera {
+		// railEntry, not Camera: Camera carries the password, and the rail
+		// needs only a name and a colour.
+		"fleet": func() []railEntry {
 			cams, err := loadFleet(opts.ConfigPath)
 			if err != nil {
 				return nil
 			}
-			return cams
+			return railEntries(cams, opts.Status)
 		},
 		"cameraOf": cameraOf,
+		"dict":     dict,
+		"streamOf": streamOf,
+		"version":  buildVersion,
 	}
 	rend, err := webui.NewRenderer(templateFS, "templates/*.html", funcs)
 	if err != nil {
@@ -505,13 +510,16 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	cards := s.statusCards(urls)
 	// Flash: the status page's own overlay switches post through the
 	// curated-setting handler and name this page as where they came from,
 	// so a toggle from here lands back here with its one-line report.
 	s.render(w, "dashboard.html", struct {
-		Title   string
-		Cards   []statusCard
-		Toggles []Field
-		Flash   *Flash
-	}{Title: "Status", Cards: s.statusCards(urls), Toggles: toggles, Flash: s.takeFlash(r)})
+		Title        string
+		Cards        []statusCard
+		Alerts       []Alert
+		HealthyCount int
+		Toggles      []Field
+		Flash        *Flash
+	}{Title: "Status", Cards: cards, Alerts: alerts(cards), HealthyCount: healthyCount(cards), Toggles: toggles, Flash: s.takeFlash(r)})
 }

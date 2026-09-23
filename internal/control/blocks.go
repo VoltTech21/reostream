@@ -99,7 +99,13 @@ type Block struct {
 // for a document it did not itself read, because a composed document is
 // exactly the thing that breaks models nobody here has tested against.
 type PairRow struct {
-	Name       string
+	Name string
+	// Title is the human name for the document, falling back to Name;
+	// SetName is the write's firmware description, for the ids line; and
+	// Effect is Confidence said as a sentence.
+	Title      string
+	SetName    string
+	Effect     string
 	Get, Set   uint32
 	Confidence Confidence
 	Seed       string
@@ -187,7 +193,10 @@ func buildPairRows(blocks []Block) []PairRow {
 			Get:        pair.Get,
 			Set:        pair.Set,
 			Confidence: confidenceOf(pair),
+			Title:      pairTitle(pair.Name),
+			SetName:    baichuan.MsgName(pair.Set),
 		}
+		row.Effect = confidenceEffect[row.Confidence]
 		if b, ok := byID[pair.Get]; ok && b.Status == 200 && !b.HungUp {
 			row.Seed = b.XML
 			row.Editable = true
@@ -221,4 +230,59 @@ func (s *Server) serveBlocks(w http.ResponseWriter, r *http.Request) {
 	page.Pairs = buildPairRows(blocks)
 
 	s.render(w, "blocks.html", page)
+}
+
+// pairTitles names the documents a person is likely to look for. A pair
+// with no entry here is shown under its firmware description.
+var pairTitles = map[string]string{
+	"isp get":                   "Picture settings",
+	"get osd":                   "Overlay (older firmware)",
+	"osd get":                   "Overlay",
+	"email cfg get":             "Email alerts",
+	"md get":                    "Motion detection",
+	"shelter get":               "Privacy masks",
+	"rec cfg get":               "Recording",
+	"get enc":                   "Video encoding",
+	"ftp cfg get":               "FTP upload",
+	"ftp task get":              "FTP schedule",
+	"rec task get":              "Recording schedule",
+	"get general":               "Device name and clock",
+	"dst get":                   "Daylight saving",
+	"wifi info get":             "Wi-Fi",
+	"get auto update":           "Automatic firmware updates",
+	"led get":                   "Status LED",
+	"email task get":            "Email schedule",
+	"push task get":             "Push notification schedule",
+	"get auto focus cfg":        "Autofocus",
+	"crop get":                  "Crop",
+	"audio task get":            "Siren schedule",
+	"audio cfg get":             "Audio",
+	"floodlight task get":       "Floodlight schedule",
+	"ai cfg get":                "Person and vehicle detection",
+	"get timelapse cfg":         "Timelapse",
+	"ai detect cfg get":         "Detection sensitivity",
+	"get bino sttich cfg":       "Dual-lens stitching",
+	"get fish eye cfg":          "Fisheye view",
+	"get access usercfg":        "User accounts",
+	"get crossline detect cfg":  "Line crossing",
+	"get intrusion detect cfg":  "Intrusion zone",
+	"get loitering detect cfg":  "Loitering",
+	"get tamper alarm cfg":      "Tamper alarm",
+	"get pir motion detect cfg": "PIR motion sensor",
+}
+
+func pairTitle(name string) string {
+	if t, ok := pairTitles[name]; ok {
+		return t
+	}
+	return name
+}
+
+// confidenceEffect is each Confidence as the sentence the Advanced page
+// shows on a document's row.
+var confidenceEffect = map[Confidence]string{
+	Proven:          "Tested: a field was changed, read back and restored.",
+	Unverified:      "Untested. The document is right; nobody has watched a write take effect.",
+	KnownInert:      "Accepted, but nothing changes on the camera. Seen on two models.",
+	UnsafeToRewrite: "Writing this cuts the stream for a second while the camera rebuilds its pipeline.",
 }

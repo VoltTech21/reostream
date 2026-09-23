@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -22,6 +23,12 @@ func (s *Server) serveProbe(w http.ResponseWriter, r *http.Request) {
 		probe = s.probeGuarded
 	}
 	rep := probe(r.Context(), r.FormValue("address"), r.FormValue("username"), r.FormValue("password"))
+
+	// The setup page asks for JSON and draws the stream checkboxes itself.
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		writeProbeJSON(w, rep)
+		return
+	}
 
 	t, err := s.tmpl.Clone()
 	if err != nil {
@@ -347,5 +354,49 @@ func describeDialError(err error) string {
 		return "the camera did not answer in time: check the address, and that nothing else is holding its session"
 	default:
 		return err.Error()
+	}
+}
+
+// probeJSON is /setup/probe's answer to the setup page: the streams that
+// can be pulled, each with one line saying what it is, or an error.
+type probeJSON struct {
+	Error   string            `json:"error,omitempty"`
+	Streams []probeJSONStream `json:"streams"`
+}
+
+type probeJSONStream struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail"`
+}
+
+func writeProbeJSON(w http.ResponseWriter, rep CameraReport) {
+	out := probeJSON{Streams: []probeJSONStream{}}
+	var skipped []string
+	for _, st := range rep.Streams {
+		switch {
+		case st.Absent:
+			continue
+		case st.Undetermined:
+			skipped = append(skipped, st.Name+": "+st.Reason)
+			continue
+		}
+		detail := fmt.Sprintf("%dx%d %s", st.Width, st.Height, st.Codec)
+		if strings.EqualFold(st.Codec, "hevc") || strings.EqualFold(st.Codec, "h265") {
+			detail += " · browsers cannot play this one"
+		}
+		out.Streams = append(out.Streams, probeJSONStream{Name: st.Name, Detail: detail})
+	}
+	if len(out.Streams) == 0 {
+		out.Error = rep.Err
+		if out.Error == "" {
+			out.Error = "the camera answered but offered no stream this daemon could read"
+		}
+		if len(skipped) > 0 {
+			out.Error += " (" + strings.Join(skipped, "; ") + ")"
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		log.Printf("reostream: control: encode probe: %v", err)
 	}
 }

@@ -45,6 +45,23 @@ type Field struct {
 	// and serveApplySetting applies both inside a single read-modify-write
 	// -- see parseEdits.
 	YPath string
+
+	// Slug is a stable id for the field's row. Governs, on a toggle, is
+	// the Slug of the row that toggle switches on and off.
+	Slug    string
+	Governs string
+
+	// Choices, on a Kind "choice" field, are the values offered as stops.
+	// Only the value the camera was seen holding is observed; the rest are
+	// the firmware's documented spellings. The camera's own value is always
+	// offered too, so a camera holding something unlisted keeps it.
+	Choices []Choice
+}
+
+// Choice is one stop on a Kind "choice" field.
+type Choice struct {
+	Value string
+	Label string
 }
 
 // Paths lists every element this field edits, primary first: one path for
@@ -98,13 +115,11 @@ type Group struct {
 	// where nothing switches anything a person or a camera can see happen;
 	// set for Lights and IR, where every field is an emitter.
 	ConfirmReason string
+	// InterruptsStream tags the heading of a group whose write makes the
+	// camera rebuild its pipeline. Blurb is the one plain line under it.
+	InterruptsStream bool
+	Blurb            string
 }
-
-// unsafeToRewriteWarning is shown next to a control that edits a block
-// UnsafeToRewrite flags, rather than hiding the control. It is worded for a
-// page shown before any write happens, unlike write.go's own wording, which
-// describes a write that already went out.
-const unsafeToRewriteWarning = "unsafe to rewrite: writing this block, even with only one field changed, makes the camera reconfigure its pipeline and interrupts the stream."
 
 // The overlay corner table, and how it was established.
 //
@@ -205,6 +220,7 @@ func groups() []Group {
 	return []Group{
 		{
 			Title: "Camera name and overlay",
+			Blurb: "What the camera burns into the picture. Safe to change while streaming.",
 			// "osd get" (44) is the live document on the RLC-810A this was
 			// verified against; "get osd" (29) answered 405 there but is a
 			// second, independently recovered pair for the same settings
@@ -214,44 +230,48 @@ func groups() []Group {
 			// discovered rather than assumed.
 			Blocks: []string{"osd get", "get osd"},
 			Fields: []Field{
-				{Label: "Camera name", XPath: "OsdChannelName/name", Kind: "text"},
-				{Label: "Show camera name", XPath: "OsdChannelName/enable", Kind: "toggle"},
+				{Label: "Camera name", XPath: "OsdChannelName/name", Kind: "text", Slug: "osd-name"},
+				{Label: "Show camera name", XPath: "OsdChannelName/enable", Kind: "toggle", Slug: "osd-name-show", Governs: "osd-name-position"},
 				// Two elements, one control. See the corner table above for
 				// what the values mean and how that was established.
-				{Label: "Camera name position", XPath: "OsdChannelName/topLeftX", YPath: "OsdChannelName/topLeftY", Kind: "position"},
-				{Label: "Show timestamp", XPath: "OsdDatetime/enable", Kind: "toggle"},
-				{Label: "Timestamp position", XPath: "OsdDatetime/topLeftX", YPath: "OsdDatetime/topLeftY", Kind: "position"},
+				{Label: "Camera name position", XPath: "OsdChannelName/topLeftX", YPath: "OsdChannelName/topLeftY", Kind: "position", Slug: "osd-name-position"},
+				{Label: "Show timestamp", XPath: "OsdDatetime/enable", Kind: "toggle", Slug: "osd-time-show", Governs: "osd-time-position"},
+				{Label: "Timestamp position", XPath: "OsdDatetime/topLeftX", YPath: "OsdDatetime/topLeftY", Kind: "position", Slug: "osd-time-position"},
 			},
 		},
 		{
-			Title:  "Image",
-			Blocks: []string{"isp get"},
+			Title:            "Image",
+			Blocks:           []string{"isp get"},
+			InterruptsStream: true,
+			Blurb:            "How the sensor exposes and colors the picture. Every save briefly interrupts the stream.",
 			Fields: []Field{
-				{Label: "Brightness", XPath: "VideoInput/bright", Kind: "number"},
-				{Label: "Contrast", XPath: "VideoInput/contrast", Kind: "number"},
-				{Label: "Saturation", XPath: "VideoInput/saturation", Kind: "number"},
-				{Label: "Day and night mode", XPath: "InputAdvanceCfg/DayNight/mode", Kind: "text"},
+				{Label: "Brightness", XPath: "VideoInput/bright", Kind: "number", Slug: "image-brightness"},
+				{Label: "Contrast", XPath: "VideoInput/contrast", Kind: "number", Slug: "image-contrast"},
+				{Label: "Saturation", XPath: "VideoInput/saturation", Kind: "number", Slug: "image-saturation"},
+				{Label: "Day and night mode", XPath: "InputAdvanceCfg/DayNight/mode", Kind: "choice", Slug: "image-daynight",
+					Choices: []Choice{{"auto", "Auto"}, {"color", "Color"}, {"blackAndWhite", "Black & white"}}},
 				// The infrared cut filter, corrected: see
 				// irLivesInImageWarning's comment for why this exists at
 				// all, despite an earlier version of this page claiming
 				// it did not.
-				{Label: "Infrared cut filter", XPath: "InputAdvanceCfg/DayNight/IrcutMode", Kind: "text"},
-				{Label: unsafeToRewriteWarning, Kind: "warning"},
+				{Label: "Infrared cut filter", XPath: "InputAdvanceCfg/DayNight/IrcutMode", Kind: "text", Slug: "image-ircut"},
 			},
 		},
 		{
 			Title:         "Lights and IR",
 			Blocks:        []string{"led get"},
 			ConfirmReason: lightsConfirmReason,
+			Blurb:         "Lights on the camera itself. Each change asks again first.",
 			Fields: []Field{
 				// LedState/state is a string enum ("auto" on the camera
 				// this was verified against), not the 0/1 boolean this
 				// field used to send: a numeric toggle would have written
 				// "0" or "1" into a field the camera never uses those
-				// values for. Free text, seeded from whatever string the
-				// camera actually holds, so a person edits the camera's
-				// own value rather than a guessed dropdown.
-				{Label: "Status LED", XPath: "LedState/state", Kind: "text"},
+				// values for. Stops for the firmware's spellings, and the
+				// camera's own value is always offered as well, so a camera
+				// holding something else is shown it rather than snapped.
+				{Label: "Status LED", XPath: "LedState/state", Kind: "choice", Slug: "led-state",
+					Choices: []Choice{{"auto", "Auto"}, {"open", "On"}, {"close", "Off"}}},
 				{Label: irLivesInImageWarning, Kind: "warning"},
 			},
 		},

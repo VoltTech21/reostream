@@ -1,307 +1,248 @@
 {{/*
-  camera.html: one camera, one page, two aspects. cameraPage (camerapage.go)
-  renders the dashboard's own stream state and video for this camera
-  (Group), the curated settings a person actually changes (Groups, from
-  settings.go's groups()) including the floodlight, which is not a Group
-  field because its write goes over CGI rather than a Baichuan block, and
-  only then what GetSupport and GetAbilities say the camera is plus the
-  probe table (Support/Abilities/Probes).
+  camera.html: one camera, two columns. cameraPage (camerapage.go) still
+  supplies exactly what it did: this camera's stream state and tile
+  (Group), the curated settings (Groups, from settings.go), the floodlight
+  (its write goes over CGI, not a Baichuan block), and what the camera
+  reports about itself.
 
-  The order is deliberate and was changed from the original: the three
-  tables the camera merely REPORTS (support, abilities, probes) used to sit
-  between the live tile and the settings, so the only controls on the page
-  were two screens down. They are reference, not controls, so they now live
-  below the controls and inside one closed <details>; the controls an
-  operator came here to touch start directly under the picture.
+  What changed:
+
+    - the raw xpath under each label is gone. This page changes settings;
+      it is not a view of the protocol. The message ids live on Advanced.
+    - a Kind "toggle" renders as a switch, not a two-option dropdown.
+    - a field whose switch is off is dimmed and disabled, via the
+      data-governs attribute settings.js reads.
+    - a group whose write interrupts the stream says so in its heading.
+      ConfirmReason still gates the submit.
+    - the three reference tables stay below the controls, closed.
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}</h1>
-<p class="hint">{{.Camera.Address}}</p>
+<p class="subtitle">{{.Camera.Address}}</p>
+
+<nav class="tabs">
+<a href="/cameras/{{.Camera.Name}}" aria-current="page">Overview</a>
+<a href="/cameras/{{.Camera.Name}}/advanced">Advanced</a>
+<a href="/cameras/{{.Camera.Name}}/time">Time</a>
+<a href="/cameras/{{.Camera.Name}}/accounts">Accounts</a>
+</nav>
+
 {{template "flash" .Flash}}
 
-<section>
-<h2>Live</h2>
+<div class="camera-cols">
+<div>
+
+<div class="card camcard">
 {{template "cameravideo" .Group}}
-{{if .Group.Rows}}
-<div class="card table-wrap">
-<table>
-<tr><th>Stream</th><th>State</th><th>FPS</th><th>Bitrate</th><th>Clients</th><th>Restarts</th></tr>
+<div class="camcard-body">
+<div class="streams">
 {{range .Group.Rows}}
-<tr>
-<td>{{.Name}}</td>
-<td class="state-{{.State}}">{{.State}}</td>
-<td>{{printf "%.1f" .FPS}}</td>
-<td>{{.MbpsBitrate}} Mbps</td>
-<td>{{.Clients}}</td>
-<td>{{.Restarts}}</td>
-</tr>
-{{end}}
-</table>
+<div class="streamline">
+<span class="stream-name"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{streamOf .Name}}</span>
+<span>{{printf "%.1f" .FPS}} fps</span>
+<span>{{.MbpsBitrate}} Mb</span>
+<span>{{.Clients}}c</span>
+<span>{{.Restarts}}r</span>
 </div>
 {{end}}
-</section>
+</div>
+</div>
+</div>
 
-<script src="/assets/mpegts.js"></script>
-<script>
-// Same discipline as the dashboard's own tile: nothing decodes until the
-// play button is clicked, so opening this page never starts a decode on
-// its own. See dashboard.html's own comment for why that matters at fleet
-// scale; a single camera page duplicates just enough of it to drive its
-// own one tile, since each page's body is rendered independently and
-// cannot call into the other's script.
-(function () {
-  var container = document.querySelector('.cam-video[data-src]');
-  if (!container) return;
-  var btn = container.querySelector('.play-btn');
-  var video = container.querySelector('video');
-  function start() {
-    if (!window.mpegts || !mpegts.isSupported()) return;
-    var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: container.dataset.src});
-    player.attachMediaElement(video);
-    player.load();
-    player.play();
-    video.setAttribute('controls', '');
-    btn.hidden = true;
-  }
-  btn.addEventListener('click', start);
-  video.addEventListener('click', function () {
-    if (!video.hasAttribute('controls')) start();
-  });
-})();
-</script>
+{{/* The first curated group sits in the left column under the tile, so
+     the page is not one tall stack beside an empty half. */}}
+{{range $i, $group := .Groups}}{{if eq $i 0}}{{template "settingsgroup" dict "G" $group "P" $}}{{end}}{{end}}
 
-{{/* Curated settings: Picture and OSD, and Lights and IR, from settings.go's groups(). */}}
-<h2>Settings</h2>
-{{if .SettingsErr}}<p class="outcome-refused">{{.SettingsErr}}</p>{{end}}
-{{range $group := .Groups}}
-<section>
-<h3>{{$group.Title}}</h3>
-{{if $group.ConfirmReason}}
-<p class="warning">{{$group.ConfirmReason}}</p>
-{{end}}
-<table>
-{{range $group.Fields}}
-{{if eq .Kind "warning"}}
-<tr><td colspan="2"><p class="warning">{{.Label}}</p></td></tr>
-{{else if index $.Unavailable .XPath}}
-{{/*
-  Finding 3: a curated field whose read failed, or whose path this camera's
-  document does not carry, must say so where the control would be, never
-  render as a blank editable input that only fails once someone submits it.
-*/}}
-<tr>
-<td>{{.Label}}</td>
-<td><p class="warning">not available: {{index $.Unavailable .XPath}}</p></td>
-</tr>
-{{else}}
-{{$current := index $.Values .XPath}}
-<tr>
-<td>{{.Label}}</td>
-<td>
-{{/*
-  Every form in a group that sets ConfirmReason asks before it submits,
-  every time, not once per session: this is the one place in the page
-  where a click has a physical effect a document can't be reasoned about
-  from afar, such as a light switching on in a shop at two in the
-  morning, and that must never be a stray click.
-*/}}
-<form method="post" action="/cameras/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
-<input type="hidden" name="block" value="{{index $.ResolvedBlock $group.Title}}">
-{{/*
-  FormXPath, not XPath: a control that changes two elements together (an
-  overlay's corner) names both here, comma separated, and the handler
-  applies them inside one read-modify-write. A one element field posts
-  exactly the string it always did.
-*/}}
-<input type="hidden" name="xpath" value="{{.FormXPath}}">
-{{if eq .Kind "toggle"}}
-<select name="value">
-<option value="0" {{if eq $current "0"}}selected{{end}}>off</option>
-<option value="1" {{if eq $current "1"}}selected{{end}}>on</option>
-</select>
-{{else if eq .Kind "position"}}
-{{/*
-  Where an overlay sits. One select, but two elements on the camera
-  (topLeftX and topLeftY): the option values carry both, in the same order
-  the hidden xpath above names them, so one submission is one write. See
-  settings.go's corner table for what the numbers mean and how that was
-  worked out.
+</div>
+<div>
 
-  A camera reporting a pair the table has no name for keeps it, selected and
-  spelled out, rather than being snapped to a corner nobody chose.
-*/}}
-{{$pos := $.Position .}}
-<select name="value">
-{{if $pos.Unknown}}<option value="{{$pos.Unknown}}" selected>{{$pos.Unknown}} (not a known corner)</option>{{end}}
-{{range $pos.Options}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
-</select>
-{{if $pos.Unknown}}<p class="hint">this camera reports {{$pos.Unknown}}, which is not one of the four
-positions this project has ever seen a camera use. only 1 and 65536 were ever observed, so whether
-anything in between works is unknown: picking a corner replaces this pair, and topLeftX and topLeftY
-stay editable as themselves under <a href="/cameras/{{$.Camera.Name}}/advanced">every block, as XML</a>.</p>{{end}}
-{{else if eq .Kind "number"}}
-{{/*
-  Brightness, contrast and saturation are far easier to judge by dragging
-  than by typing, but the camera reports its current value and NOT its
-  range: nothing in any document this project has read says what the
-  minimum and maximum for these fields are. So the slider is a convenience,
-  never a cage. It spans 0-255, which is what these fields use on the models
-  this project has seen, and the number box beside it carries name="value"
-  and stays free: it is the only input that is submitted, it is not clamped
-  to the slider, and on a model with a different scale an operator can still
-  type the value that model actually wants. SliderMin/SliderMax widen the
-  track when the camera's own current value falls outside 0-255, so the
-  slider never snaps a value the camera is already holding.
-*/}}
-<span class="slider">
-<input type="range" class="slider-range" aria-label="{{.Label}} slider"
-  min="{{$.SliderMin $current}}" max="{{$.SliderMax $current}}" step="1" value="{{$current}}">
-<input type="number" class="slider-box" name="value" value="{{$current}}">
-</span>
-{{else}}
-<input type="text" name="value" value="{{$current}}">
-{{end}}
-<button type="submit">set</button>
-</form>
-</td>
-</tr>
-{{end}}
-{{end}}
-</table>
-</section>
-{{end}}
-
-<script>
-// Keeps each slider and its number box showing the same value. The number
-// box is the authoritative one -- it is the input that posts -- so the
-// slider follows it only when the typed value is one the track can actually
-// represent; a value outside the track is left exactly as typed rather than
-// being pulled back to an assumed range.
-(function () {
-  var pairs = document.querySelectorAll('.slider');
-  for (var i = 0; i < pairs.length; i++) {
-    (function (wrap) {
-      var range = wrap.querySelector('input[type=range]');
-      var box = wrap.querySelector('input[type=number]');
-      if (!range || !box) return;
-      range.addEventListener('input', function () { box.value = range.value; });
-      box.addEventListener('input', function () {
-        var v = Number(box.value);
-        if (box.value !== '' && !isNaN(v) && v >= Number(range.min) && v <= Number(range.max)) {
-          range.value = box.value;
-        }
-      });
-    })(pairs[i]);
-  }
-})();
-</script>
+{{range $i, $group := .Groups}}{{if ne $i 0}}{{template "settingsgroup" dict "G" $group "P" $}}{{end}}{{end}}
 
 {{/*
-  The floodlight, from settings.go's floodlightOptions. It is not a Group
-  field: its write goes over CGI (SetWhiteLed), never over a Baichuan
-  block, because message 288 (floodlight set) is known inert on this
-  firmware. Same confirm-every-time rule as Lights and IR, spelled out
-  again here because this form lives outside Groups.
+  The floodlight is not a Group field: its write goes over CGI
+  (SetWhiteLed), because message 288 is known inert on this firmware.
+  Same confirm-every-time rule as Lights and IR.
 */}}
 <section>
-<h3>Floodlight</h3>
-<p class="warning">{{.FloodlightConfirm}}</p>
+<div style="display:flex;align-items:baseline;gap:8px">
+<h2>Lights</h2>
+<span class="tag">PHYSICAL EFFECT</span>
+</div>
+<p class="hint">These switch a real light on the camera the moment you pick one. reostream asks again first.</p>
 {{if .FloodlightErr}}<p class="outcome-refused">{{.FloodlightErr}}</p>{{end}}
-<table>
-<tr>
-<td>Floodlight</td>
-<td>
-<form method="post" action="/cameras/{{.Camera.Name}}/floodlight" onsubmit="return confirm('{{.FloodlightConfirm}}')">
-<select name="option">
+<div class="setting">
+<p>Floodlight</p>
+<form class="control" method="post" action="/cameras/{{.Camera.Name}}/floodlight" onsubmit="return confirm('{{.FloodlightConfirm}}')">
+{{/* Four stops, like an overlay's corner. Picking one submits through
+     the form's own onsubmit, so the confirmation still comes first, and a
+     cancelled confirmation puts the previous stop back. */}}
+<div class="segmented" role="radiogroup" aria-label="Floodlight">
 {{$currentFloodlight := .FloodlightCurrent}}
-{{range .FloodlightOptions}}
-<option value="{{.Value}}" {{if eq .Value $currentFloodlight}}selected{{end}}>{{.Value}}</option>
-{{end}}
-</select>
-<button type="submit">set</button>
+{{range .FloodlightOptions}}<label><input type="radio" name="option" value="{{.Value}}"{{if eq .Value $currentFloodlight}} checked{{end}}><span>{{.Value}}</span></label>{{end}}
+</div>
+<noscript><button type="submit">set</button></noscript>
 </form>
-</td>
-</tr>
-</table>
+</div>
 </section>
 
-<section>
-<h3>Time</h3>
-<p class="hint">NTP and the camera's timezone are a page of their own, because the
-write goes over CGI and nothing here writes the timezone at all:
-<a href="/cameras/{{.Camera.Name}}/time">set this camera's time</a>.</p>
-</section>
+</div>
+</div>
 
 {{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
 
 {{/*
-  Everything below is what the camera REPORTS about itself: nothing here
+  Everything below is what the camera REPORTS about itself. Nothing here
   changes anything, so it is closed by default and opens in place. Plain
   <details>, no script: a reference table that needs JavaScript to be
-  readable is a reference table that disappears the day the script breaks.
+  readable is one that disappears the day the script breaks.
 */}}
-<details class="reports">
-<summary>what this camera reports</summary>
+<details class="card reports">
+<summary class="hint">what this camera reports</summary>
 
 {{if .Support}}
-<div class="card table-wrap">
+<div class="table-wrap">
 <h3>What it says it is</h3>
 <table>
-<tr><td>Channels</td><td>{{.Support.Support.ChannelNum}}</td></tr>
-<tr><td>PTZ</td><td>{{if .Support.HasPTZ}}{{.Support.Support.PTZMode}}{{else}}none{{end}}</td></tr>
-<tr><td>Talk</td><td>{{if .Support.CanTalk}}yes{{else}}no{{end}}</td></tr>
-<tr><td>Extern stream</td><td>{{if .Support.HasExternStream}}yes{{else}}no{{end}}</td></tr>
-<tr><td>WiFi</td><td>{{if .Support.Support.WiFi}}yes{{else}}no{{end}}</td></tr>
-<tr><td>ONVIF</td><td>{{if .Support.Support.ONVIF}}yes{{else}}no{{end}}</td></tr>
+<tr><td>Channels</td><td class="mono">{{.Support.Support.ChannelNum}}</td></tr>
+<tr><td>PTZ</td><td class="mono">{{if .Support.HasPTZ}}{{.Support.Support.PTZMode}}{{else}}none{{end}}</td></tr>
+<tr><td>Talk</td><td class="mono">{{if .Support.CanTalk}}yes{{else}}no{{end}}</td></tr>
+<tr><td>Extern stream</td><td class="mono">{{if .Support.HasExternStream}}yes{{else}}no{{end}}</td></tr>
+<tr><td>WiFi</td><td class="mono">{{if .Support.Support.WiFi}}yes{{else}}no{{end}}</td></tr>
+<tr><td>ONVIF</td><td class="mono">{{if .Support.Support.ONVIF}}yes{{else}}no{{end}}</td></tr>
 </table>
 </div>
 {{end}}
 
 {{if .Abilities}}
-<div class="card table-wrap">
-<h3>What this user may do</h3>
+<div class="table-wrap">
+<h3>What this login may do</h3>
 <table>
 <tr><th>Module</th><th>Name</th><th>Access</th></tr>
 {{range .Abilities}}
-<tr><td>{{.Module}}</td><td>{{.Name}}</td><td>{{if .Writable}}read/write{{else}}read{{end}}</td></tr>
+<tr><td class="mono">{{.Module}}</td><td class="mono">{{.Name}}</td><td class="mono">{{if .Writable}}read/write{{else}}read{{end}}</td></tr>
 {{end}}
 </table>
 </div>
 {{end}}
 
 {{if .Probes}}
-<div class="card table-wrap">
+<div class="table-wrap">
 <h3>What it answers</h3>
-<p class="hint">A message this model does not implement answers 405 rather than dropping the connection,
-which is what makes asking about every known message safe, and is the only honest way to
-find out what a model has: no table can say it in advance.</p>
+<p class="hint">A message this model does not implement answers 405 rather than dropping the connection, which is what makes asking about every known message safe.</p>
 <table>
 <tr><th>Supported</th><th>Wants parameters</th><th>Absent</th><th>No answer</th></tr>
-<tr><td>{{.SupportedCount}}</td><td>{{.WantsParamsCount}}</td><td>{{.AbsentCount}}</td><td>{{.HungUpCount}}</td></tr>
-</table>
-<table>
-<tr><th>Message</th><th>ID</th><th>Status</th><th>Result</th></tr>
-{{range .Probes}}
-<tr>
-<td>{{.Name}}</td>
-<td>{{.ID}}</td>
-<td>{{.Status}}</td>
-<td>{{if .Supported}}supported{{else if .WantsParams}}wants parameters (400){{else if .Absent}}absent (405){{else if .HungUp}}no answer{{end}}</td>
-</tr>
-{{end}}
+<tr><td class="mono">{{.SupportedCount}}</td><td class="mono">{{.WantsParamsCount}}</td><td class="mono">{{.AbsentCount}}</td><td class="mono">{{.HungUpCount}}</td></tr>
 </table>
 </div>
 {{end}}
 </details>
 
-{{/*
-  The raw documents, last: it is the way out of this page for someone who
-  needs more than the curated fields. It lives outside the <details> above,
-  and only renders once a probe sweep has actually happened, because that
-  is what makes the link meaningful rather than a guess.
-*/}}
 {{if .Probes}}
-<p class="hint">Beyond the curated fields:
-<a href="/cameras/{{.Camera.Name}}/advanced">every block, as XML</a>.</p>
+<p class="hint">Beyond the curated settings: <a href="/cameras/{{.Camera.Name}}/advanced">every document this camera has</a>.</p>
 {{end}}
+
+<script src="/assets/mpegts.js"></script>
+<script src="/assets/settings.js"></script>
+{{end}}
+
+{{/*
+  One curated group. dict is the helper described in NOTES.md; G is the
+  group, P is the page, because a template called from inside range needs
+  both and Go templates have one dot.
+*/}}
+{{define "settingsgroup"}}
+{{$group := .G}}{{$ := .P}}
+<section>
+<div style="display:flex;align-items:baseline;gap:8px">
+<h2>{{$group.Title}}</h2>
+{{if $group.InterruptsStream}}<span class="tag stream">INTERRUPTS THE STREAM</span>{{end}}
+{{if and $group.ConfirmReason (not $group.InterruptsStream)}}<span class="tag">PHYSICAL EFFECT</span>{{end}}
+</div>
+{{if $group.Blurb}}<p class="hint">{{$group.Blurb}}</p>{{end}}
+{{if $.SettingsErr}}<p class="outcome-refused">{{$.SettingsErr}}</p>{{end}}
+
+{{range $group.Fields}}
+{{if eq .Kind "warning"}}
+{{/* A caveat that is not attached to one control. Kept, but out of the
+     reading path: it is a ! the operator can open. */}}
+<details class="help warn">
+<summary><span class="mark">!</span>Before you change these</summary>
+<p>{{.Label}}</p>
+</details>
+{{else if index $.Unavailable .XPath}}
+{{/* A curated field whose read failed, or whose path this camera's
+     document does not carry, says so where the control would be: never a
+     blank editable input that only fails once someone submits it. */}}
+<div class="setting">
+<p>{{.Label}}</p>
+<p class="warning">not available: {{index $.Unavailable .XPath}}</p>
+</div>
+{{else}}
+{{$current := index $.Values .XPath}}{{$field := .}}
+<div class="setting" id="row-{{.Slug}}">
+<p>{{.Label}}</p>
+<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
+<input type="hidden" name="block" value="{{index $.ResolvedBlock $group.Title}}">
+{{/* FormXPath, not XPath: a control that changes two elements together
+     (an overlay's corner) names both here, comma separated, and the
+     handler applies them inside one read-modify-write. */}}
+<input type="hidden" name="xpath" value="{{.FormXPath}}">
+
+{{if eq .Kind "toggle"}}
+{{/* A switch, not a dropdown. The hidden value is what posts; the switch
+     sets it and submits. Governs names the row this switch controls, so
+     a position select under an overlay that is off reads as inert. */}}
+<input type="hidden" name="value" value="{{$current}}">
+<button type="button" class="switch" aria-pressed="{{if eq $current "1"}}true{{else}}false{{end}}"
+  aria-label="{{.Label}}"{{if .Governs}} data-governs="row-{{.Governs}}"{{end}}><span class="knob"></span></button>
+
+{{else if eq .Kind "position"}}
+{{/* Where an overlay sits: four stops, one per corner, each carrying both
+     elements in the order the hidden xpath names them, so one tap is one
+     write. Choosing a stop submits, the way a switch does; the set button
+     is only there for a browser with no script. A camera reporting a pair
+     the table has no name for keeps it: no stop is lit, and the note says
+     what the camera holds. */}}
+{{$pos := $.Position .}}
+<div class="segmented" role="radiogroup" aria-label="{{.Label}}">
+{{range $pos.Options}}<label class="corner-{{.Value}}"><input type="radio" name="value" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Label}}</span></label>{{end}}
+</div>
+<noscript><button type="submit">set</button></noscript>
+{{if $pos.Unknown}}<p class="hint">This camera holds {{$pos.Unknown}}, a position this project has never seen a camera use. Picking a corner replaces it.</p>{{end}}
+{{if $pos.NotRead}}<p class="hint">Not read from the camera.</p>{{end}}
+
+{{else if eq .Kind "choice"}}
+{{/* A few named values, as stops. Picking one saves it (through the
+     group's confirmation, where it has one). */}}
+{{$choice := $.Choice .}}
+<div class="segmented" role="radiogroup" aria-label="{{.Label}}" style="grid-template-columns:repeat({{len $choice.Options}},minmax(0,1fr))">
+{{range $choice.Options}}<label><input type="radio" name="value" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Label}}</span></label>{{end}}
+</div>
+<noscript><button type="submit">set</button></noscript>
+{{if $choice.NotRead}}<p class="hint">Not read from the camera.</p>{{end}}
+
+{{else if eq .Kind "number"}}
+{{/* The camera reports its current value and NOT its range, so the
+     slider is a convenience and never a cage: the box carries name=value,
+     is the only input submitted, and is not clamped to the track. */}}
+<span class="slider">
+<input type="range" class="slider-range" aria-label="{{.Label}} slider"
+  min="{{$.SliderMin $current}}" max="{{$.SliderMax $current}}" step="1" value="{{$current}}">
+<input type="number" class="slider-box" name="value" value="{{$current}}">
+</span>
+<button type="submit">set</button>
+
+{{else}}
+<input type="text" name="value" value="{{$current}}">
+<button type="submit">set</button>
+{{end}}
+{{/* The camera's own factory value, offered only when it reported one
+     and this field does not already hold it. settings.js fills the
+     value in and saves it the way the control itself would. */}}
+{{with $.Reset .}}<button type="button" class="linkish reset" data-default="{{.}}" title="factory default: {{$.ResetLabel $field .}}">&#8634; reset to {{$.ResetLabel $field .}}</button>{{end}}
+</form>
+</div>
+{{end}}
+{{end}}
+</section>
 {{end}}

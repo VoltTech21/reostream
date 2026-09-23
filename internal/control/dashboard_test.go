@@ -234,11 +234,24 @@ func TestDashboardNeverAutoplays(t *testing.T) {
 		t.Fatal("dashboard video element carries autoplay")
 	}
 
+	// The tile behaviour lives in /assets/dashboard.js; the page only
+	// loads it, so the checks below read the script itself.
+	if !strings.Contains(page, `<script src="/assets/dashboard.js"></script>`) {
+		t.Fatal("dashboard does not load its script")
+	}
+	js, err := http.Get(ts.URL + "/assets/dashboard.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer js.Body.Close()
+	script, _ := io.ReadAll(js.Body)
+	page = string(script)
+
 	// The only script that runs unconditionally at load is the wiring loop
 	// that attaches click handlers. It must never itself call
 	// mpegts.createPlayer: that call may only happen from inside
 	// startPlayer, invoked by a click.
-	loopStart := strings.Index(page, "for (const container of document.querySelectorAll")
+	loopStart := strings.Index(page, "document.querySelectorAll('.cam-video[data-src]').forEach")
 	if loopStart == -1 {
 		t.Fatal("dashboard is missing the click-wiring loop")
 	}

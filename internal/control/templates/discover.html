@@ -1,28 +1,29 @@
 {{define "discover"}}
 {{if .Err}}
-<p class="state-down">{{.Err}}</p>
+<p class="outcome-refused">{{.Err}}</p>
 {{else}}
-<p>swept {{.Scanned}} addresses in {{.Range}} on port 9000.</p>
-{{if .Configured}}
-<p>{{.Configured}} of them answered but are already added, so they were left alone.</p>
-{{end}}
+<p class="hint">Swept {{.Scanned}} addresses in {{.Range}} on port 9000.{{if .Configured}} {{.Configured}} of them answered but are already added, so they were left alone.{{end}}</p>
 {{if not .Found}}
-<p>nothing else answered. a camera has to be powered on and on this network to be found here; if you know its address, type it above instead.</p>
+<p class="hint">Nothing else answered. A camera has to be powered on and on this network to
+be found here; if you know its address, type it above instead.</p>
 {{else}}
 {{range .Found}}
 <div class="card">
-<p><strong>{{.Address}}</strong>
-{{if .Report.Err}}<span class="state-down">{{.Report.Err}}</span>{{else}}&mdash; {{.Report.Model}}{{end}}</p>
+<div class="camcard-head">
+<strong>{{.Address}}</strong>
+{{if .Report.Err}}<span class="pill state-down">{{.Report.Err}}</span>{{else}}<span class="tag">{{.Report.Model}}</span>{{end}}
+</div>
 {{if .Report.Streams}}
+<div class="table-wrap">
 <table>
-<tr><th>stream</th><th>codec</th><th>resolution</th></tr>
+<tr><th>Stream</th><th>Codec</th><th>Resolution</th></tr>
 {{range .Report.Streams}}
 <tr>
 <td>{{.Name}}</td>
 {{if .Absent}}
-<td colspan="2">not offered by this camera</td>
+<td colspan="2" class="hint">Not offered by this camera</td>
 {{else if .Undetermined}}
-<td colspan="2" class="state-undetermined">could not determine: {{.Reason}}</td>
+<td colspan="2" class="state-undetermined">Could not determine: {{.Reason}}</td>
 {{else}}
 <td>{{.Codec}}</td>
 <td>{{.Width}}x{{.Height}}</td>
@@ -30,8 +31,9 @@
 </tr>
 {{end}}
 </table>
+</div>
 {{end}}
-<button type="button" class="use-found" data-address="{{.Address}}" data-streams="{{range .Report.Streams}}{{if and (not .Absent) (not .Undetermined)}}{{.Name}} {{end}}{{end}}">use this one</button>
+<button type="button" class="use-found quiet" data-address="{{.Address}}" data-streams="{{range .Report.Streams}}{{if and (not .Absent) (not .Undetermined)}}{{.Name}} {{end}}{{end}}">Use this one</button>
 </div>
 {{end}}
 {{end}}

@@ -1,115 +1,104 @@
 {{/*
-  Time: NTP server and enabled, over CGI SetNtp, and the camera's timezone,
-  over CGI SetTime. See time.go for why both go over CGI: no Baichuan
-  set-time message has ever been recovered, so CGI is the only path either
-  setting has.
+  Time: NTP server and enabled, over CGI SetNtp, and the camera's
+  timezone, over CGI SetTime. See time.go for why both go over CGI.
 
-  Each form carries an "apply to every camera" checkbox, unticked, which is
-  what remains of the /fleet/apply page this replaced. Unticked is the
-  default on purpose: a form submitted without thinking writes the camera
-  whose page this is, and nothing else.
+  Each form carries an "apply to all cameras" checkbox, unticked. Unticked
+  is the default on purpose: a form submitted without thinking writes the
+  camera whose page this is, and nothing else.
 
-  Results, when present, is one row per camera, always, even when every row
-  confirmed: a single summary line over a partial apply is the lie
-  applyAll's own comment in fleet.go warns against, and this table is what
-  keeps that from happening on the page too.
+  The raw seconds-west-of-UTC field is gone from the page: an operator
+  setting a camera's clock picks a zone. TimeZoneChoices still posts the
+  raw number, and a camera holding an offset no choice matches keeps it as
+  its own selected option rather than being rounded away.
 */}}
 {{define "body"}}
-<h1>{{.Camera.Name}}: time</h1>
+<h1>{{.Camera.Name}}</h1>
+<p class="subtitle">{{.Camera.Address}}</p>
+
+<nav class="tabs">
+<a href="/cameras/{{.Camera.Name}}">Overview</a>
+<a href="/cameras/{{.Camera.Name}}/advanced">Advanced</a>
+<a href="/cameras/{{.Camera.Name}}/time" aria-current="page">Time</a>
+<a href="/cameras/{{.Camera.Name}}/accounts">Accounts</a>
+</nav>
+
 {{template "flash" .Flash}}
+
+<details class="help">
+<summary><span class="mark">?</span>How these are written</summary>
+<p>Both go over the camera's CGI API. No Baichuan set-time message has ever been recovered, so that is the only path there is.</p>
+</details>
+
+<div class="camera-cols">
+<div>
 
 <section>
 <h2>NTP</h2>
 {{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
-{{/*
-  onsubmit asks only when the box is ticked: a one-camera write is the same
-  write this form has always made and never asked about, but eight cameras
-  at once is worth a second look. this.every is the checkbox by name.
-*/}}
+{{/* onsubmit asks only when the box is ticked: one camera is the write
+     this form has always made, the whole fleet is worth a second look. */}}
 <form method="post" action="/cameras/{{.Camera.Name}}/time" onsubmit="return !this.every.checked || confirm('write this ntp server to every camera in the fleet?')">
-<table>
-<tr>
-<td>Enabled</td>
-<td>
-<select name="enabled">
-<option value="0" {{if not .NTPEnabled}}selected{{end}}>off</option>
-<option value="1" {{if .NTPEnabled}}selected{{end}}>on</option>
-</select>
-</td>
-</tr>
-<tr>
-<td>Server</td>
-<td><input type="text" name="server" value="{{.NTPServer}}"></td>
-</tr>
-<tr>
-<td><label for="ntp-every">Every camera</label></td>
-<td><label><input type="checkbox" id="ntp-every" name="every" value="1"> apply to every camera, not just {{.Camera.Name}}</label></td>
-</tr>
-</table>
+<div class="setting">
+<p>Enabled</p>
+<div class="control">
+{{/* A switch, but one that does not save by itself: this form also
+     carries the server and the every-camera box, and the set button below
+     sends all three together. */}}
+<input type="hidden" name="enabled" value="{{if .NTPEnabled}}1{{else}}0{{end}}">
+<button type="button" class="switch" data-field="enabled" data-hold aria-label="NTP enabled" aria-pressed="{{if .NTPEnabled}}true{{else}}false{{end}}"><span class="knob"></span></button>
+</div>
+</div>
+<div class="setting">
+<p>Server</p>
+<div class="control"><input type="text" name="server" value="{{.NTPServer}}" style="width:14rem"></div>
+</div>
+<div class="setting">
+<p><label for="ntp-every">Apply to all cameras</label></p>
+<div class="control"><input type="checkbox" id="ntp-every" name="every" value="1"></div>
+</div>
 <button type="submit">set</button>
 </form>
 </section>
 
 <section>
 <h2>Timezone</h2>
-<p class="hint">Written over CGI SetTime, not Baichuan: no set-time message exists in the recovered table, so this is the only path there is. Raw CGI value. The sign convention IS confirmed: a camera reporting 21600 was showing 09:15:29 in its overlay while the host clock read 14:15:34 UTC, so the field counts seconds west of UTC and 21600 is UTC&minus;06:00.</p>
 {{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
-<p>The camera reports <strong>{{.TimeZoneLabel}}</strong>, which it holds as
-<code>{{.TimeZone}}</code> &mdash; seconds <em>west</em> of UTC, so the number and the
-label carry opposite signs.</p>
-<p class="hint">That is the standard offset. A camera applies its own daylight saving
-rule on top of it, so the clock in the picture can read an hour off this and still be
-right. Nothing on this page changes that rule.</p>
+<p class="hint">This camera is set to <strong>{{.TimeZoneLabel}}</strong>. It applies its own daylight saving on top, so the clock in the picture can read an hour off this and still be right.</p>
 {{end}}
 <form method="post" action="/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('write this timezone to every camera in the fleet?')">
-<table>
-<tr>
-<td>Timezone</td>
-<td>
-<select class="tz-pick" aria-label="common offsets">
-<option value="">pick an offset&hellip;</option>
+<div class="setting">
+<p>Timezone</p>
+<div class="control">
+<select name="timezone" style="width:17rem">
+{{if .TimeZoneUnlisted}}<option value="{{.TimeZone}}" selected>{{.TimeZoneLabel}} (as this camera holds it)</option>{{end}}
 {{range .TimeZoneChoices}}<option value="{{.Seconds}}"{{if eq .Seconds $.TimeZone}} selected{{end}}>{{.Label}}</option>
 {{end}}</select>
-{{/* The raw field stays authoritative. The picker only fills it in: a
-     camera already holding an offset that is not a whole or half hour
-     must not have it rounded away by a dropdown that has no entry for
-     it. */}}
-<input type="number" class="tz-raw" name="timezone" value="{{.TimeZone}}">
-</td>
-</tr>
-<tr>
-<td><label for="tz-every">Every camera</label></td>
-<td><label><input type="checkbox" id="tz-every" name="every" value="1"> apply to every camera, not just {{.Camera.Name}}</label></td>
-</tr>
-</table>
 <button type="submit">set</button>
+</div>
+</div>
+<div class="setting">
+<p><label for="tz-every">Apply to all cameras</label></p>
+<div class="control"><input type="checkbox" id="tz-every" name="every" value="1"></div>
+</div>
 </form>
 </section>
 
+</div>
+<div>
+
 {{if .Results}}
-<section class="table-wrap">
-<h2>Every camera{{if .ResultsTarget}}: {{.ResultsTarget}}{{end}}</h2>
-<p class="hint">One row per camera. A camera failing did not stop the rest from being tried, and a camera that answered success without changing anything reads as accepted, not confirmed.</p>
+<section>
+<h2>Applied to every camera{{if .ResultsTarget}}: {{.ResultsTarget}}{{end}}</h2>
+<p class="hint">One row per camera, always. A camera that failed did not stop the rest from being tried, and a camera that answered success without changing anything reads as accepted, not confirmed.</p>
 <table>
 <tr><th>Camera</th><th>Outcome</th><th>Detail</th></tr>
 {{range .Results}}
-<tr><td>{{.Camera}}</td><td class="outcome-{{.Outcome}}">{{.Outcome}}</td><td>{{.Detail}}</td></tr>
+<tr><td>{{.Camera}}</td><td class="outcome-{{.Outcome}}">{{.Outcome}}</td><td class="mono">{{.Detail}}</td></tr>
 {{end}}
 </table>
 </section>
 {{end}}
-<script>
-// The picker writes into the number box; the number box is what posts.
-for (const pick of document.querySelectorAll('.tz-pick')) {
-  const raw = pick.parentNode.querySelector('.tz-raw');
-  pick.addEventListener('change', function() {
-    if (pick.value !== '') raw.value = pick.value;
-  });
-  // Typing an offset the picker has no entry for clears the picker rather
-  // than leaving it pointing at something the field no longer says.
-  raw.addEventListener('input', function() {
-    pick.value = [...pick.options].some(o => o.value === raw.value) ? raw.value : '';
-  });
-}
-</script>
+
+</div>
+</div>
 {{end}}

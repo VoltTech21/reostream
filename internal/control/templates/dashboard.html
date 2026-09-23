@@ -1,76 +1,88 @@
 {{/*
-  dashboard.html: one card per CAMERA, not per stream. statusCard
-  (dashboard.go) carries everything one camera is doing -- its address,
-  every stream's state and URL, its picture, and the two overlay switches
-  -- so a camera pulling main, sub and extern is one card, not three.
+  dashboard.html: one card per CAMERA, not per stream, laid out as a grid.
+  statusCard (dashboard.go) carries everything one camera is doing.
 
-  Nothing in the rendered page contacts a camera. The overlay switches
-  start disabled and are filled in afterwards, one fetch per camera, from
-  GET /cameras/{name}/osd; see osd.go for why that read cannot happen while
-  the page is being rendered.
+  Three things changed from the previous version of this page:
+
+    - the tile shows the camera's last keyframe (GET /<cam>.keyframe),
+      which costs the daemon no decode, instead of a black rectangle. The
+      live stream still starts only when the tile is pressed.
+    - each camera has ONE state pill, beside its name. The per-stream dots
+      remain, because a camera can be up with one stream sick.
+    - a camera that is down gets a fleet-level line above the grid rather
+      than a red row inside a card, so it is found without scanning.
+
+  Card.State is the camera-level state; see NOTES.md for the small Go
+  change that supplies it.
 */}}
 {{define "body"}}
-<h1>Status</h1>
+<div class="pagehead">
+<div>
+<h1>Fleet</h1>
+<p class="subtitle">{{.HealthyCount}} of {{len .Cards}} cameras are healthy.</p>
+</div>
+<div class="actions">
+<button type="button" class="quiet" id="copy-all">Copy all URLs</button>
+<a href="/setup"><button type="button">Add a camera</button></a>
+</div>
+</div>
+
 {{template "flash" .Flash}}
-<div class="statuslist">
+
+{{range .Alerts}}
+<div class="alert">
+<span>{{.Sentence}}</span>
+<code class="exact">{{.Detail}}</code>
+<a href="/cameras/{{.Camera}}">Open {{.Camera}} &rarr;</a>
+</div>
+{{end}}
+
+<div class="fleet">
 {{$toggles := .Toggles}}
 {{range .Cards}}
 {{$camera := .Camera}}
-<div class="card statuscard" data-camera="{{$camera}}">
-<div class="statuscard-video">{{template "cameravideo" .}}</div>
-<div class="statuscard-body">
+<div class="card camcard" data-camera="{{$camera}}">
+{{template "cameravideo" .}}
+<div class="camcard-body">
 
-<div class="statuscard-head">
+<div class="camcard-head">
 <a class="cam-name" href="/cameras/{{$camera}}">{{$camera}}</a>
-{{if .Address}}<span class="metric">{{.Address}}</span>{{end}}
-<a class="tool head-link" href="/cameras/{{$camera}}">camera page &rarr;</a>
+<span class="pill state-{{.State}}">{{.State}}</span>
+{{if .Address}}<code class="exact">{{.Address}}</code>{{end}}
 </div>
 
 {{if not .Streams}}
-<p class="streamline"><span class="pill state-unknown">no status yet</span></p>
+<p><span class="pill state-unknown">no status yet</span></p>
 {{end}}
+
+<div class="streams">
 {{range .Streams}}
 <div class="streamline">
-<span class="stream-name">{{.Stream}}</span>
-<span class="pill state-{{.State}}">{{.State}}</span>
-<span class="metric">{{printf "%.1f" .FPS}} fps</span>
-<span class="metric">{{.MbpsBitrate}} Mbps</span>
-<span class="metric">{{.Clients}} clients</span>
-{{/* The last error is shown beside a stream only while that stream is
-     actually unwell. StreamStatus.LastError is the last error EVER seen,
-     not a current one, so rendering it unconditionally put a red line next
-     to a camera delivering twenty frames a second -- which is what the
-     supervisor recovering from a dropped connection looks like once it has
-     recovered. A healthy stream carries it on its restart count instead,
-     where the number is already saying that something happened and the
-     hover says what. */}}
-{{if .LastError}}
-<span class="metric" title="last error: {{.LastError}}">{{.Restarts}} restarts &#9432;</span>
-{{else}}
-<span class="metric">{{.Restarts}} restarts</span>
-{{end}}
-{{if and .LastError (ne .State "streaming")}}<span class="lasterror">{{.LastError}}</span>{{end}}
+<span class="stream-name"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{.Stream}}</span>
+<span>{{printf "%.1f" .FPS}} fps</span>
+<span>{{.MbpsBitrate}} Mb</span>
+<span>{{.Clients}}c</span>
+{{/* The restart count carries the last error on hover: LastError is the
+     last error EVER seen, not a current one, so it must not render as a
+     red line beside a camera delivering twenty frames a second. */}}
+{{if .LastError}}<span title="last error: {{.LastError}}">{{.Restarts}}r &#9432;</span>{{else}}<span>{{.Restarts}}r</span>{{end}}
 </div>
 {{if .URL}}
-<div class="streamurl-line">
-<code class="streamurl">{{.URL}}</code>
+<div class="streamurl">
+<code>{{.URL}}</code>
 <button type="button" class="linkish copy-btn" data-copy="{{.URL}}">copy</button>
 </div>
 {{end}}
 {{end}}
+</div>
 
-<div class="statuscard-tools">
+<div class="camcard-tools">
 {{range $toggles}}
-{{/* The write goes to the settings handler every other curated field
-     already writes through. block is left empty until the OSD read says
-     which block this camera answered on, and the checkbox stays disabled
-     until then: a toggle that posted a guessed block name would be a
-     write this page cannot stand behind. */}}
-<form class="osd-toggle" method="post" action="/cameras/{{$camera}}/settings"
-  data-xpath="{{.XPath}}">
-{{/* Where the write reports back to. Without it the settings handler
-     would send a toggle from this fleet view onto one camera's page,
-     which is not where the operator was. */}}
+{{/* block is left empty until the OSD read says which block this camera
+     answered on, and the switch stays disabled until then: a toggle that
+     posted a guessed block name would be a write this page cannot stand
+     behind. */}}
+<form class="osd-toggle" method="post" action="/cameras/{{$camera}}/settings" data-xpath="{{.XPath}}">
 <input type="hidden" name="return" value="/">
 <input type="hidden" name="block" value="">
 <input type="hidden" name="xpath" value="{{.XPath}}">
@@ -78,7 +90,6 @@
 <label title="reading this camera"><input type="checkbox" disabled> {{.Label}}</label>
 </form>
 {{end}}
-<a class="tool" href="/cameras/{{$camera}}/time">sync time</a>
 </div>
 
 </div>
@@ -87,150 +98,20 @@
 </div>
 
 <script src="/assets/mpegts.js"></script>
-<script>
-// A camera's video area starts nothing on its own: with eight cameras on
-// this fleet, creating a player for every tile at page load meant eight
-// simultaneous MPEG-TS decodes the instant the dashboard opened, which is
-// what pegged the operator's CPU and RAM. Nothing decodes until a tile is
-// clicked, and starting one tile always stops whatever tile was already
-// running, so at most one stream is ever being decoded in this tab.
-function startPlayer(container) {
-  if (!window.mpegts || !mpegts.isSupported()) return;
-  stopActive();
-  const src = container.dataset.src;
-  const video = container.querySelector('video');
-  const btn = container.querySelector('.play-btn');
-  const player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: src});
-  player.attachMediaElement(video);
-  player.load();
-  player.play();
-  video.setAttribute('controls', '');
-  btn.hidden = true;
-  active = {player: player, video: video, btn: btn};
-}
-
-var active = null;
-
-function stopActive() {
-  if (!active) return;
-  // Pausing the <video> element is not enough: mpegts.js keeps pulling the
-  // stream over XHR even while paused, which would leave the daemon
-  // streaming to a tab nobody is watching, the same bug in a quieter form.
-  // destroy() actually closes the fetch, which is what drops this tab out
-  // of the stream's /api/status client count.
-  try { active.player.pause(); } catch (e) {}
-  try { active.player.unload(); } catch (e) {}
-  try { active.player.detachMediaElement(); } catch (e) {}
-  active.player.destroy();
-  active.video.removeAttribute('controls');
-  active.btn.hidden = false;
-  active = null;
-}
-
-for (const container of document.querySelectorAll('.cam-video[data-src]')) {
-  const btn = container.querySelector('.play-btn');
-  const video = container.querySelector('video');
-  btn.addEventListener('click', function() { startPlayer(container); });
-  video.addEventListener('click', function() {
-    if (!video.hasAttribute('controls')) startPlayer(container);
-  });
-}
-
-// Copying a stream URL. navigator.clipboard is absent on a page served
-// over plain HTTP to anything but localhost, which is how this page is
-// normally reached, so the fallback is a selection the operator can copy
-// with the keyboard rather than a button that silently does nothing.
-for (const btn of document.querySelectorAll('.copy-btn')) {
-  btn.addEventListener('click', function() {
-    const text = btn.dataset.copy;
-    const said = function(word) {
-      btn.textContent = word;
-      setTimeout(function() { btn.textContent = 'copy'; }, 1200);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function() { said('copied'); },
-        function() { selectURL(btn); });
-      return;
-    }
-    selectURL(btn);
-  });
-}
-
-function selectURL(btn) {
-  const code = btn.parentNode.querySelector('.streamurl');
-  if (!code) return;
-  const range = document.createRange();
-  range.selectNodeContents(code);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
-// The overlay switches, filled in after the page is already on screen.
-// One fetch per camera, each independent: a camera that does not answer
-// leaves its own two switches unavailable, with the reason on hover, and
-// costs the rest of the page nothing.
-for (const card of document.querySelectorAll('.statuscard[data-camera]')) {
-  loadOSD(card);
-}
-
-function loadOSD(card) {
-  const camera = card.dataset.camera;
-  const forms = card.querySelectorAll('.osd-toggle');
-  fetch('/cameras/' + encodeURIComponent(camera) + '/osd', {
-    headers: {'Accept': 'application/json'}
-  }).then(function(r) {
-    // A non-2xx here is not a camera that failed -- osd.go answers those
-    // 200 with a reason -- it is this browser's session having expired,
-    // which the auth wrapper answers with a redirect to /login.
-    if (!r.ok) throw new Error('not signed in any more (' + r.status + ')');
-    return r.json();
-  }).then(function(flags) {
-    for (const form of forms) {
-      const field = (flags.fields || {})[form.dataset.xpath];
-      if (flags.error) { markUnavailable(form, flags.error); continue; }
-      if (!field) { markUnavailable(form, 'this camera does not report it'); continue; }
-      if (field.unavailable) { markUnavailable(form, field.unavailable); continue; }
-      enableToggle(form, flags.block, field.on);
-    }
-  }).catch(function(err) {
-    for (const form of forms) markUnavailable(form, String(err.message || err));
-  });
-}
-
-function markUnavailable(form, reason) {
-  const label = form.querySelector('label');
-  label.classList.add('unavailable');
-  label.title = reason;
-}
-
-function enableToggle(form, block, on) {
-  const box = form.querySelector('input[type=checkbox]');
-  const label = form.querySelector('label');
-  form.querySelector('input[name=block]').value = block;
-  box.checked = on;
-  box.disabled = false;
-  label.title = block;
-  box.addEventListener('change', function() {
-    // "1" and "0" are what the camera's own document uses for these two
-    // fields. The write is a normal form post to the settings handler,
-    // which reads the camera's document fresh and changes only this
-    // field; the result page it renders is the same one every other
-    // curated write reports through.
-    form.querySelector('input[name=value]').value = box.checked ? '1' : '0';
-    form.submit();
-  });
-}
-</script>
+<script src="/assets/dashboard.js"></script>
 {{end}}
 
 {{define "cameravideo"}}
+<div class="cam-video"{{if .Tile.Playable}} data-src="{{.Tile.URL}}"{{end}}>
+{{/* The keyframe endpoint serves the most recent keyframe with no decode
+     in the serving path, so a grid of six tiles costs six cheap GETs. */}}
+<img src="/{{.Camera}}.keyframe" alt="" loading="lazy" onerror="this.remove()">
 {{if .Tile.Playable}}
-<div class="cam-video" data-src="{{.Tile.URL}}">
-<video muted playsinline></video>
-<button type="button" class="play-btn">Play {{.Camera}}</button>
-</div>
+<video muted playsinline hidden></video>
+<button type="button" class="play-btn" aria-label="Play {{.Camera}}">&#9654;</button>
+<span class="caption">press &#9654; for live</span>
 {{else}}
-<p class="hint">No browser playable stream on this camera. Its streams are HEVC, which browsers here do not decode.</p>
+<span class="caption">no browser playable stream &mdash; this camera is HEVC only</span>
 {{end}}
+</div>
 {{end}}

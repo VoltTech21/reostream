@@ -21,6 +21,10 @@ type cameraPage struct {
 	Title  string
 	Camera Camera
 
+	// Defaults is the camera's own factory value for a field, keyed by the
+	// field's primary XPath, where the camera reported one. See defaults.go.
+	Defaults map[string]string
+
 	// Flash is the one-line report a write on this page left behind -- a
 	// curated setting or the floodlight -- or nil when this page was
 	// simply opened. See flash.go.
@@ -162,6 +166,9 @@ type positionOption struct {
 type positionView struct {
 	Options []positionOption
 	Unknown string
+	// NotRead is true when the camera gave no value at all, so no corner
+	// can honestly be shown as selected.
+	NotRead bool
 }
 
 // Position is camera.html's view of one Kind "position" field: the four
@@ -183,7 +190,12 @@ func (p cameraPage) Position(f Field) positionView {
 			Selected: selected,
 		})
 	}
-	if !known {
+	switch {
+	case x == "" && y == "":
+		// Nothing was read, which is not the same as an unknown corner:
+		// the page says so rather than inventing a "," position.
+		view.NotRead = true
+	case !known:
 		view.Unknown = x + "," + y
 	}
 	return view
@@ -328,11 +340,75 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	defer floodlightCancel()
 	if c, cgiErr := s.cgiDial(cam); cgiErr != nil {
 		page.FloodlightErr = fmt.Sprintf("could not connect for the floodlight: %v", cgiErr)
-	} else if mode, state, readErr := readFloodlight(floodlightCtx, c); readErr != nil {
-		page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
 	} else {
-		page.FloodlightCurrent = floodlightState(mode, state)
+		if mode, state, readErr := readFloodlight(floodlightCtx, c); readErr != nil {
+			page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
+		} else {
+			page.FloodlightCurrent = floodlightState(mode, state)
+		}
+		// Same session: the camera's own factory defaults, for the reset
+		// buttons. Best effort; a camera that will not say offers none.
+		page.Defaults = readDefaults(floodlightCtx, c)
 	}
 
 	s.render(w, "camera.html", page)
+}
+
+// choiceView is a Kind "choice" field's stops, with the camera's own value
+// selected, and added as its own stop when it is not one of Choices.
+type choiceView struct {
+	Options []positionOption
+	NotRead bool
+}
+
+func (p cameraPage) Choice(f Field) choiceView {
+	current := p.Values[f.XPath]
+	view := choiceView{NotRead: current == ""}
+	known := false
+	for _, c := range f.Choices {
+		selected := c.Value == current
+		known = known || selected
+		view.Options = append(view.Options, positionOption{Label: c.Label, Value: c.Value, Selected: selected})
+	}
+	if !known && current != "" {
+		view.Options = append(view.Options, positionOption{Label: current, Value: current, Selected: true})
+	}
+	return view
+}
+
+// Reset is the factory value to offer a reset to, or "" when there is
+// nothing to offer: the camera reported no default for this field, or the
+// field already holds it.
+func (p cameraPage) Reset(f Field) string {
+	def, ok := p.Defaults[f.XPath]
+	if !ok {
+		return ""
+	}
+	current := p.Values[f.XPath]
+	if f.YPath != "" {
+		current += "," + p.Values[f.YPath]
+	}
+	if current == def {
+		return ""
+	}
+	return def
+}
+
+// ResetLabel is how a default reads on its button: a corner's name rather
+// than its two raw numbers, on or off rather than 1 or 0.
+func (p cameraPage) ResetLabel(f Field, def string) string {
+	switch f.Kind {
+	case "position":
+		for _, c := range osdCorners() {
+			if c.X+","+c.Y == def {
+				return c.Label
+			}
+		}
+	case "toggle":
+		if def == "1" {
+			return "on"
+		}
+		return "off"
+	}
+	return def
 }

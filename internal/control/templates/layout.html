@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} - reostream</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
 <div class="sidebar">
-<p class="brand">reostream</p>
+<p class="brand">reostream <span class="version">{{version}}</span></p>
 <nav>
 <ul>
 <li><a href="/">Status</a></li>
@@ -17,28 +20,20 @@
 <li><a href="/setup">Setup</a></li>
 </ul>
 <h2>Cameras</h2>
-<ul>
+<ul class="cameras">
 <li><a href="/cameras">All cameras</a></li>
 {{range fleet}}
-<li><a href="/cameras/{{.Name}}">{{.Name}}</a></li>
+<li><a href="/cameras/{{.Name}}"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{.Name}}</a></li>
 {{end}}
 </ul>
-{{with cameraOf .}}
-<h2>{{.Name}}</h2>
-<ul>
-<li><a href="/cameras/{{.Name}}">Overview</a></li>
-<li><a href="/cameras/{{.Name}}/advanced">Advanced</a></li>
-<li><a href="/cameras/{{.Name}}/time">Time</a></li>
-<li><a href="/cameras/{{.Name}}/accounts">Accounts</a></li>
-</ul>
-{{end}}
 </nav>
+<p class="hint">Press <kbd>&#8984;K</kbd> for anything</p>
 </div>
 <main>
 {{template "body" .}}
 </main>
 <script>
-// The sidebar is the same markup on every page; which entry is current is
+// The rail is the same markup on every page; which entry is current is
 // worked out from the URL rather than passed down by every handler.
 (function () {
   var path = location.pathname;

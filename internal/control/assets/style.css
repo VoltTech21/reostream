@@ -1,536 +1,725 @@
 /* reostream operator page.
  *
- * The organising idea is that the four stream states, the three write
- * outcomes, and the four write-confidence labels are the one place this
- * interface spends any colour. Everything else stays quiet so those signals
- * stay legible at a glance across an eight camera fleet.
+ * The four stream states, the three write outcomes and the four write
+ * confidences are the only places this interface spends colour. Everything
+ * else stays quiet so those signals stay legible across a fleet.
+ *
+ * Two rules carry the rest of the design:
+ *   - every state is written once as a sentence and once as the exact
+ *     value beside it, so the page serves a first-time operator and a
+ *     practised one without a mode switch;
+ *   - protocol detail (message ids, xpaths, CGI notes) appears only on the
+ *     pages whose subject IS the protocol: Advanced and Config.
  */
 
 :root {
-  --ink: #14171A;
-  --panel: #1C2024;
-  --line: #2A3038;
-  --text: #E4E7EA;
-  --muted: #8A9199;
-  --proven: #35B37E;
-  --partial: #E0A030;
-  --refused: #E05252;
-  --unknown: #5A6470;
+  --ink: #0F1714;
+  --rail: #121C19;
+  --panel: #16201C;
+  --raise: #223029;
+  --field: #0B110F;
+  --line: #263430;
+  --line-soft: #1F2C28;
+  --edge: #3E524B;
 
-  --sidebar-w: 15rem;
+  --text: #E6EDE9;
+  --dim: #B9C6C1;
+  --muted: #8FA09A;
+
+  --ok: #55D6A0;
+  --warn: #E8B15C;
+  --bad: #F0726B;
+  --unknown: #8FA09A;
+
+  --sidebar-w: 13rem;
   --radius: 10px;
+
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--ink);
-  color: var(--text);
-}
+html, body { margin: 0; padding: 0; background: var(--ink); color: var(--text); }
 
 body {
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 400 13.5px/1.5 var(--sans);
   min-height: 100vh;
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
 }
 
-a { color: var(--proven); }
+a { color: var(--ok); }
+a:hover { color: #7FE3BA; }
 
-/* Sidebar */
+code, pre, .mono { font-family: var(--mono); }
+
+/* Rail ------------------------------------------------------------------ */
 
 .sidebar {
   flex: 0 0 var(--sidebar-w);
-  min-height: 100vh;
-  padding: 1.25rem 1rem;
+  background: var(--rail);
   border-right: 1px solid var(--line);
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   position: sticky;
   top: 0;
+  align-self: stretch;
+  min-height: 100vh;
 }
 
 .sidebar .brand {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--text);
-  margin: 0 0 1.5rem .5rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 14px;
+  font: 600 14px/1 var(--sans);
+  margin: 0;
 }
 
-/* The sidebar groups its links under headings: "Cameras", and the name of
-   the camera being looked at. They are labels for a group of links, not
-   page headings, so they are sized down rather than left at the browser's
-   default h2. */
+.sidebar .brand::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--ok);
+}
+
+.sidebar .brand .version {
+  margin-left: auto;
+  font: 500 10px/1 var(--mono);
+  color: var(--muted);
+}
 
 .sidebar nav h2 {
-  font-size: .75rem;
-  font-weight: 600;
+  font: 500 10px/1 var(--mono);
   color: var(--muted);
-  margin: 1.25rem .5rem .4rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  margin: 18px 8px 6px;
 }
 
-.sidebar nav h2:first-child { margin-top: 0; }
-
-.sidebar nav ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
+.sidebar nav ul { list-style: none; margin: 0; padding: 0; }
 
 .sidebar nav a {
-  display: block;
-  padding: .5rem .6rem;
-  margin-bottom: .125rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
   border-radius: 6px;
   color: var(--muted);
   text-decoration: none;
-  font-weight: 500;
-  border-left: 2px solid transparent;
+  font: 500 13px/1.2 var(--sans);
 }
 
-.sidebar nav a:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, .04);
+.sidebar nav a:hover { color: var(--text); background: rgba(255, 255, 255, .04); }
+
+.sidebar nav a[aria-current="page"] { color: var(--ink); background: var(--ok); }
+
+.sidebar nav .cameras a { font-weight: 400; font-size: 12.5px; }
+.sidebar nav .cameras a[aria-current="page"] { color: var(--text); background: var(--raise); }
+
+/* The dot beside a camera in the rail is the same signal as its state
+   pill: one glance down the rail says which camera to open. */
+.sidebar .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--unknown);
 }
 
-.sidebar nav a[aria-current="page"] {
-  color: var(--text);
-  background: rgba(255, 255, 255, .05);
-  border-left-color: var(--proven);
+.sidebar .hint {
+  margin-top: auto;
+  padding: 10px 8px 2px;
+  border-top: 1px solid var(--line);
+  font: 400 11px/1.4 var(--sans);
+  color: var(--muted);
 }
 
-.sidebar nav a:focus-visible {
-  outline: 2px solid var(--proven);
-  outline-offset: -2px;
+kbd {
+  font: 500 10px/1 var(--mono);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 5px;
+  background: var(--ink);
 }
 
-/* Main content */
+/* Main ------------------------------------------------------------------ */
 
-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 2rem 2.25rem;
-  max-width: 68rem;
-}
+main { flex: 1 1 auto; min-width: 0; padding: 22px 26px 30px; }
 
-main h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  margin: 0 0 1.25rem;
-}
+h1 { font: 600 22px/1.2 var(--sans); margin: 0 0 4px; }
+main > .subtitle { font: 400 13px/1.5 var(--sans); color: var(--muted); margin: 0 0 18px; }
 
-/* A panel. The camera pages mark theirs up as <section>, the rest as
-   .card; they are the same object and are styled together rather than
-   drifting apart. */
+.pagehead { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
+.pagehead .actions { margin-left: auto; display: flex; gap: 8px; }
 
 .card, section {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 1.25rem 1.5rem;
-  margin-bottom: 1.25rem;
+  padding: 14px 16px;
+  margin-bottom: 14px;
 }
 
-main h2 {
-  font-size: 1.05rem;
-  font-weight: 600;
-  margin: 0 0 .75rem;
-}
+h2 { font: 600 14px/1.2 var(--sans); margin: 0 0 6px; }
+h3 { font: 600 13px/1.2 var(--sans); margin: 0 0 6px; }
 
-.hint {
+.hint { color: var(--muted); font-size: 12.5px; margin: .25rem 0 0; }
+.exact { font: 400 11.5px/1.4 var(--mono); color: var(--muted); }
+
+/* Tabs on the camera pages. */
+
+.tabs { display: flex; gap: 2px; margin: 14px 0 18px; border-bottom: 1px solid var(--line); }
+.tabs a {
+  font: 500 12.5px/1 var(--sans);
   color: var(--muted);
-  font-size: .875rem;
-  margin: .25rem 0 0;
+  text-decoration: none;
+  padding: 9px 12px;
+  border-bottom: 2px solid transparent;
 }
+.tabs a[aria-current="page"] { color: var(--text); font-weight: 600; border-bottom-color: var(--ok); }
 
-/* Tables and settings rows: label left, value right, hairline between. */
+/* Controls -------------------------------------------------------------- */
 
-/* The probe and raw-block tables are wider than a narrow viewport and must
-   not be allowed to push the page sideways: they scroll inside their own
-   box instead. Every wide table on the camera pages is wrapped in one. */
-.table-wrap { overflow-x: auto; }
+/* A dropdown and a text field must not look the same: the dropdown is
+   raised with a chevron, the field is inset and monospaced. Both are one
+   width so a column of them lines up. */
 
-table { border-collapse: collapse; width: 100%; }
+input, select, textarea, button { font: inherit; }
 
-th, td {
-  text-align: left;
-  padding: .6rem .5rem;
-  border-bottom: 1px solid var(--line);
-  vertical-align: top;
-}
-
-th {
-  color: var(--muted);
-  font-weight: 500;
-  font-size: .8125rem;
-}
-
-tr:last-child td { border-bottom: none; }
-
-label { display: block; margin-bottom: .75rem; color: var(--text); }
-label input, label select, label textarea { display: block; margin-top: .3rem; }
-
-input, select, textarea, button {
-  font: inherit;
+input:not([type]), input[type="text"], input[type="password"], input[type="number"], textarea {
+  font: 400 12.5px/1 var(--mono);
   color: var(--text);
-  background: var(--ink);
-  border: 1px solid var(--line);
+  background: var(--field);
+  border: 1px solid #2F4640;
   border-radius: 6px;
-  padding: .4rem .55rem;
+  padding: 8px 10px;
+  width: 11rem;
 }
 
-textarea { width: 100%; font-family: ui-monospace, monospace; }
+input[type="number"] { width: 5.5rem; }
+textarea { width: 100%; line-height: 1.6; }
 
-input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
-  outline: 2px solid var(--proven);
+select {
+  font: 500 12.5px/1 var(--sans);
+  color: var(--text);
+  background-color: var(--raise);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 8px 30px 8px 11px;
+  width: 11rem;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23B9C6C1' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+button:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--ok);
   outline-offset: 1px;
 }
 
 button {
-  background: var(--proven);
-  border-color: var(--proven);
-  color: #06210f;
-  font-weight: 600;
+  font: 600 12px/1 var(--sans);
+  color: var(--ink);
+  background: var(--ok);
+  border: 1px solid var(--ok);
+  border-radius: 6px;
+  padding: 8px 12px;
   cursor: pointer;
 }
 
 button:hover { filter: brightness(1.08); }
 
-fieldset {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  margin: 0 0 .75rem;
+button.quiet {
+  color: var(--muted);
+  background: none;
+  border-color: var(--line);
 }
-legend { color: var(--muted); padding: 0 .4rem; }
+button.quiet:hover { color: var(--text); }
 
-/* Signal colours: the one place this page spends boldness. */
+button.linkish {
+  background: none;
+  border: none;
+  color: var(--ok);
+  padding: 0;
+  font: 500 11.5px/1 var(--sans);
+}
+
+/* A row of label + control inside a settings group. */
+
+.setting {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.setting > .control { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; align-items: center; max-width: 24rem; }
+/* A note under a control goes on its own line, never beside the control,
+   where it squeezes the label column until the label overlaps. */
+.setting > .control .hint { flex: 1 1 100%; margin: 0; text-align: right; }
+.setting p { margin: 0; font: 500 13px/1.3 var(--sans); }
+
+/* A setting whose switch above it is off: still readable, plainly inert. */
+.setting.off p { color: var(--muted); }
+.setting.off .control { opacity: .45; }
+
+/* The on/off switch. A two-state setting is a switch, never a dropdown:
+   a dropdown makes the reader parse two words to learn one bit. */
+
+.switch {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: var(--raise);
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.switch .knob { width: 16px; height: 16px; border-radius: 50%; background: var(--muted); display: block; }
+
+.switch[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); justify-content: flex-end; }
+.switch[aria-pressed="true"] .knob { background: var(--ink); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .switch { transition: background-color .12s ease; }
+  button, .sidebar nav a { transition: filter .1s ease, background-color .1s ease; }
+}
+
+/* A slider and the box that actually posts. The track's range is a guess;
+   the box is not bounded by it. */
+.slider { display: inline-flex; align-items: center; gap: .6rem; }
+.slider-range {
+  flex: 1 1 9rem;
+  min-width: 6rem;
+  max-width: 11rem;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--ok);
+}
+
+/* Help. A caveat that matters to three people a year does not get to cost
+   every reader a paragraph: it goes behind ? (explanation) or ! (warning),
+   open in place, no script. */
+
+details.help { margin: 0 0 14px; }
+details.help > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 12.5px/1 var(--sans);
+  color: var(--muted);
+}
+details.help > summary::-webkit-details-marker { display: none; }
+details.help > summary .mark { font: 600 12px/1 var(--sans); }
+details.help.warn > summary { color: var(--warn); }
+details.help > p { font: 400 12.5px/1.6 var(--sans); color: var(--dim); margin: 8px 0 0; }
+
+/* Signals --------------------------------------------------------------- */
 
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: .4em;
-  padding: .2rem .65rem;
+  gap: 5px;
+  padding: 4px 8px;
   border-radius: 999px;
   border: 1px solid currentColor;
-  font-weight: 600;
-  font-size: .8125rem;
-  line-height: 1.4;
+  font: 500 11px/1 var(--mono);
   white-space: nowrap;
 }
 
-.pill::before {
-  content: "";
-  width: .5em;
-  height: .5em;
-  border-radius: 50%;
-  background: currentColor;
-  flex: 0 0 auto;
+.pill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+.tag {
+  font: 600 10px/1 var(--mono);
+  letter-spacing: .06em;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
 }
 
-.state-streaming { color: var(--proven); }
-.state-novideo, .state-reconnecting { color: var(--partial); }
-.state-down { color: var(--refused); }
-.state-undetermined, .state-unknown { color: var(--unknown); }
+/* A group whose write interrupts the stream says so in the heading, not in
+   a footnote under the last field. */
+.tag.stream { color: var(--warn); border-color: #4A3A22; background: #221B12; }
 
-/* A caution beside a control: something a camera would not answer for, or
-   a write whose effect is not what an operator would assume. It stays
-   inline and visible, never behind a tooltip or an accordion. */
+.state-streaming { color: var(--ok); }
+.state-novideo, .state-reconnecting { color: var(--warn); }
+.state-down { color: var(--bad); }
+.state-undetermined, .state-unknown, .state-idle { color: var(--unknown); }
 
-.warning {
-  color: var(--partial);
-  font-size: .875rem;
-  margin: .25rem 0;
-}
+.outcome-confirmed { color: var(--ok); }
+.outcome-accepted { color: var(--warn); }
+.outcome-refused { color: var(--bad); }
 
-/* Write outcome: confirmed / accepted / refused. "accepted" is deliberately
-   the partial colour, not the proven one -- a 200 is not proof. */
-
-.outcome-confirmed { color: var(--proven); }
-.outcome-accepted { color: var(--partial); }
-.outcome-refused { color: var(--refused); }
-
-/* Write confidence: proven / unverified / known inert / unsafe to rewrite.
-   These carry the most weight of any colour on this page, because they sit
-   on pills beside buttons that write to a camera. "unsafe to rewrite" must
-   never be mistakable for "proven": it is the one that interrupts a live
-   stream. */
-
-.confidence-proven { color: var(--proven); }
-.confidence-unverified { color: var(--partial); }
-/* These two used to be the same red, which made them the same word to
-   anyone reading quickly -- on a page whose buttons write to a camera.
-   They mean very different things: "known inert" is a write that is safe to
-   send and simply does nothing, "unsafe to rewrite" is a write that
-   interrupts the stream. Inert is muted, because it is a shrug; unsafe
-   keeps the red and is the only one of the four that is also bold, so it
-   reads as a warning without relying on colour alone. */
+.confidence-proven { color: var(--ok); }
+.confidence-unverified { color: var(--warn); }
 .confidence-known-inert { color: var(--muted); }
-.confidence-unsafe-to-rewrite { color: var(--refused); font-weight: 600; }
+.confidence-unsafe-to-rewrite { color: var(--bad); }
 
-/* Status cards (the dashboard). One card per CAMERA, whatever number of
-   streams it pulls: the picture on the left, and everything that camera is
-   doing stacked beside it. Dense on purpose -- eight cameras is a normal
-   fleet and it should not be four screens. On a narrow viewport it stacks
-   instead of forcing horizontal scroll. */
+.warning { color: var(--warn); font-size: 12.5px; margin: .25rem 0; }
 
-.statuslist { display: flex; flex-direction: column; gap: .5rem; }
+/* The flash a write leaves behind. */
 
-.statuscard {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: .75rem;
-  align-items: start;
-  padding: .6rem .75rem;
+.flash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--unknown);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
 }
 
-.statuscard-video { flex: 0 0 auto; }
+.flash-confirmed { border-left-color: var(--ok); }
+.flash-accepted { border-left-color: var(--warn); }
+.flash-refused { border-left-color: var(--bad); }
+.flash-confirmed .flash-mark { color: var(--ok); }
+.flash-accepted .flash-mark { color: var(--warn); }
+.flash-refused .flash-mark { color: var(--bad); }
+.flash-text { flex: 1 1 20rem; min-width: 0; }
+.flash-undo { margin: 0 0 0 auto; }
 
-.statuscard-body {
+/* A fleet-level alert: one line above the grid, not a red row inside one
+   card that the eye has to find. */
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid #3A2B24;
+  border-left: 3px solid var(--bad);
+  border-radius: 8px;
+  background: #1A1512;
+  margin-bottom: 18px;
+}
+.alert .exact { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alert a { margin-left: auto; white-space: nowrap; font: 500 12.5px/1 var(--sans); color: var(--bad); text-decoration: none; }
+
+/* Status grid ----------------------------------------------------------- */
+
+.fleet { display: grid; grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr)); gap: 14px; }
+
+.camcard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: .25rem;
-  min-width: 0;
-}
-
-.statuscard-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: .25rem .75rem;
-}
-
-.statuscard-head .cam-name {
-  font-weight: 600;
-  font-size: 1.05rem;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.statuscard-head .cam-name:hover { text-decoration: underline; }
-
-/* The way into the camera's own page sits with the camera's name, not down
-   in the switches: it is navigation, and the switches are writes. */
-.statuscard-head .head-link { margin-left: auto; }
-
-.streamline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .2rem .7rem;
   margin: 0;
-  min-width: 0;
-}
-
-.streamline .stream-name {
-  font-weight: 600;
-  font-size: .875rem;
-  min-width: 4rem;
-}
-
-.streamline .metric {
-  color: var(--muted);
-  font-size: .875rem;
-}
-
-/* The URL a recorder points at this stream, on its own line. It shares a
-   row with nothing but its copy button, because a long URL competing with
-   the metrics for one wrapping row is what pushed "copy" and the metrics
-   onto lines of their own. */
-.streamurl-line {
-  display: flex;
-  align-items: baseline;
-  gap: .5rem;
-  min-width: 0;
-}
-
-.streamurl {
-  color: var(--muted);
-  font-size: .8125rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.streamline .lasterror {
-  color: var(--refused);
-  font-size: .875rem;
-  flex-basis: 100%;
-}
-
-/* Quick actions: a button that is not a write, and links out of the card.
-   They stay quiet, because the colour on this page belongs to the state
-   pills. */
-.linkish {
-  background: none;
-  border: none;
-  color: var(--proven);
   padding: 0;
-  font: inherit;
-  font-size: .8125rem;
-  cursor: pointer;
 }
 
-.statuscard-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .25rem 1rem;
-  font-size: .875rem;
-  margin-top: .15rem;
-}
-
-.statuscard-tools .tool { font-size: .875rem; }
-
-.statuscard-tools form { margin: 0; }
-
-.statuscard-tools label {
-  display: inline-flex;
-  align-items: center;
-  gap: .35rem;
-  margin: 0;
-  color: var(--muted);
-}
-
-/* A switch whose true state is still being read, or could not be read at
-   all, must not look like a switch reporting the camera. Both are dimmed;
-   the unavailable one says why on hover. */
-.statuscard-tools label:has(input:disabled) { opacity: .55; }
-
-.statuscard-tools label.unavailable { text-decoration: line-through; }
-
+/* Nothing decodes until the tile is pressed: at fleet scale, a player per
+   tile at page load is eight simultaneous decodes. The still is the
+   camera's own last keyframe, which costs the daemon nothing. */
 .cam-video {
   position: relative;
-  display: inline-block;
+  aspect-ratio: 16 / 9;
+  background: #080D0B;
+  background-image: repeating-linear-gradient(135deg, rgba(143, 160, 154, .07) 0 8px, transparent 8px 16px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 0;
 }
 
-.cam-video video {
-  display: block;
-  width: 11.5rem;
-  max-width: 100%;
-  border-radius: 8px;
-  background: #000;
-}
+.cam-video img, .cam-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
 
-/* On the picture, not under it. As a block below the video the button sat
-   outside the tile's rectangle and broke the card's left edge; centred on
-   the tile it reads as "press here to play this" and costs no height. */
 .cam-video .play-btn {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  padding: .2rem .7rem;
-  font-size: .8125rem;
-  line-height: 1.3;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #2F4640;
+  background: rgba(15, 23, 20, .75);
+  color: var(--ok);
+  font-size: 13px;
+}
+
+.cam-video .caption {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  right: 8px;
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--muted);
+}
+
+.camcard-body { padding: 11px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+.camcard-head { display: flex; align-items: center; gap: 8px; }
+.camcard-head .cam-name { font: 600 14.5px/1.2 var(--sans); color: var(--text); text-decoration: none; }
+.camcard-head .cam-name:hover { text-decoration: underline; }
+.camcard-head .exact { margin-left: auto; }
+
+.streams { display: flex; flex-direction: column; gap: 3px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
+
+.streamline {
+  display: grid;
+  grid-template-columns: 4.2rem 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  font: 400 11.5px/1.5 var(--mono);
+  color: var(--muted);
+}
+
+.streamline .stream-name { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.streamline .dot { width: 5px; height: 5px; border-radius: 50%; }
+
+.streamurl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.streamurl code {
+  font: 400 10.5px/1.4 var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+/* Camera page ----------------------------------------------------------- */
+
+.camera-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.camera-cols > div { display: flex; flex-direction: column; gap: 14px; }
+.camera-cols .card, .camera-cols section { margin: 0; }
+
+/* Advanced -------------------------------------------------------------- */
+
+/* One row per document: what it is in words, what writing it does in
+   words, and the ids for whoever needs them. No legend to learn first. */
+.docrow {
+  display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.docrow .what { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.docrow .what .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.docrow .what p { margin: 0; font: 400 12.5px/1.45 var(--sans); color: var(--dim); }
+.docrow h3 { margin: 0 0 3px; font-size: 13.5px; }
+.docrow code { font: 400 11px/1.3 var(--mono); color: var(--muted); }
+
+details.document[open] { border-color: var(--edge); }
+details.document > summary { list-style: none; cursor: pointer; }
+details.document > summary::-webkit-details-marker { display: none; }
+
+pre.doc {
+  margin: 12px 0 0;
+  font: 400 11.5px/1.6 var(--mono);
+  color: var(--dim);
+  background: var(--field);
+  border: 1px solid #2F4640;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+
+/* Config and logs ------------------------------------------------------- */
+
+.editor { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.editor .filebar,
+.editor .savebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--rail);
+}
+.editor .filebar { border-bottom: 1px solid var(--line); font: 500 11.5px/1 var(--mono); color: var(--muted); }
+.editor .savebar { border-top: 1px solid var(--line); font-size: 12.5px; }
+.editor .savebar button { margin-left: auto; }
+.editor textarea { border: none; border-radius: 0; background: var(--ink); padding: 14px; font-size: 12px; }
+.editor .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+
+.filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.filters button {
+  font: 500 11.5px/1 var(--sans);
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 11px;
+}
+.filters button[aria-pressed="true"] { color: var(--ink); background: var(--ok); border-color: var(--ok); font-weight: 600; }
+
+pre.log {
+  margin: 0;
+  font: 400 11.5px/1.75 var(--mono);
+  color: var(--dim);
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow: auto;
+  max-height: 70vh;
+}
+
+/* First run ------------------------------------------------------------- */
+
+.onboard { max-width: 44rem; margin: 0 auto; }
+
+.steps { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.steps .step { display: flex; align-items: center; gap: 7px; font: 500 12px/1 var(--sans); color: var(--muted); }
+.steps .step .n {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 11px/1 var(--mono);
+  border: 1px solid var(--line);
+}
+.steps .step[aria-current="step"] { color: var(--text); }
+.steps .step[aria-current="step"] .n { background: var(--ok); border-color: var(--ok); color: var(--ink); }
+
+.field { display: block; margin-bottom: 14px; }
+.field > .label { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font: 500 12.5px/1 var(--sans); }
+.field input { width: 100%; }
+.field .below { font: 400 11.5px/1.5 var(--sans); color: var(--muted); display: block; margin-top: 5px; }
+.field .row { display: flex; gap: 8px; }
+.field .row input { flex: 1 1 auto; min-width: 0; }
+
+/* The token help is a ? beside the label, not a code block above it. */
+.field details { position: relative; }
+.field details > summary { list-style: none; cursor: pointer; color: var(--muted); font: 600 12px/1 var(--sans); }
+.field details > summary::-webkit-details-marker { display: none; }
+.field details .popover {
+  position: absolute;
+  margin-top: 8px;
+  background: var(--rail);
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  padding: 11px 13px;
+  z-index: 2;
+  min-width: 26rem;
+}
+.field details .popover code { display: block; font: 400 11.5px/1.7 var(--mono); color: var(--dim); }
+
+.discovered { display: flex; flex-direction: column; }
+.discovered label {
+  display: grid;
+  grid-template-columns: auto 4rem 1fr;
+  gap: 10px 14px;
+  align-items: center;
+  padding: 7px 0;
+  font: 400 12px/1.5 var(--mono);
+  color: var(--muted);
+  cursor: pointer;
+}
+.discovered label .name { color: var(--text); }
+.discovered label .what { color: var(--dim); }
+.discovered input { accent-color: var(--ok); width: 15px; height: 15px; }
+
+/* Tables that remain tables: fleet apply results, accounts. */
+
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+th { color: var(--muted); font: 500 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+tr:last-child td { border-bottom: none; }
+td.mono { font: 400 12px/1.4 var(--mono); color: var(--muted); }
+
+.table-wrap { overflow-x: auto; }
+
+@media (max-width: 720px) {
+  body { flex-direction: column; }
+  .sidebar { position: static; width: 100%; min-height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+  .sidebar nav ul { display: flex; flex-wrap: wrap; gap: 4px; }
+  .sidebar .hint { display: none; }
+  main { padding: 16px 14px 24px; }
+  .camera-cols { grid-template-columns: minmax(0, 1fr); }
+  .docrow { grid-template-columns: minmax(0, 1fr); }
+
+  /* Phone: nothing sits side by side that cannot fit side by side. */
+  .pagehead { flex-wrap: wrap; align-items: flex-start; }
+  .pagehead .actions { margin-left: 0; width: 100%; }
+  .pagehead .actions > * { flex: 1 1 0; }
+  .pagehead .actions button { width: 100%; }
+  .alert { flex-wrap: wrap; gap: 6px 12px; }
+  .alert > span { flex: 1 1 100%; }
+  .alert .exact { flex: 1 1 0; min-width: 0; }
+  .fleet { grid-template-columns: minmax(0, 1fr); }
+  .setting { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .setting:has(> .switch), .setting:has(.control > .switch) { grid-template-columns: minmax(0, 1fr) auto; }
+  .setting > .control { flex-wrap: wrap; }
+  .setting > .control select, .setting > .control input[type="text"] { flex: 1 1 10rem; min-width: 0; width: auto; }
+  .setting > .control { max-width: none; justify-content: flex-start; }
+  .setting > .control .hint { text-align: left; }
+  .slider { flex: 1 1 auto; }
+  .segmented { display: grid; width: 100%; min-width: 0; }
+  .segmented label { white-space: normal; padding: 6px 4px; }
+  .slider-range { max-width: none; }
+  .streamline { grid-template-columns: auto 1fr auto auto auto; }
+  .tabs { overflow-x: auto; white-space: nowrap; }
+}
+
+/* Sign in: one narrow card, label above the box, the button under both. */
+.login { max-width: 24rem; margin: 8vh auto 0; }
+.login .card { padding: 18px; }
+.login .field { margin-bottom: 16px; }
+.login button[type="submit"] { width: 100%; }
+
+/* A position: four stops in one track, the chosen one lit. Radios under
+   the labels, so it is a real form control with keyboard support. */
+.segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #2F4640;
+  border-radius: 8px;
+  background: var(--field);
+  min-width: 20rem;
+}
+.segmented label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font: 500 12px/1.2 var(--sans);
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
   white-space: nowrap;
 }
+.segmented input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.segmented label:hover { color: var(--text); }
+.segmented label:has(input:checked) { background: var(--ok); color: #0B110F; font-weight: 600; }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--ok); outline-offset: 2px; }
+.segmented label:has(input:disabled) { cursor: default; }
+.setting.off .segmented label:has(input:checked) { background: var(--muted); }
+.segmented span { text-transform: capitalize; }
 
-@media (max-width: 640px) {
-  body { flex-direction: column; }
-  .sidebar {
-    position: static;
-    width: 100%;
-    min-height: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-  }
-  .sidebar nav ul { display: flex; flex-wrap: wrap; gap: .25rem; }
-  main { padding: 1.25rem 1rem; max-width: none; }
-  .statuscard { grid-template-columns: 1fr; }
-  .cam-video video { width: 100%; }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  button, .sidebar nav a { transition: filter .1s ease, background-color .1s ease; }
-}
-
-/* The write banner. A curated setting, the floodlight and the NTP form
-   report back here, on the page the setting lives on, instead of on a full
-   page of before/after XML with no way back. One line, the outcome's own
-   colour on its left edge, and undo beside the text.
-
-   A refusal must be as visible here as it was on that page: it gets the
-   refused colour and carries the reason inline, so condensing the report
-   never quietly turns a rejected write into a tick. */
-
-.flash {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: .5rem;
-  margin: 0 0 1rem;
-  padding: .55rem .75rem;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--unknown);
-  border-radius: var(--radius);
-  background: var(--panel);
-  font-size: .9375rem;
-}
-
-.flash-confirmed { border-left-color: var(--proven); }
-.flash-accepted { border-left-color: var(--partial); }
-.flash-refused { border-left-color: var(--refused); }
-
-.flash-confirmed .flash-mark { color: var(--proven); }
-.flash-accepted .flash-mark { color: var(--partial); }
-.flash-refused .flash-mark { color: var(--refused); }
-
-.flash-text { flex: 1 1 20rem; min-width: 0; }
-
-.flash-undo { margin: 0; }
-
-/* A numeric image setting: a slider for judging it by eye, and the number
-   box that actually posts. They sit on one line so it reads as one control
-   rather than two, and the box stays narrow -- it holds a value, not a
-   sentence. The track's range is a guess (see camerapage.go's sliderCeil);
-   the box is not bounded by it, which is why the box, not the slider, is
-   the one that carries the form's name. */
-
-.slider {
-  display: inline-flex;
-  align-items: center;
-  gap: .6rem;
-}
-
-.slider-range {
-  flex: 1 1 10rem;
-  min-width: 6rem;
-  max-width: 14rem;
-  padding: 0;
-  border: none;
-  background: none;
-  accent-color: var(--proven);
-}
-
-.slider-box { width: 5.5rem; }
-
-/* What the camera reports about itself: three reference tables that used to
-   push the controls two screens down the page. Closed by default, and
-   styled as a panel so a closed one still reads as a thing on the page
-   rather than as a stray line of text. */
-
-.reports {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1rem 1.5rem;
-  margin-bottom: 1.25rem;
-}
-
-.reports > summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: .9375rem;
-}
-
-.reports[open] > summary { margin-bottom: 1rem; }
-
-/* The tables inside are already .card panels; nesting a second panel
-   background inside this one only muddies both. */
-.reports .card { background: none; padding: 0 0 1rem; border: none; margin-bottom: 1rem; }
-.reports .card:last-child { padding-bottom: 0; margin-bottom: 0; }
-
-.reports h3 { font-size: 1rem; font-weight: 600; margin: 0 0 .5rem; }
+/* A reset to the camera's factory value: quiet, after the control. */
+.setting .reset { flex: 0 0 auto; font: 500 12px/1 var(--sans); color: var(--muted); white-space: nowrap; }
+.setting .reset:hover { color: var(--text); }
+.setting.off .reset { display: none; }

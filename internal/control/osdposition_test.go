@@ -110,19 +110,19 @@ func TestPositionSelectIsSeededFromTheCamerasOwnPair(t *testing.T) {
 	// Seeded, not defaulted: the two overlays in this fixture sit in two
 	// DIFFERENT corners, so a page that always selected the same one, or
 	// simply the first option, fails here.
-	if !strings.Contains(html, `<option value="65536,1" selected>top right</option>`) {
+	if !strings.Contains(html, `value="65536,1" checked><span>top right</span>`) {
 		t.Errorf("the timestamp's own corner (65536,1 = top right) is not selected:\n%s", html)
 	}
-	if !strings.Contains(html, `<option value="65536,65536" selected>bottom right</option>`) {
+	if !strings.Contains(html, `value="65536,65536" checked><span>bottom right</span>`) {
 		t.Errorf("the camera name's own corner (65536,65536 = bottom right) is not selected:\n%s", html)
 	}
 	// All four corners are offered, or this is a display, not a control.
 	for _, want := range []string{"top left", "top right", "bottom left", "bottom right"} {
-		if !strings.Contains(html, ">"+want+"</option>") {
+		if !strings.Contains(html, "<span>"+want+"</span>") {
 			t.Errorf("the position select does not offer %q", want)
 		}
 	}
-	if strings.Contains(html, "not a known corner") {
+	if strings.Contains(html, "never seen a camera use") {
 		t.Errorf("a pair straight out of the corner table was reported as unrecognised:\n%s", html)
 	}
 	if strings.Contains(html, "not available:") {
@@ -143,21 +143,21 @@ func TestUnrecognisedPositionIsShownNotSnapped(t *testing.T) {
 		`<OsdDatetime><channelId>0</channelId><enable>1</enable><topLeftX>32768</topLeftX><topLeftY>9</topLeftY></OsdDatetime>`+
 		`</body>`)
 
-	if !strings.Contains(html, `<option value="32768,9" selected>32768,9 (not a known corner)</option>`) {
+	if !strings.Contains(html, "This camera holds 32768,9") {
 		t.Fatalf("an unrecognised position was not shown as the camera's own pair:\n%s", html)
 	}
 	// Snapping would have selected a corner instead. The timestamp's pair
 	// is unrecognised so none of the corners may be selected for it; the
 	// camera name above it genuinely is bottom right, and still is.
 	for _, corner := range []string{"1,1", "65536,1", "1,65536"} {
-		if strings.Contains(html, `<option value="`+corner+`" selected>`) {
+		if strings.Contains(html, `value="`+corner+`" checked>`) {
 			t.Errorf("an unrecognised position was snapped to the %s corner:\n%s", corner, html)
 		}
 	}
-	if !strings.Contains(html, "not one of the four") {
+	if !strings.Contains(html, "never seen a camera use") {
 		t.Errorf("the page does not say why this position has no name:\n%s", html)
 	}
-	if !strings.Contains(html, `<option value="1,1" >top left</option>`) {
+	if !strings.Contains(html, `value="1,1"><span>top left</span>`) {
 		t.Errorf("the four corners are not still offered alongside the unrecognised pair:\n%s", html)
 	}
 }

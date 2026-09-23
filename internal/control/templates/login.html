@@ -1,10 +1,13 @@
 {{define "body"}}
-<h1>reostream</h1>
+<div class="login">
+<h1>Sign in</h1>
+<p class="subtitle">This page can change camera settings, so it asks first.</p>
 <div class="card">
-{{if .Failed}}<p class="state-down">Wrong password.</p>{{end}}
+{{if .Failed}}<p class="outcome-refused">Wrong password.</p>{{end}}
 <form method="post" action="/login">
-<label>Password <input type="password" name="password" autofocus></label>
+<label class="field"><span class="label">Password</span><input type="password" name="password" autocomplete="current-password" autofocus required></label>
 <button type="submit">Sign in</button>
 </form>
+</div>
 </div>
 {{end}}

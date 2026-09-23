@@ -332,6 +332,10 @@ type timePage struct {
 	// mystery on its own.
 	TimeZoneLabel   string
 	TimeZoneChoices []timeZoneChoice
+	// TimeZoneUnlisted is true when the camera's offset matches none of
+	// TimeZoneChoices, so the picker keeps the camera's own value selected
+	// rather than silently showing the first choice.
+	TimeZoneUnlisted bool
 
 	// Results is one row per camera, filled in only when a write on this
 	// page was ticked "apply to every camera". It is never a summary: see
@@ -378,6 +382,13 @@ func (s *Server) readTimePage(ctx context.Context, cam Camera) timePage {
 	} else {
 		page.TimeZone = tz
 		page.TimeZoneLabel = utcOffsetLabel(tz)
+		page.TimeZoneUnlisted = true
+		for _, c := range page.TimeZoneChoices {
+			if c.Seconds == tz {
+				page.TimeZoneUnlisted = false
+				break
+			}
+		}
 	}
 	return page
 }

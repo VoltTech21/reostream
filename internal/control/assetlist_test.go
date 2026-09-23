@@ -22,9 +22,11 @@ import (
 func TestOnlyTheListedAssetsAreEmbedded(t *testing.T) {
 	want := []string{
 		"assets/LICENSE-mpegts.txt",
+		"assets/dashboard.js",
 		"assets/README.md",
 		"assets/mpegts.js",
 		"assets/mpegts.js.LICENSE.txt",
+		"assets/settings.js",
 		"assets/style.css",
 	}
 

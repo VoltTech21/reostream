@@ -1,17 +1,9 @@
 {{/*
   flash.html: the one line a write leaves behind, rendered by every page a
-  write can redirect back to -- the camera page, the status page, and a
-  camera's time page. One block, included by all three, rather than the
-  same markup written out three times and drifting.
-
-  Data is a *Flash (flash.go), and nil means no banner: a page that was
-  simply opened renders nothing here.
-
-  The undo form posts to the same verified write path result.html's
-  "restore previous" button uses. It carries no confirm dialog: it is one
-  click, and it is reversible in exactly the way the write that produced
-  it was. The confirms that do exist -- Lights and IR's ConfirmReason, and
-  the floodlight's -- are about a physical effect and are left alone.
+  write can redirect back to. Data is a *Flash (flash.go); nil means no
+  banner. The exact value the write touched is NOT repeated here any more:
+  the sentence is the report, and the detail belongs on the page the
+  setting lives on.
 */}}
 {{define "flash"}}
 {{with .}}

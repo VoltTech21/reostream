@@ -1,61 +1,78 @@
+{{/*
+  blocks.html: the raw documents, rebuilt as a list rather than a table.
+
+  The old page opened with a paragraph of protocol talk and a four-term
+  legend the reader had to learn before the table meant anything. This one
+  says what each document IS in words, and what writing it actually does
+  in words, on the row itself. The confidence vocabulary still exists in
+  Go; it is rendered as a sentence (PairRow.Effect) and a colour, and the
+  word itself is no longer the only thing carrying the meaning.
+
+  Nothing about the write path changed: the body posted is always .Seed as
+  edited here, so this form can only send what serveBlocks just read from
+  the camera.
+*/}}
 {{define "body"}}
-<h1>{{.Camera.Name}}: every block</h1>
+<h1>{{.Camera.Name}}</h1>
+<p class="subtitle">{{.Camera.Address}}</p>
+
+<nav class="tabs">
+<a href="/cameras/{{.Camera.Name}}">Overview</a>
+<a href="/cameras/{{.Camera.Name}}/advanced" aria-current="page">Advanced</a>
+<a href="/cameras/{{.Camera.Name}}/time">Time</a>
+<a href="/cameras/{{.Camera.Name}}/accounts">Accounts</a>
+</nav>
+
 {{if .Err}}<p class="outcome-refused">{{.Err}}</p>{{end}}
 
-<div class="card table-wrap">
-<h2>Writable pairs</h2>
-<p class="hint">What this codebase actually knows about each pair's write, not what the camera claims
-when it answers 200. <strong class="confidence-proven">proven</strong> means a field was changed, read back on a
-fresh connection, and restored. <strong class="confidence-known-inert">known inert</strong> means the write is accepted
-and does nothing, on more than one model. <strong class="confidence-unsafe-to-rewrite">unsafe to rewrite</strong> means the
-write probably works, which is the problem: re-applying it interrupts the stream.
-Everything else is <strong class="confidence-unverified">unverified</strong>: the shape is right and nobody has
-observed an effect. Moving a pair off unverified takes an observed effect, never a 200;
-see docs/control.md.</p>
-<table>
-<tr><th>Name</th><th>Get</th><th>Set</th><th>Confidence</th><th>Editor</th></tr>
+<p>Every setting document this camera will hand over, and the write that puts it back. Use this when the curated settings do not cover what you need.</p>
+<details class="help">
+<summary><span class="mark">?</span>How to read &ldquo;what happens if I write this&rdquo;</summary>
+<p>Each line says what was actually observed on a camera, not what the camera answered. A write can return 200 and do nothing, so a success reply is never treated as proof here. reostream only ever writes back the document the camera just sent, with your edit in it.</p>
+</details>
+
 {{range .Pairs}}
-<tr>
-<td>{{.Name}}</td>
-<td>{{.Get}}</td>
-<td>{{.Set}}</td>
-<td><span class="pill confidence-{{.Confidence.Slug}}">{{.Confidence}}</span></td>
-<td>
+<details class="card document">
+<summary>
+<div class="docrow">
+<div>
+<h3>{{.Title}}</h3>
+<code>{{.Name}} ({{.Get}}) &rarr; {{.SetName}} ({{.Set}})</code>
+</div>
+<div class="what">
+<span class="dot confidence-{{.Confidence.Slug}}" style="background:currentColor" title="{{.Confidence}}"></span>
+<p>{{.Effect}}</p>
+</div>
+<span class="tag">{{if .Editable}}Open document{{else}}Not read on this probe{{end}}</span>
+</div>
+</summary>
 {{if .Editable}}
-{{/*
-  This is the raw view's whole point: promote a write from unverified to
-  proven by changing a field, writing it, and reading it back. The body
-  posted is always .Seed as edited here, never a document composed from
-  nothing, so this form can only ever send what serveBlocks itself just
-  read from the camera.
-*/}}
 <form method="post" action="/cameras/{{$.Camera.Name}}/write/{{.Set}}">
-<textarea name="body" rows="4" cols="60">{{.Seed}}</textarea><br>
+<textarea name="body" rows="10" class="doc">{{.Seed}}</textarea>
 <input type="hidden" name="verify" value="true">
-<button type="submit">write</button>
+<div style="display:flex;align-items:center;gap:12px;margin-top:12px">
+<button type="submit">Write, then read it back</button>
+<span class="hint">Edit a value above. Everything else goes back exactly as the camera sent it.</span>
+</div>
 </form>
 {{else}}
-<em>not read on this probe</em>
+<p class="hint">This document did not come back as a usable 200 on this probe, so there is nothing to edit: reostream will not offer an editor for a document it did not itself read.</p>
 {{end}}
-</td>
-</tr>
+</details>
 {{end}}
-</table>
-</div>
 
-<div class="card">
-<h2>Every readable block</h2>
-<p class="hint">A message this model does not implement answers 405 rather than dropping the
-connection, which is what makes asking for every known message safe.</p>
+<details class="card">
+<summary class="hint">every readable block, as the camera answered</summary>
+<p class="hint">A message this model does not implement answers 405 rather than dropping the connection, which is what makes asking for every known message safe.</p>
 {{range .Blocks}}
-<h3>{{.Name}} ({{.ID}})</h3>
+<h3>{{.Name}} <code>({{.ID}})</code></h3>
 {{if .HungUp}}
 <p class="hint">no answer</p>
 {{else if eq .Status 200}}
-<pre style="border:1px solid var(--line);padding:.5rem;border-radius:6px;overflow:auto">{{.XML}}</pre>
+<pre class="doc">{{.XML}}</pre>
 {{else}}
 <p class="hint">status {{.Status}}</p>
 {{end}}
 {{end}}
-</div>
+</details>
 {{end}}

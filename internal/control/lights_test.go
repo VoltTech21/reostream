@@ -100,6 +100,11 @@ func newFakeCGICamera(t *testing.T, mode, state int) *fakeCGICamera {
 			}
 			atomic.AddInt32(&f.sets, 1)
 			w.Write([]byte(`[{"cmd":"SetWhiteLed","code":0}]`))
+		case "GetImage", "GetOsd":
+			// The camera page's factory-defaults read. Answered the way a
+			// camera reports a command it does not support, which offers
+			// no resets and is all these tests need.
+			w.Write([]byte(`[{"cmd":"` + r.URL.Query().Get("cmd") + `","code":1,"error":{"detail":"not support","rspCode":-9}}]`))
 		default:
 			t.Errorf("unexpected cmd %q", r.URL.Query().Get("cmd"))
 		}
@@ -262,7 +267,7 @@ func TestServeSettingsRendersLightsAndIRWithAConfirmReason(t *testing.T) {
 	}
 	// The floodlight option seeded as current ("motion", from mode 1 state
 	// 0) must be selected, not left blank.
-	if !strings.Contains(html, `value="motion" selected`) {
+	if !strings.Contains(html, `value="motion" checked`) {
 		t.Errorf("page does not show the floodlight's current state as selected:\n%s", html)
 	}
 	// Every form in this group must ask before it submits.

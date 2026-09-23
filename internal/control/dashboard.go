@@ -1,6 +1,7 @@
 package control
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -81,6 +82,9 @@ type statusCard struct {
 	Address string
 	Streams []streamLine
 	Tile    tile
+	// State is the camera's one pill: the worst of its streams, so a
+	// camera with one sick stream does not read as healthy.
+	State string
 }
 
 // statusCards folds the per-stream rows into one card per camera, joining
@@ -131,7 +135,115 @@ func (s *Server) statusCards(urls RecorderURLs) []statusCard {
 				URL:    urls.StreamHTTP[g.Camera][stream],
 			})
 		}
+		card.State = cameraState(g.Rows)
 		out = append(out, card)
 	}
 	return out
+}
+
+// stateRank orders stream states worst first for cameraState.
+var stateRank = map[string]int{"down": 4, "reconnecting": 3, "novideo": 2, "streaming": 1}
+
+// cameraState is the worst state among a camera's streams, or "idle" for
+// a camera with none reported.
+func cameraState(rows []row) string {
+	worst := "idle"
+	for _, r := range rows {
+		if stateRank[r.State] > stateRank[worst] {
+			worst = r.State
+		}
+	}
+	return worst
+}
+
+// railEntry is one camera in the sidebar: a name and a state colour.
+type railEntry struct {
+	Name  string
+	State string
+}
+
+// railEntries pairs each configured camera with its state, read from
+// memory. It never contacts a camera, since it runs on every page render.
+func railEntries(cams []Camera, status StatusSource) []railEntry {
+	byCamera := make(map[string][]row)
+	if status != nil {
+		for name, st := range status.StreamStats() {
+			camera, _, _ := strings.Cut(name, "/")
+			byCamera[camera] = append(byCamera[camera], row{Name: name, State: streamState(st)})
+		}
+	}
+	out := make([]railEntry, 0, len(cams))
+	for _, c := range cams {
+		out = append(out, railEntry{Name: c.Name, State: cameraState(byCamera[c.Name])})
+	}
+	return out
+}
+
+// Alert is a fleet-level line above the dashboard grid, one per camera
+// that is down: a plain sentence and the exact detail behind it.
+type Alert struct {
+	Camera   string
+	Sentence string
+	Detail   string
+}
+
+// alertAfter is how long a reconnecting camera may go without a frame
+// before it is called out above the grid. A stream only reads "down" when
+// it has never restarted, so a camera that dropped and keeps retrying is
+// "reconnecting" for as long as it is gone; without this, the camera most
+// worth an alert would never get one.
+const alertAfter = 60 // seconds
+
+// alerts is one line per camera that is down, or reconnecting and silent
+// for alertAfter or longer.
+func alerts(cards []statusCard) []Alert {
+	var out []Alert
+	for _, c := range cards {
+		if c.State != "down" && c.State != "reconnecting" {
+			continue
+		}
+		var age float64
+		var restarts int
+		var lastErr string
+		for _, st := range c.Streams {
+			if st.State == "streaming" || st.State == "novideo" {
+				continue
+			}
+			age = max(age, st.LastFrameAgeSeconds)
+			restarts += st.Restarts
+			if lastErr == "" {
+				lastErr = st.LastError
+			}
+		}
+		if c.State == "reconnecting" && age < alertAfter {
+			continue
+		}
+		sentence := c.Camera + " is not connected."
+		if mins := int(age / 60); mins >= 1 {
+			sentence = fmt.Sprintf("%s has recorded nothing for %d minutes.", c.Camera, mins)
+		}
+		if int(age/60) == 1 {
+			sentence = c.Camera + " has recorded nothing for 1 minute."
+		}
+		detail := fmt.Sprintf("%d restarts", restarts)
+		if restarts == 1 {
+			detail = "1 restart"
+		}
+		if lastErr != "" {
+			detail = lastErr + " · " + detail
+		}
+		out = append(out, Alert{Camera: c.Camera, Sentence: sentence, Detail: detail})
+	}
+	return out
+}
+
+// healthyCount is how many cameras are streaming, for the page subtitle.
+func healthyCount(cards []statusCard) int {
+	n := 0
+	for _, c := range cards {
+		if c.State == "streaming" {
+			n++
+		}
+	}
+	return n
 }

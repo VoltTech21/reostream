@@ -243,11 +243,15 @@ type configPage struct {
 	Error      string
 	Saved      bool
 	ReloadNote string
+	// Path is the file on disk, shown above the editor. RestartNote says
+	// what saving will do before the click, not only after it.
+	Path        string
+	RestartNote string
 }
 
 func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 	text, err := loadRawConfig(s.opts.ConfigPath)
-	page := configPage{Title: "Config", Text: text}
+	page := configPage{Title: "Config", Text: text, Path: s.opts.ConfigPath, RestartNote: "Saving reloads the cameras whose settings changed."}
 	if err != nil {
 		page.Error = err.Error()
 	}
@@ -328,11 +332,12 @@ func (s *Server) saveConfigPage(w http.ResponseWriter, r *http.Request) {
 	note, err := s.writeAndApply(text)
 	if err != nil {
 		s.render(w, "config.html", configPage{
+			Path:  s.opts.ConfigPath,
 			Title: "Config", Text: text, Error: err.Error(),
 		})
 		return
 	}
 	s.render(w, "config.html", configPage{
-		Title: "Config", Text: text, Saved: true, ReloadNote: note,
+		Path: s.opts.ConfigPath, Title: "Config", Text: text, Saved: true, ReloadNote: note,
 	})
 }

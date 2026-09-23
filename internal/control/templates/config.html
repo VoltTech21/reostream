@@ -1,11 +1,18 @@
 {{define "body"}}
 <h1>Config</h1>
-{{if .Error}}<p class="state-down">{{.Error}}</p>{{end}}
-{{if .Saved}}<p class="state-streaming">Saved. {{.ReloadNote}}</p>{{end}}
-<div class="card">
+<p class="subtitle">The file on disk. Saving checks it with the same parser the daemon boots with, so a broken file is refused before it is written.</p>
+{{if .Error}}<p class="outcome-refused">{{.Error}}</p>{{end}}
 <form method="post" action="/config">
-<textarea name="toml" rows="24">{{.Text}}</textarea>
-<button type="submit">Save and apply</button>
-</form>
+<div class="editor">
+<div class="filebar">
+<code>{{.Path}}</code>
 </div>
+<textarea name="toml" rows="24">{{.Text}}</textarea>
+<div class="savebar">
+<span class="dot"></span>
+<span>{{if .Saved}}Saved. {{.ReloadNote}}{{else}}Parses.{{if .RestartNote}} {{.RestartNote}}{{end}}{{end}}</span>
+<button type="submit">Save and apply</button>
+</div>
+</div>
+</form>
 {{end}}
