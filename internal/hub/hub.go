@@ -61,6 +61,20 @@ func (s FrameStats) Age() time.Duration {
 	return 0
 }
 
+// Seen reports whether this stream has ever connected or delivered a frame.
+//
+// This is the other half of the hole Age's fallback closes. Age can only
+// measure from a moment that happened, so a stream that has never had one,
+// a camera that is powered off or at an address nothing answers, reports
+// age 0, and 0 is indistinguishable from a frame that arrived this instant.
+// A camera configured at an unreachable address therefore read as healthy
+// indefinitely: connected, streaming, zero restarts, age 0.
+//
+// Callers deciding whether a stream is live have to ask this first.
+func (s FrameStats) Seen() bool {
+	return !s.LastFrameAt.IsZero() || !s.ConnectedAt.IsZero()
+}
+
 // subscriber pairs a channel with the small lock that makes closing it safe.
 // Sending to and closing a channel from different goroutines is only safe if
 // something serializes them; a close that races a send panics. That

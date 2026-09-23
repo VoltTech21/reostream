@@ -135,7 +135,11 @@ func (s *Server) StreamStats() map[string]StreamStatus {
 		// Connected: it is what a viewer sees in the brief window between a
 		// stall starting and Run's own watchdog acting on it, and while a
 		// fresh connection is still waiting on its first frame.
-		st.Streaming = st.Connected && st.LastFrameAgeSeconds < stream.DefaultMediaTimeout.Seconds()
+		// fs.Seen() first: a stream that has never connected has no moment
+		// to measure an age from, so its age is 0, which compares as
+		// healthy against any timeout.
+		st.Streaming = st.Connected && fs.Seen() &&
+			st.LastFrameAgeSeconds < stream.DefaultMediaTimeout.Seconds()
 		out[name] = st
 	}
 	return out
