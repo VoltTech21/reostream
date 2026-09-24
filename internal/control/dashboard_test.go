@@ -205,21 +205,30 @@ func TestOSDReadFailureDoesNotBreakTheRow(t *testing.T) {
 	}
 }
 
-// TestDashboardNeverAutoplays is the regression test for the live bug: the
-// old page created and loaded an mpegts.js player for every tile the
-// instant the page loaded, which meant eight simultaneous video decodes on
-// an eight camera fleet. No player may be created outside of a click
-// handler, and the <video> element itself must never carry autoplay.
-func TestDashboardNeverAutoplays(t *testing.T) {
+// TestDashboardAutoplaysOnlyTheCheapStream replaces an earlier guard that
+// forbade autoplay outright.
+//
+// That guard was written for a live bug: the page created and loaded a
+// player for every tile the instant it opened, which was eight
+// simultaneous decodes on an eight camera fleet. What made that expensive
+// was the stream, not the autoplay. A tile plays the sub stream, 640x360
+// at about a quarter of a megabit, where main is 4K at six, and eight
+// tiles waiting behind a play button are eight cameras nobody is watching.
+//
+// So the cost is still bounded, by these three rules.
+func TestDashboardAutoplaysOnlyTheCheapStream(t *testing.T) {
 	h := hub.New(4)
 	h.SetKeyframe("H264", nil)
-	hubs := server.StaticHubs(map[string]*hub.Hub{"gate/sub": h})
+	main := hub.New(4)
+	main.SetKeyframe("H264", nil)
+	hubs := server.StaticHubs(map[string]*hub.Hub{"gate/sub": h, "gate/main": main})
 	ts := newTestServer(t, control.Options{
 		AllowNoPassword: true,
 		ConfigPath:      writeTestConfig(t, "gate"),
 		Hubs:            hubs,
 		Status: fixedStatus{
-			"gate/sub": {Connected: true, Streaming: true},
+			"gate/sub":  {Connected: true, Streaming: true},
+			"gate/main": {Connected: true, Streaming: true},
 		},
 	})
 	resp, err := http.Get(ts.URL + "/")
@@ -230,12 +239,18 @@ func TestDashboardNeverAutoplays(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	page := string(body)
 
-	if strings.Contains(page, "autoplay") {
-		t.Fatal("dashboard video element carries autoplay")
+	// The tile that plays by itself must be the sub stream. A page that
+	// autoplayed main would be the original bug wearing a new name.
+	if !strings.Contains(page, `data-src="/stream/gate_sub.ts"`) {
+		t.Errorf("the tile does not play the sub stream:\n%s", page)
+	}
+	if strings.Contains(page, `data-src="/stream/gate.ts"`) {
+		t.Error("the tile plays the main stream, which is what made eight at once expensive")
+	}
+	if !strings.Contains(page, "data-autoplay") {
+		t.Error("no tile is marked to play by itself")
 	}
 
-	// The tile behaviour lives in /assets/dashboard.js; the page only
-	// loads it, so the checks below read the script itself.
 	if !strings.Contains(page, `<script src="/assets/dashboard.js"></script>`) {
 		t.Fatal("dashboard does not load its script")
 	}
@@ -245,24 +260,18 @@ func TestDashboardNeverAutoplays(t *testing.T) {
 	}
 	defer js.Body.Close()
 	script, _ := io.ReadAll(js.Body)
-	page = string(script)
+	code := string(script)
 
-	// The only script that runs unconditionally at load is the wiring loop
-	// that attaches click handlers. It must never itself call
-	// mpegts.createPlayer: that call may only happen from inside
-	// startPlayer, invoked by a click.
-	loopStart := strings.Index(page, "document.querySelectorAll('.cam-video[data-src]').forEach")
-	if loopStart == -1 {
-		t.Fatal("dashboard is missing the click-wiring loop")
+	// Stopping a tile must destroy its player. Pausing the element is not
+	// enough: mpegts.js keeps pulling the stream over XHR while paused,
+	// which leaves the daemon serving a tab nobody is watching.
+	if !strings.Contains(code, "player.destroy()") {
+		t.Error("stopping a tile must destroy the player, not just pause the element")
 	}
-	if strings.Contains(page[loopStart:], "createPlayer") {
-		t.Fatal("the on-load wiring loop creates a player itself instead of only on click")
-	}
-	if !strings.Contains(page, "addEventListener('click'") {
-		t.Fatal("dashboard never wires a click handler to start a tile")
-	}
-	if !strings.Contains(page, "player.destroy()") {
-		t.Fatal("stopping a tile must destroy the player, not just pause the element, or mpegts.js keeps pulling the stream over XHR")
+	// One stepped-up tile at a time: pressing a tile stops whatever was
+	// stepped up before it.
+	if !strings.Contains(code, "stopActive();") {
+		t.Error("pressing a tile does not stop the previously stepped-up one")
 	}
 }
 

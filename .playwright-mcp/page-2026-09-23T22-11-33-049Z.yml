@@ -1,0 +1,40 @@
+- generic [ref=f4e1]:
+  - generic [ref=f4e2]:
+    - paragraph [ref=f4e3]:
+      - text: reostream
+      - generic [ref=f4e4]: dev
+    - navigation [ref=f4e5]:
+      - list [ref=f4e6]:
+        - listitem [ref=f4e7]:
+          - link "Status" [ref=f4e8] [cursor=pointer]:
+            - /url: /
+        - listitem [ref=f4e9]:
+          - link "Logs" [ref=f4e10] [cursor=pointer]:
+            - /url: /logs
+        - listitem [ref=f4e11]:
+          - link "Config" [ref=f4e12] [cursor=pointer]:
+            - /url: /config
+        - listitem [ref=f4e13]:
+          - link "Password" [ref=f4e14] [cursor=pointer]:
+            - /url: /password
+        - listitem [ref=f4e15]:
+          - link "Setup" [ref=f4e16] [cursor=pointer]:
+            - /url: /setup
+      - heading "Cameras" [level=2] [ref=f4e17]
+      - list [ref=f4e18]:
+        - listitem [ref=f4e19]:
+          - link "All cameras" [ref=f4e20] [cursor=pointer]:
+            - /url: /cameras
+        - listitem [ref=f4e21]:
+          - link "gate" [ref=f4e22] [cursor=pointer]:
+            - /url: /cameras/gate
+    - paragraph [ref=f4e24]: Press ⌘K for anything
+  - main [ref=f4e25]:
+    - generic [ref=f4e26]:
+      - heading "Sign in" [level=1] [ref=f4e27]
+      - paragraph [ref=f4e28]: This page can change camera settings, so it asks first.
+      - generic [ref=f4e30]:
+        - generic [ref=f4e31]:
+          - generic [ref=f4e32]: Password
+          - textbox "Password" [active] [ref=f4e33]
+        - button "Sign in" [ref=f4e34] [cursor=pointer]

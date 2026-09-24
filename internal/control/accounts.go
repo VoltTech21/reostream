@@ -69,6 +69,15 @@ func (s *Server) serveAccounts(w http.ResponseWriter, r *http.Request) {
 	readCancel()
 	if err != nil {
 		page.Err = fmt.Sprintf("reading accounts: %v", err)
+	} else if status == 400 {
+		// Not "there are no accounts". Both cameras this was measured on
+		// have a working admin account, since that is what reostream logs
+		// in with, and both answer 400. docs/control.md files message 58
+		// as "wants parameters" on all three models probed: the camera
+		// will answer, but not to a bare read, and nothing has established
+		// what it wants. Saying so is more use than the status alone, and
+		// more honest than a guess at the reason.
+		page.Err = "this camera will not list its accounts from a plain read: it answered 400, which on this protocol means the message needs parameters nobody has established. It does not mean the camera has no accounts, and it says nothing about whether yours have passwords. Reolink's own app or web page is where to check that."
 	} else if status != 200 {
 		page.Err = fmt.Sprintf("camera answered status %d for the account list", status)
 	} else {

@@ -37,7 +37,7 @@ import (
 // renders with the wrong chrome. Any template added under templates/ must
 // be added to this list too.
 //
-//go:embed templates/accounts.html templates/blocks.html templates/claim.html templates/discover.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
+//go:embed templates/password.html templates/accounts.html templates/blocks.html templates/claim.html templates/discover.html templates/camera.html templates/cameras.html templates/config.html templates/dashboard.html templates/flash.html templates/layout.html templates/login.html templates/logs.html templates/probe.html templates/result.html templates/setup.html templates/time.html templates/urls.html
 var templateFS embed.FS
 
 // Explicit, for the same reason the template list above is, plus one of
@@ -48,7 +48,7 @@ var templateFS embed.FS
 // before this was changed: a creds.toml placed in this directory was served
 // to an unauthenticated request with every test still green.
 //
-//go:embed assets/style.css assets/dashboard.js assets/settings.js assets/mpegts.js assets/mpegts.js.LICENSE.txt assets/LICENSE-mpegts.txt assets/README.md
+//go:embed assets/style.css assets/dashboard.js assets/settings.js assets/snapshot.js assets/mpegts.js assets/mpegts.js.LICENSE.txt assets/LICENSE-mpegts.txt assets/README.md
 var assetFS embed.FS
 
 // assetSub drops the "assets" prefix so the URL and the file path match.
@@ -355,12 +355,16 @@ var routePatterns = []string{
 	"GET /logs/stream",
 	"GET /config",
 	"POST /config",
+	"GET /password",
+	"POST /password",
+	"POST /logout",
 	"GET /cameras",
 	"POST /cameras/add",
 	"GET /cameras/{name}",
 	"POST /cameras/{name}/settings",
 	"GET /cameras/{name}/osd",
 	"POST /cameras/{name}/floodlight",
+	"POST /cameras/{name}/fisheye",
 	"GET /cameras/{name}/time",
 	"POST /cameras/{name}/time",
 	"POST /cameras/{name}/timezone",
@@ -398,6 +402,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.serveLoginForm)
 	mux.HandleFunc("POST /login", s.serveLogin)
 	mux.Handle("GET /{$}", s.wrap(http.HandlerFunc(s.serveDashboard)))
+	mux.Handle("GET /password", s.wrap(http.HandlerFunc(s.servePasswordPage)))
+	mux.Handle("POST /password", s.wrap(http.HandlerFunc(s.serveApplyPassword)))
+	mux.Handle("POST /logout", s.wrap(http.HandlerFunc(s.serveLogout)))
 	mux.Handle("GET /logs", s.wrap(http.HandlerFunc(s.serveLogsPage)))
 	mux.Handle("GET /logs/history", s.wrap(http.HandlerFunc(s.serveLogHistory)))
 	mux.Handle("GET /logs/stream", s.wrap(http.HandlerFunc(s.serveLogStream)))
@@ -414,6 +421,7 @@ func (s *Server) Handler() http.Handler {
 	// path is exactly how a composed document reaches a camera.
 	mux.Handle("GET /cameras/{name}/osd", s.wrap(http.HandlerFunc(s.serveOSD)))
 	mux.Handle("POST /cameras/{name}/floodlight", s.wrap(http.HandlerFunc(s.serveApplyFloodlight)))
+	mux.Handle("POST /cameras/{name}/fisheye", s.wrap(http.HandlerFunc(s.serveApplyFisheye)))
 	mux.Handle("GET /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveTime)))
 	mux.Handle("POST /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveApplyTime)))
 	mux.Handle("POST /cameras/{name}/timezone", s.wrap(http.HandlerFunc(s.serveApplyTimezone)))

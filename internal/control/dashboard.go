@@ -68,6 +68,10 @@ type streamLine struct {
 	row
 	Stream string
 	URL    string
+	// Codec is what the stream's last keyframe was, "h264" or "h265", and
+	// empty for a stream that has not delivered one. It is the fact that
+	// decides whether a browser can show this stream at all.
+	Codec string
 }
 
 // statusCard is one CAMERA on the status page, not one stream. A camera
@@ -124,6 +128,7 @@ func (s *Server) statusCards(urls RecorderURLs) []statusCard {
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Camera < groups[j].Camera })
 
+	codecs := s.codecsByCamera()
 	out := make([]statusCard, 0, len(groups))
 	for _, g := range groups {
 		card := statusCard{Camera: g.Camera, Address: address[g.Camera], Tile: g.Tile}
@@ -133,12 +138,33 @@ func (s *Server) statusCards(urls RecorderURLs) []statusCard {
 				row:    r,
 				Stream: stream,
 				URL:    urls.StreamHTTP[g.Camera][stream],
+				Codec:  codecs[g.Camera][stream],
 			})
 		}
+		// main, then sub, then extern. Alphabetical put extern above main,
+		// which reads as though the balanced stream were the important one.
+		sort.SliceStable(card.Streams, func(i, j int) bool {
+			return streamRank(card.Streams[i].Stream) < streamRank(card.Streams[j].Stream)
+		})
 		card.State = cameraState(g.Rows)
 		out = append(out, card)
 	}
 	return out
+}
+
+// streamRank orders a camera's streams the way an operator reads them:
+// the main picture first, then the small one, then the balanced one.
+// Anything unrecognised sorts after those, keeping its own order.
+func streamRank(name string) int {
+	switch name {
+	case "main":
+		return 0
+	case "sub":
+		return 1
+	case "extern":
+		return 2
+	}
+	return 3
 }
 
 // stateRank orders stream states worst first for cameraState.

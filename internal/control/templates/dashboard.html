@@ -22,7 +22,6 @@
 <p class="subtitle">{{.HealthyCount}} of {{len .Cards}} cameras are healthy.</p>
 </div>
 <div class="actions">
-<button type="button" class="quiet" id="copy-all">Copy all URLs</button>
 <a href="/setup"><button type="button">Add a camera</button></a>
 </div>
 </div>
@@ -48,7 +47,7 @@
 <div class="camcard-head">
 <a class="cam-name" href="/cameras/{{$camera}}">{{$camera}}</a>
 <span class="pill state-{{.State}}">{{.State}}</span>
-{{if .Address}}<code class="exact">{{.Address}}</code>{{end}}
+{{if .Address}}<a class="exact camaddr" href="http://{{.Address}}" target="_blank" rel="noopener noreferrer" title="open {{.Address}} in a new tab">{{.Address}}</a>{{end}}
 </div>
 
 {{if not .Streams}}
@@ -59,13 +58,15 @@
 {{range .Streams}}
 <div class="streamline">
 <span class="stream-name"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{.Stream}}</span>
+{{if .Codec}}<span class="dim">{{.Codec}}</span>{{end}}
 <span>{{printf "%.1f" .FPS}} fps</span>
 <span>{{.MbpsBitrate}} Mb</span>
-<span>{{.Clients}}c</span>
-{{/* The restart count carries the last error on hover: LastError is the
-     last error EVER seen, not a current one, so it must not render as a
-     red line beside a camera delivering twenty frames a second. */}}
-{{if .LastError}}<span title="last error: {{.LastError}}">{{.Restarts}}r &#9432;</span>{{else}}<span>{{.Restarts}}r</span>{{end}}
+{{/* Clients and restarts used to sit here as "0c 0r". They read as a
+     fault code to anyone who did not already know what they were, and fps
+     and Mb already answer the question the line exists for. The restart
+     count is still worth seeing when something went wrong, so it survives
+     only when there is an error to attach it to. */}}
+{{if .LastError}}<span title="last error: {{.LastError}}">{{.Restarts}} restarts &#9432;</span>{{end}}
 </div>
 {{if .URL}}
 <div class="streamurl">
@@ -98,14 +99,17 @@
 </div>
 
 <script src="/assets/mpegts.js"></script>
+<script src="/assets/snapshot.js"></script>
 <script src="/assets/dashboard.js"></script>
 {{end}}
 
 {{define "cameravideo"}}
-<div class="cam-video"{{if .Tile.Playable}} data-src="{{.Tile.URL}}"{{end}}>
-{{/* The keyframe endpoint serves the most recent keyframe with no decode
-     in the serving path, so a grid of six tiles costs six cheap GETs. */}}
-<img src="/{{.Camera}}.keyframe" alt="" loading="lazy" onerror="this.remove()">
+<div class="cam-video"{{if .Tile.Playable}} data-src="{{.Tile.URL}}" data-autoplay="1"{{if .Tile.ExternURL}} data-extern="{{.Tile.ExternURL}}"{{end}}{{end}}>
+{{/* Filled by dashboard.js, which decodes one frame in the browser and
+     draws it here. It starts empty rather than pointing at the keyframe
+     endpoint: that endpoint serves the raw elementary stream, which no
+     browser can render as an image, so the tag only ever failed. */}}
+<img alt="" hidden>
 {{if .Tile.Playable}}
 <video muted playsinline hidden></video>
 <button type="button" class="play-btn" aria-label="Play {{.Camera}}">&#9654;</button>
@@ -114,4 +118,9 @@
 <span class="caption">no browser playable stream &mdash; this camera is HEVC only</span>
 {{end}}
 </div>
+<script>
+window.addEventListener("load", function () {
+  if (window.reostreamSnapshots) reostreamSnapshots(document.querySelectorAll(".cam-video[data-src]"));
+});
+</script>
 {{end}}

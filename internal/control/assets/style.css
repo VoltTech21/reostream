@@ -483,12 +483,20 @@ details.help > p { font: 400 12.5px/1.6 var(--sans); color: var(--dim); margin: 
 
 .streamline {
   display: grid;
-  grid-template-columns: 4.2rem 1fr auto auto auto;
+  /* name, codec, fps, bitrate, and a restart count that only appears when
+     something went wrong. Each line is its own grid, so the first two
+     columns are fixed widths: that is what keeps the numbers under each
+     other down the card instead of shuffling with the length of a name. */
+  grid-template-columns: 4.2rem 2.8rem 1fr auto auto;
   align-items: center;
   gap: 8px;
   font: 400 11.5px/1.5 var(--mono);
   color: var(--muted);
 }
+
+.streamline .dim { color: var(--edge); }
+/* fps sits against the bitrate rather than drifting away from it. */
+.streamline > span:nth-child(3) { text-align: right; }
 
 .streamline .stream-name { display: flex; align-items: center; gap: 6px; color: var(--text); }
 .streamline .dot { width: 5px; height: 5px; border-radius: 50%; }
@@ -720,6 +728,25 @@ td.mono { font: 400 12px/1.4 var(--mono); color: var(--muted); }
 .segmented span { text-transform: capitalize; }
 
 /* A reset to the camera's factory value: quiet, after the control. */
-.setting .reset { flex: 0 0 auto; font: 500 12px/1 var(--sans); color: var(--muted); white-space: nowrap; }
+.setting .reset {
+  flex: 0 0 auto;
+  font: 500 14px/1 var(--sans);
+  color: var(--muted);
+  white-space: nowrap;
+  /* A symbol, not a sentence: it sits in every row that has a factory
+     value to go back to, so it has to be quiet. The section heading
+     carries the one that says what it does in words. */
+  padding: 2px 4px;
+}
 .setting .reset:hover { color: var(--text); }
 .setting.off .reset { display: none; }
+
+/* The per-section reset, which clicks every row reset in its section. */
+.section-reset { font: 500 12px/1 var(--sans); color: var(--muted); }
+.section-reset:hover { color: var(--text); }
+
+/* The camera's address, linking to its own web page. It replaced a <code>
+   element and has to keep reading as one: a link that changes shape on
+   hover in a dense card is noise. */
+a.camaddr { font-family: var(--mono); color: var(--dim); text-decoration: none; }
+a.camaddr:hover { color: var(--ok); text-decoration: underline; }

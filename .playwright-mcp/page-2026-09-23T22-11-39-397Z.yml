@@ -1,0 +1,172 @@
+- generic [active] [ref=f6e1]:
+  - generic [ref=f6e2]:
+    - paragraph [ref=f6e3]:
+      - text: reostream
+      - generic [ref=f6e4]: dev
+    - navigation [ref=f6e5]:
+      - list [ref=f6e6]:
+        - listitem [ref=f6e7]:
+          - link "Status" [ref=f6e8] [cursor=pointer]:
+            - /url: /
+        - listitem [ref=f6e9]:
+          - link "Logs" [ref=f6e10] [cursor=pointer]:
+            - /url: /logs
+        - listitem [ref=f6e11]:
+          - link "Config" [ref=f6e12] [cursor=pointer]:
+            - /url: /config
+        - listitem [ref=f6e13]:
+          - link "Password" [ref=f6e14] [cursor=pointer]:
+            - /url: /password
+        - listitem [ref=f6e15]:
+          - link "Setup" [ref=f6e16] [cursor=pointer]:
+            - /url: /setup
+      - heading "Cameras" [level=2] [ref=f6e17]
+      - list [ref=f6e18]:
+        - listitem [ref=f6e19]:
+          - link "All cameras" [ref=f6e20] [cursor=pointer]:
+            - /url: /cameras
+        - listitem [ref=f6e21]:
+          - link "gate" [ref=f6e22] [cursor=pointer]:
+            - /url: /cameras/gate
+    - paragraph [ref=f6e24]: Press ⌘K for anything
+  - main [ref=f6e25]:
+    - heading "gate" [level=1] [ref=f6e26]
+    - paragraph [ref=f6e27]: 127.0.0.1:9
+    - navigation [ref=f6e28]:
+      - link "Overview" [ref=f6e29] [cursor=pointer]:
+        - /url: /cameras/gate
+      - link "Advanced" [ref=f6e30] [cursor=pointer]:
+        - /url: /cameras/gate/advanced
+      - link "Time" [ref=f6e31] [cursor=pointer]:
+        - /url: /cameras/gate/time
+      - link "Accounts" [ref=f6e32] [cursor=pointer]:
+        - /url: /cameras/gate/accounts
+    - generic [ref=f6e33]:
+      - generic [ref=f6e34]:
+        - generic [ref=f6e35]:
+          - generic [ref=f6e36]: no browser playable stream — this camera is HEVC only
+          - generic [ref=f6e40]:
+            - generic [ref=f6e41]: main
+            - generic [ref=f6e43]: 0.0 fps
+            - generic [ref=f6e44]: 0.0 Mb
+            - generic [ref=f6e45]: 0c
+            - generic [ref=f6e46]: 3r
+        - generic [ref=f6e47]:
+          - heading "Camera name and overlay" [level=2] [ref=f6e49]
+          - paragraph [ref=f6e50]: What the camera burns into the picture. Safe to change while streaming.
+          - paragraph [ref=f6e51]: "could not connect: baichuan: dial 127.0.0.1:9: dial tcp 127.0.0.1:9: connect: connection refused"
+          - generic [ref=f6e52]:
+            - paragraph [ref=f6e53]: Camera name
+            - generic [ref=f6e54]:
+              - textbox [ref=f6e55]
+              - button "set" [ref=f6e56] [cursor=pointer]
+          - generic [ref=f6e57]:
+            - paragraph [ref=f6e58]: Show camera name
+            - button "Show camera name" [ref=f6e60] [cursor=pointer]
+          - generic [ref=f6e62]:
+            - paragraph [ref=f6e63]: Camera name position
+            - generic [ref=f6e64]:
+              - radiogroup "Camera name position" [ref=f6e65]:
+                - generic [ref=f6e66]:
+                  - radio "top left" [disabled] [ref=f6e67] [cursor=pointer]
+                  - generic [ref=f6e68]: top left
+                - generic [ref=f6e69]:
+                  - radio "top right" [disabled] [ref=f6e70] [cursor=pointer]
+                  - generic [ref=f6e71]: top right
+                - generic [ref=f6e72]:
+                  - radio "bottom left" [disabled] [ref=f6e73] [cursor=pointer]
+                  - generic [ref=f6e74]: bottom left
+                - generic [ref=f6e75]:
+                  - radio "bottom right" [disabled] [ref=f6e76] [cursor=pointer]
+                  - generic [ref=f6e77]: bottom right
+              - paragraph [ref=f6e78]: Not read from the camera.
+          - generic [ref=f6e79]:
+            - paragraph [ref=f6e80]: Show timestamp
+            - button "Show timestamp" [ref=f6e82] [cursor=pointer]
+          - generic [ref=f6e84]:
+            - paragraph [ref=f6e85]: Timestamp position
+            - generic [ref=f6e86]:
+              - radiogroup "Timestamp position" [ref=f6e87]:
+                - generic [ref=f6e88]:
+                  - radio "top left" [disabled] [ref=f6e89] [cursor=pointer]
+                  - generic [ref=f6e90]: top left
+                - generic [ref=f6e91]:
+                  - radio "top right" [disabled] [ref=f6e92] [cursor=pointer]
+                  - generic [ref=f6e93]: top right
+                - generic [ref=f6e94]:
+                  - radio "bottom left" [disabled] [ref=f6e95] [cursor=pointer]
+                  - generic [ref=f6e96]: bottom left
+                - generic [ref=f6e97]:
+                  - radio "bottom right" [disabled] [ref=f6e98] [cursor=pointer]
+                  - generic [ref=f6e99]: bottom right
+              - paragraph [ref=f6e100]: Not read from the camera.
+      - generic [ref=f6e101]:
+        - generic [ref=f6e102]:
+          - generic [ref=f6e103]:
+            - heading "Image" [level=2] [ref=f6e104]
+            - generic [ref=f6e105]: INTERRUPTS THE STREAM
+          - paragraph [ref=f6e106]: How the sensor exposes and colors the picture. Every save briefly interrupts the stream.
+          - paragraph [ref=f6e107]: "could not connect: baichuan: dial 127.0.0.1:9: dial tcp 127.0.0.1:9: connect: connection refused"
+          - generic [ref=f6e108]:
+            - paragraph [ref=f6e109]: Brightness
+            - generic [ref=f6e110]:
+              - generic [ref=f6e111]:
+                - slider "Brightness slider" [ref=f6e112]: "128"
+                - spinbutton [ref=f6e113]
+              - button "set" [ref=f6e114] [cursor=pointer]
+          - generic [ref=f6e115]:
+            - paragraph [ref=f6e116]: Contrast
+            - generic [ref=f6e117]:
+              - generic [ref=f6e118]:
+                - slider "Contrast slider" [ref=f6e119]: "128"
+                - spinbutton [ref=f6e120]
+              - button "set" [ref=f6e121] [cursor=pointer]
+          - generic [ref=f6e122]:
+            - paragraph [ref=f6e123]: Saturation
+            - generic [ref=f6e124]:
+              - generic [ref=f6e125]:
+                - slider "Saturation slider" [ref=f6e126]: "128"
+                - spinbutton [ref=f6e127]
+              - button "set" [ref=f6e128] [cursor=pointer]
+          - generic [ref=f6e129]:
+            - paragraph [ref=f6e130]: Day and night mode
+            - generic [ref=f6e131]:
+              - radiogroup "Day and night mode" [ref=f6e132]:
+                - generic [ref=f6e133] [cursor=pointer]:
+                  - radio "Auto" [ref=f6e134]
+                  - generic [ref=f6e135]: Auto
+                - generic [ref=f6e136] [cursor=pointer]:
+                  - radio "Color" [ref=f6e137]
+                  - generic [ref=f6e138]: Color
+                - generic [ref=f6e139] [cursor=pointer]:
+                  - radio "Black & white" [ref=f6e140]
+                  - generic [ref=f6e141]: Black & white
+              - paragraph [ref=f6e142]: Not read from the camera.
+          - paragraph [ref=f6e144]: Infrared cut filter
+        - generic [ref=f6e145]:
+          - generic [ref=f6e146]:
+            - heading "Lights and IR" [level=2] [ref=f6e147]
+            - generic [ref=f6e148]: PHYSICAL EFFECT
+          - paragraph [ref=f6e149]: Lights on the camera itself. Each change asks again first.
+          - paragraph [ref=f6e150]: "could not connect: baichuan: dial 127.0.0.1:9: dial tcp 127.0.0.1:9: connect: connection refused"
+          - generic [ref=f6e151]:
+            - paragraph [ref=f6e152]: Status LED
+            - generic [ref=f6e153]:
+              - radiogroup "Status LED" [ref=f6e154]:
+                - generic [ref=f6e155] [cursor=pointer]:
+                  - radio "Auto" [ref=f6e156]
+                  - generic [ref=f6e157]: Auto
+                - generic [ref=f6e158] [cursor=pointer]:
+                  - radio "On" [ref=f6e159]
+                  - generic [ref=f6e160]: "On"
+                - generic [ref=f6e161] [cursor=pointer]:
+                  - radio "Off" [ref=f6e162]
+                  - generic [ref=f6e163]: "Off"
+              - paragraph [ref=f6e164]: Not read from the camera.
+          - group [ref=f6e165]:
+            - generic "! Before you change these" [ref=f6e166] [cursor=pointer]:
+              - generic [ref=f6e167]: "!"
+              - text: Before you change these
+    - paragraph [ref=f6e168]: "could not connect: baichuan: dial 127.0.0.1:9: dial tcp 127.0.0.1:9: connect: connection refused"
+    - group [ref=f6e169]:
+      - generic "what this camera reports" [ref=f6e170]

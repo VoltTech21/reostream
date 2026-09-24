@@ -33,13 +33,38 @@
 <div>
 
 <section>
-<h2>NTP</h2>
+<h2>Clock</h2>
+{{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
+<p class="hint">This camera is set to <strong>{{.TimeZoneLabel}}</strong>. It applies its own daylight saving on top, so the clock in the picture can read an hour off this and still be right.</p>
+{{end}}
 {{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
-{{/* onsubmit asks only when the box is ticked: one camera is the write
-     this form has always made, the whole fleet is worth a second look. */}}
+
+{{/* Two forms because they are two writes to two endpoints, one card
+     because to an operator they are one subject. onsubmit asks only when
+     the box is ticked: one camera is the write these forms have always
+     made, the whole fleet is worth a second look. */}}
+<form method="post" action="/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('write this timezone to every camera in the fleet?')">
+<div class="setting">
+<p>Timezone</p>
+<div class="control">
+<select name="timezone" style="width:17rem">
+{{if .TimeZoneUnlisted}}<option value="{{.TimeZone}}" selected>{{.TimeZoneLabel}} (as this camera holds it)</option>{{end}}
+{{range .TimeZoneChoices}}<option value="{{.Seconds}}"{{if eq .Seconds $.TimeZone}} selected{{end}}>{{.Label}}</option>
+{{end}}</select>
+</div>
+</div>
+<div class="setting">
+<p><label for="tz-every">Apply to all cameras</label></p>
+<div class="control"><input type="checkbox" id="tz-every" name="every" value="1"></div>
+</div>
+<button type="submit">Set timezone</button>
+</form>
+
+<div class="docrow"></div>
+
 <form method="post" action="/cameras/{{.Camera.Name}}/time" onsubmit="return !this.every.checked || confirm('write this ntp server to every camera in the fleet?')">
 <div class="setting">
-<p>Enabled</p>
+<p>Sync with a time server</p>
 <div class="control">
 {{/* A switch, but one that does not save by itself: this form also
      carries the server and the every-camera box, and the set button below
@@ -49,37 +74,14 @@
 </div>
 </div>
 <div class="setting">
-<p>Server</p>
+<p>Time server</p>
 <div class="control"><input type="text" name="server" value="{{.NTPServer}}" style="width:14rem"></div>
 </div>
 <div class="setting">
 <p><label for="ntp-every">Apply to all cameras</label></p>
 <div class="control"><input type="checkbox" id="ntp-every" name="every" value="1"></div>
 </div>
-<button type="submit">set</button>
-</form>
-</section>
-
-<section>
-<h2>Timezone</h2>
-{{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{else}}
-<p class="hint">This camera is set to <strong>{{.TimeZoneLabel}}</strong>. It applies its own daylight saving on top, so the clock in the picture can read an hour off this and still be right.</p>
-{{end}}
-<form method="post" action="/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('write this timezone to every camera in the fleet?')">
-<div class="setting">
-<p>Timezone</p>
-<div class="control">
-<select name="timezone" style="width:17rem">
-{{if .TimeZoneUnlisted}}<option value="{{.TimeZone}}" selected>{{.TimeZoneLabel}} (as this camera holds it)</option>{{end}}
-{{range .TimeZoneChoices}}<option value="{{.Seconds}}"{{if eq .Seconds $.TimeZone}} selected{{end}}>{{.Label}}</option>
-{{end}}</select>
-<button type="submit">set</button>
-</div>
-</div>
-<div class="setting">
-<p><label for="tz-every">Apply to all cameras</label></p>
-<div class="control"><input type="checkbox" id="tz-every" name="every" value="1"></div>
-</div>
+<button type="submit">Set time server</button>
 </form>
 </section>
 

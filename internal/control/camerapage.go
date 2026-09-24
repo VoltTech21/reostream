@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/config"
 )
 
 // cameraPage is what camera.html renders: the stream state and video this
@@ -36,6 +37,9 @@ type cameraPage struct {
 	// has reported a codec) still renders, as a zero-value group whose
 	// Tile is "not playable" rather than dropping the section.
 	Group cameraGroup
+	// StreamURLs is this camera's streams to their recorder URLs, the same
+	// map the status page copies from. Keyed by stream name ("main").
+	StreamURLs map[string]string
 
 	Support   *baichuan.Support
 	Abilities []baichuan.Ability
@@ -67,6 +71,30 @@ type cameraPage struct {
 	// curatedField or writeBlock the way every other control here does; it
 	// gets its own section in the template and its own route,
 	// serveApplyFloodlight.
+	// HasFloodlight is the camera's own answer, from the Support block's
+	// ledCtrl, to whether there is a light to drive at all. GetWhiteLed
+	// cannot be asked this: measured on the fleet, it returns the same
+	// document on a camera with a light and one without, which is how a
+	// floodlight control came to be drawn on a camera that has none.
+	//
+	// False means the camera said no, not that nothing was read: a support
+	// read that failed leaves this true, because that is unknown rather
+	// than absent.
+	HasFloodlight bool
+	// HasFishEye is the camera's own answer, from the Support block's
+	// fishEye field, to whether it has dewarping view modes: 3 on the
+	// fisheye here, 0 on the pano, which stitches two lenses instead.
+	//
+	// False means the camera said no; a support read that failed leaves
+	// this false too, because unlike the floodlight this write reboots the
+	// camera. Offering a reboot to a camera that may not support the
+	// setting is not a trade worth making.
+	HasFishEye     bool
+	FishEyeOptions []fisheyeOption
+	FishEyeCurrent string
+	FishEyeErr     string
+	// FishEyeConfirm is what the operator is asked first.
+	FishEyeConfirm    string
 	FloodlightOptions []floodlightOption
 	FloodlightCurrent string
 	FloodlightErr     string
@@ -230,11 +258,24 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 		Camera: cam,
 		Flash:  s.takeFlash(r),
 		Group:  s.cameraGroupFor(cam.Name),
+		// The same URLs the status page copies out, built from the host
+		// this page was reached on so both pages show the one an operator
+		// can actually paste. A config that will not load leaves them
+		// empty rather than stopping the page.
+		StreamURLs: func() map[string]string {
+			cfg, err := config.Load(s.opts.ConfigPath)
+			if err != nil {
+				return nil
+			}
+			return recorderURLs(cfg, hostOnly(r.Host)).StreamHTTP[cam.Name]
+		}(),
 
 		Groups:            groups(),
 		Values:            map[string]string{},
 		Unavailable:       map[string]string{},
 		ResolvedBlock:     map[string]string{},
+		FishEyeOptions:    fisheyeOptions,
+		FishEyeConfirm:    fisheyeConfirmReason,
 		FloodlightOptions: floodlightOptions,
 		FloodlightConfirm: lightsConfirmReason,
 	}
@@ -341,10 +382,27 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	if c, cgiErr := s.cgiDial(cam); cgiErr != nil {
 		page.FloodlightErr = fmt.Sprintf("could not connect for the floodlight: %v", cgiErr)
 	} else {
-		if mode, state, readErr := readFloodlight(floodlightCtx, c); readErr != nil {
-			page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
-		} else {
-			page.FloodlightCurrent = floodlightState(mode, state)
+		// Channel 0: this page is one camera, and every read on it is
+		// against that camera's first channel.
+		// Hidden only on a positive no. A camera that says it has no light
+		// gets no control; a camera whose support read failed is unknown,
+		// and hiding a light someone needs to switch on a guess is worse
+		// than offering one that may do nothing.
+		page.HasFishEye = page.Support != nil && page.Support.HasFishEye(0)
+		if page.HasFishEye {
+			if fe, err := readFisheye(floodlightCtx, c); err != nil {
+				page.FishEyeErr = fmt.Sprintf("could not read the view mode: %v", err)
+			} else {
+				page.FishEyeCurrent = fisheyeValueByMode(int(fe.ImageType))
+			}
+		}
+		page.HasFloodlight = page.Support == nil || page.Support.HasFloodlight(0)
+		if page.HasFloodlight {
+			if mode, state, readErr := readFloodlight(floodlightCtx, c); readErr != nil {
+				page.FloodlightErr = fmt.Sprintf("could not read the floodlight: %v", readErr)
+			} else {
+				page.FloodlightCurrent = floodlightState(mode, state)
+			}
 		}
 		// Same session: the camera's own factory defaults, for the reset
 		// buttons. Best effort; a camera that will not say offers none.

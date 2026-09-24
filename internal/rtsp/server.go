@@ -2,8 +2,10 @@ package rtsp
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -19,6 +21,9 @@ type Server struct {
 	mu       sync.RWMutex
 	streams  map[string]*Stream
 	sessions map[*gortsplib.ServerSession]*Stream
+	// drops counts packets dropped per path since they were last
+	// reported. See OnStreamWriteError.
+	drops map[string]*dropCount
 }
 
 // New returns a server bound to listen. UDP is offered alongside TCP but is
@@ -48,6 +53,56 @@ func New(listen string) *Server {
 		WriteQueueSize: 2048,
 	}
 	return s
+}
+
+// OnStreamWriteError is called by gortsplib when a session's write queue
+// is full and a packet has been dropped.
+//
+// Implementing it at all is the point. Without this method gortsplib logs
+// the error itself, one bare line per dropped packet, with no camera and
+// no session on it; a build doing that logged about 2,400 lines a minute
+// on this fleet. A dropped packet is not news on its own, the queue is
+// drop-on-full by design, but a reader falling behind is worth knowing,
+// so this counts them and says so once a minute per session.
+func (s *Server) OnStreamWriteError(ctx *gortsplib.ServerHandlerOnStreamWriteErrorCtx) {
+	s.mu.Lock()
+	// sessions maps a session to its stream; streams maps a path to the
+	// same stream. There are at most a couple of dozen paths, so the
+	// reverse lookup is cheaper than a third map to keep in step.
+	path := "?"
+	if st, ok := s.sessions[ctx.Session]; ok && st != nil {
+		for name, candidate := range s.streams {
+			if candidate == st {
+				path = name
+				break
+			}
+		}
+	}
+	if s.drops == nil {
+		s.drops = make(map[string]*dropCount)
+	}
+	d, ok := s.drops[path]
+	if !ok {
+		d = &dropCount{}
+		s.drops[path] = d
+	}
+	d.n++
+	now := time.Now()
+	var say uint64
+	if now.Sub(d.said) >= time.Minute {
+		say, d.n, d.said = d.n, 0, now
+	}
+	s.mu.Unlock()
+
+	if say > 0 {
+		log.Printf("rtsp: %s: %d packets dropped, a reader is not keeping up", path, say)
+	}
+}
+
+// dropCount is one path's dropped packets since they were last reported.
+type dropCount struct {
+	n    uint64
+	said time.Time
 }
 
 // Add registers a path and returns the stream that feeds it. The returned

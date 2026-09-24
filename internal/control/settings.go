@@ -254,7 +254,14 @@ func groups() []Group {
 				// irLivesInImageWarning's comment for why this exists at
 				// all, despite an earlier version of this page claiming
 				// it did not.
-				{Label: "Infrared cut filter", XPath: "InputAdvanceCfg/DayNight/IrcutMode", Kind: "text", Slug: "image-ircut"},
+				// A reading, not a control. Every camera on the fleet this
+				// was built against reports "ir" and nothing has established
+				// what else the firmware accepts, so a dropdown would be a
+				// guess presented as a fact and a text box asks the operator
+				// to guess instead. This field moves a physical part, so
+				// neither is good enough. Advanced edits it by xpath for
+				// anyone who does know a value to try.
+				{Label: "Infrared cut filter", XPath: "InputAdvanceCfg/DayNight/IrcutMode", Kind: "reading", Slug: "image-ircut"},
 			},
 		},
 		{

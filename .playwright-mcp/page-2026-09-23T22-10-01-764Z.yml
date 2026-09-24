@@ -1,0 +1,40 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - paragraph [ref=e3]:
+      - text: reostream
+      - generic [ref=e4]: dev
+    - navigation [ref=e5]:
+      - list [ref=e6]:
+        - listitem [ref=e7]:
+          - link "Status" [ref=e8] [cursor=pointer]:
+            - /url: /
+        - listitem [ref=e9]:
+          - link "Logs" [ref=e10] [cursor=pointer]:
+            - /url: /logs
+        - listitem [ref=e11]:
+          - link "Config" [ref=e12] [cursor=pointer]:
+            - /url: /config
+        - listitem [ref=e13]:
+          - link "Password" [ref=e14] [cursor=pointer]:
+            - /url: /password
+        - listitem [ref=e15]:
+          - link "Setup" [ref=e16] [cursor=pointer]:
+            - /url: /setup
+      - heading "Cameras" [level=2] [ref=e17]
+      - list [ref=e18]:
+        - listitem [ref=e19]:
+          - link "All cameras" [ref=e20] [cursor=pointer]:
+            - /url: /cameras
+        - listitem [ref=e21]:
+          - link "gate" [ref=e22] [cursor=pointer]:
+            - /url: /cameras/gate
+    - paragraph [ref=e24]: Press ⌘K for anything
+  - main [ref=e25]:
+    - generic [ref=e26]:
+      - heading "Sign in" [level=1] [ref=e27]
+      - paragraph [ref=e28]: This page can change camera settings, so it asks first.
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - generic [ref=e32]: Password
+          - textbox "Password" [active] [ref=e33]
+        - button "Sign in" [ref=e34] [cursor=pointer]

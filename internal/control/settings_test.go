@@ -204,7 +204,7 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	}
 	html := string(raw)
 
-	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night mode", "Infrared cut filter", "INTERRUPTS THE STREAM"} {
+	for _, want := range []string{"Camera name", "Show camera name", "Show timestamp", "Brightness", "Contrast", "Saturation", "Day and night mode", "Infrared cut filter"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page does not render the %q field", want)
 		}
@@ -217,8 +217,14 @@ func TestServeSettingsRendersTheCuratedFieldsSeededFromTheCamera(t *testing.T) {
 	if !strings.Contains(html, `value="120"`) {
 		t.Errorf("page does not show the brightness read from the camera:\n%s", html)
 	}
-	if !strings.Contains(html, `value="ir"`) {
+	// The infrared cut filter is shown, but not as an input: nothing has
+	// established what values the firmware accepts, and it moves a physical
+	// part, so the page reports it rather than inviting a guess.
+	if !strings.Contains(html, `<span class="exact">ir</span>`) {
 		t.Errorf("page does not show the infrared cut filter read from the camera:\n%s", html)
+	}
+	if strings.Contains(html, `name="value" value="ir"`) {
+		t.Errorf("the infrared cut filter is an editable input again:\n%s", html)
 	}
 	if strings.Contains(html, "not available:") {
 		t.Errorf("a field that resolved cleanly was rendered as unavailable:\n%s", html)

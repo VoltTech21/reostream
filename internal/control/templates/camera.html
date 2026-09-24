@@ -18,7 +18,7 @@
 */}}
 {{define "body"}}
 <h1>{{.Camera.Name}}</h1>
-<p class="subtitle">{{.Camera.Address}}</p>
+<p class="subtitle"><a class="camaddr" href="http://{{.Camera.Address}}" target="_blank" rel="noopener noreferrer" title="open {{.Camera.Address}} in a new tab">{{.Camera.Address}}</a></p>
 
 <nav class="tabs">
 <a href="/cameras/{{.Camera.Name}}" aria-current="page">Overview</a>
@@ -37,13 +37,20 @@
 <div class="camcard-body">
 <div class="streams">
 {{range .Group.Rows}}
+{{$stream := streamOf .Name}}
 <div class="streamline">
-<span class="stream-name"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{streamOf .Name}}</span>
+<span class="stream-name"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{$stream}}</span>
+{{/* Clients and restarts left this line for the same reason they left the
+     status page's: "0c 0r" reads as a fault code and is not one. */}}
 <span>{{printf "%.1f" .FPS}} fps</span>
 <span>{{.MbpsBitrate}} Mb</span>
-<span>{{.Clients}}c</span>
-<span>{{.Restarts}}r</span>
 </div>
+{{with index $.StreamURLs $stream}}
+<div class="streamurl">
+<code>{{.}}</code>
+<button type="button" class="linkish copy-btn" data-copy="{{.}}">copy</button>
+</div>
+{{end}}
 {{end}}
 </div>
 </div>
@@ -63,10 +70,34 @@
   (SetWhiteLed), because message 288 is known inert on this firmware.
   Same confirm-every-time rule as Lights and IR.
 */}}
+{{if .HasFishEye}}
+<section>
+<div style="display:flex;align-items:baseline;gap:8px">
+<h2>View</h2>
+</div>
+<p class="hint">What the camera does with the circle its lens sees, before it encodes
+anything. It dewarps far better than anything downstream can, so this is the place to
+choose. <strong>Changing it reboots the camera</strong>, which takes about twenty
+seconds, and leaves every motion mask and detection zone on this camera pointing at the
+wrong part of the picture.</p>
+{{if .FishEyeErr}}<p class="outcome-refused">{{.FishEyeErr}}</p>{{end}}
+<div class="setting">
+<p>Picture</p>
+<form class="control" method="post" action="/cameras/{{.Camera.Name}}/fisheye" onsubmit="return confirm('{{.FishEyeConfirm}}')">
+<div class="segmented" role="radiogroup" aria-label="Fisheye view">
+{{$currentView := .FishEyeCurrent}}
+{{range .FishEyeOptions}}<label title="{{.What}}"><input type="radio" name="option" value="{{.Value}}"{{if eq .Value $currentView}} checked{{end}}><span>{{.Value}}</span></label>{{end}}
+</div>
+<noscript><button type="submit">set</button></noscript>
+</form>
+</div>
+</section>
+{{end}}
+
+{{if .HasFloodlight}}
 <section>
 <div style="display:flex;align-items:baseline;gap:8px">
 <h2>Lights</h2>
-<span class="tag">PHYSICAL EFFECT</span>
 </div>
 <p class="hint">These switch a real light on the camera the moment you pick one. reostream asks again first.</p>
 {{if .FloodlightErr}}<p class="outcome-refused">{{.FloodlightErr}}</p>{{end}}
@@ -84,6 +115,7 @@
 </form>
 </div>
 </section>
+{{end}}
 
 </div>
 </div>
@@ -142,6 +174,7 @@
 {{end}}
 
 <script src="/assets/mpegts.js"></script>
+<script src="/assets/snapshot.js"></script>
 <script src="/assets/settings.js"></script>
 {{end}}
 
@@ -155,8 +188,7 @@
 <section>
 <div style="display:flex;align-items:baseline;gap:8px">
 <h2>{{$group.Title}}</h2>
-{{if $group.InterruptsStream}}<span class="tag stream">INTERRUPTS THE STREAM</span>{{end}}
-{{if and $group.ConfirmReason (not $group.InterruptsStream)}}<span class="tag">PHYSICAL EFFECT</span>{{end}}
+<button type="button" class="linkish section-reset" style="margin-left:auto" hidden>&#8634; reset section</button>
 </div>
 {{if $group.Blurb}}<p class="hint">{{$group.Blurb}}</p>{{end}}
 {{if $.SettingsErr}}<p class="outcome-refused">{{$.SettingsErr}}</p>{{end}}
@@ -232,6 +264,11 @@
 </span>
 <button type="submit">set</button>
 
+{{else if eq .Kind "reading"}}
+{{/* Read only on purpose: see the Go side for why this field is not a
+     control. No form controls, so no set button and no reset. */}}
+<span class="exact">{{$current}}</span>
+
 {{else}}
 <input type="text" name="value" value="{{$current}}">
 <button type="submit">set</button>
@@ -239,10 +276,15 @@
 {{/* The camera's own factory value, offered only when it reported one
      and this field does not already hold it. settings.js fills the
      value in and saves it the way the control itself would. */}}
-{{with $.Reset .}}<button type="button" class="linkish reset" data-default="{{.}}" title="factory default: {{$.ResetLabel $field .}}">&#8634; reset to {{$.ResetLabel $field .}}</button>{{end}}
+{{with $.Reset .}}<button type="button" class="linkish reset" data-default="{{.}}" aria-label="reset to factory: {{$.ResetLabel $field .}}" title="reset to factory: {{$.ResetLabel $field .}}">&#8634;</button>{{end}}
 </form>
 </div>
 {{end}}
 {{end}}
 </section>
+<script>
+window.addEventListener("load", function () {
+  if (window.reostreamSnapshots) reostreamSnapshots(document.querySelectorAll(".cam-video[data-src]"));
+});
+</script>
 {{end}}

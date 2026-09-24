@@ -21,6 +21,15 @@ func browserPlayable(codec string) bool {
 // It returns false rather than guessing when nothing is playable, including
 // when a stream has not yet reported a codec, because a player pointed at a
 // stream it cannot decode looks like a broken camera.
+// externStream returns the balanced stream's path for camera, or "" when
+// it serves none a browser can play.
+func externStream(camera string, streams map[string]string) string {
+	if browserPlayable(streams["extern"]) {
+		return "/" + camera + "_extern.ts"
+	}
+	return ""
+}
+
 func playableStream(camera string, streams map[string]string) (string, bool) {
 	for _, name := range []string{"sub", "extern"} {
 		if browserPlayable(streams[name]) {
@@ -62,9 +71,16 @@ func (s *Server) codecsByCamera() map[string]map[string]string {
 
 // tile is one camera's live picture on the dashboard.
 type tile struct {
-	Camera   string
+	Camera string
+	// URL is what the tile plays by itself: the sub stream where there is
+	// one, because every tile on the page plays at once and sub is the
+	// stream that makes that affordable.
 	URL      string
 	Playable bool
+	// ExternURL is the balanced stream, empty unless this camera serves
+	// one a browser can play. Pressing a tile steps up to it: same camera,
+	// a picture worth looking at, and only one of them at a time.
+	ExternURL string
 }
 
 // streamPrefix is where control.go mounts the streaming handler on this
@@ -95,11 +111,18 @@ func (s *Server) tiles() []tile {
 	out := make([]tile, 0, len(names))
 	for _, cam := range names {
 		path, ok := playableStream(cam, byCam[cam])
-		out = append(out, tile{
+		t := tile{
 			Camera:   cam,
 			URL:      tileURL(s.opts.StreamBase, path),
 			Playable: ok,
-		})
+		}
+		// Only when it is a step up: if the tile is already playing the
+		// balanced stream because there is no sub, pressing it has nothing
+		// better to switch to.
+		if ext := externStream(cam, byCam[cam]); ext != "" && ok && !strings.HasSuffix(path, "_extern.ts") {
+			t.ExternURL = tileURL(s.opts.StreamBase, ext)
+		}
+		out = append(out, t)
 	}
 	return out
 }

@@ -27,6 +27,7 @@ func TestOnlyTheListedAssetsAreEmbedded(t *testing.T) {
 		"assets/mpegts.js",
 		"assets/mpegts.js.LICENSE.txt",
 		"assets/settings.js",
+		"assets/snapshot.js",
 		"assets/style.css",
 	}
 

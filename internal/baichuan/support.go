@@ -125,3 +125,27 @@ func (s Support) Channel(id int) (SupportChannel, bool) {
 // HasPTZ reports whether the camera has motors. ptzMode reads "none" on every
 // fixed camera here.
 func (s Support) HasPTZ() bool { return s.Support.PTZMode != "" && s.Support.PTZMode != "none" }
+
+// HasFloodlight reports whether channel id has a white light to drive.
+//
+// GetWhiteLed cannot answer this. Measured on this fleet, a camera with no
+// light and one with a real one return the same WhiteLed document, mode,
+// state, brightness and schedule alike, differing only in an unrelated AI
+// flag. So a page that renders whatever GetWhiteLed returns shows a
+// floodlight control on cameras that have no floodlight, which is what
+// happened.
+//
+// ledCtrl does answer it: 0 on the fisheye, 38 on the pano. Nonzero means
+// present in some form, per this type's own warning about magnitudes.
+func (s Support) HasFloodlight(id int) bool {
+	ch, ok := s.Channel(id)
+	return ok && ch.LEDCtrl != 0
+}
+
+// HasFishEye reports whether channel id has the dewarping view modes that
+// GetFishEye and SetFishEye drive. Measured: 3 on the fisheye, 0 on the
+// pano, which has two lenses stitched instead.
+func (s Support) HasFishEye(id int) bool {
+	ch, ok := s.Channel(id)
+	return ok && ch.FishEye != 0
+}

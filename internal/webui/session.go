@@ -65,6 +65,26 @@ func (s *SessionStore) Valid(tok string) bool {
 	return ok
 }
 
+// Revoke ends one session, for a sign out. A token that is not there is
+// not an error: a cookie can outlive the session it names.
+func (s *SessionStore) Revoke(tok string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tokens, tok)
+}
+
+// RevokeAll ends every session.
+//
+// This is what a password change has to call. Changing the password
+// without it leaves every browser that was already signed in signed in,
+// including the one whose access was the reason for changing it, which
+// makes the change worth very little.
+func (s *SessionStore) RevokeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.tokens)
+}
+
 func (s *SessionStore) sweepLocked() {
 	now := s.now()
 	for tok, exp := range s.tokens {
