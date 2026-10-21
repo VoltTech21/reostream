@@ -59,8 +59,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          # :latest only ever moves on a real tag, never on a branch push,
-          # so the quickstart cannot start handing people a work in progress.
+          # :latest only ever moves on a real release tag, never on a branch
+          # push or a test tag with a "-" in it (v0.1.12-test.1), so the
+          # quickstart cannot start handing people a work in progress.
           #
           # The branch entry exists because buildx refuses to run at all
           # with an empty tag list, which is what the two semver patterns
@@ -69,7 +70,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
             type=ref,event=branch
       - uses: docker/build-push-action@v6
         with:
@@ -119,3 +120,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: reostream-linux-${{ matrix.goarch }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
