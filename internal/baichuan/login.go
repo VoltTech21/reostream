@@ -79,12 +79,16 @@ type previewBody struct {
 		ChannelID  int    `xml:"channelId"`
 		Handle     int    `xml:"handle"`
 		StreamType string `xml:"streamType,omitempty"`
+		// LogicChannel picks a lens inside one channel, as Snap's does. Only
+		// sent for a second lens; see Options.Lens.
+		LogicChannel *int `xml:"logicChannel,omitempty"`
 	} `xml:"Preview"`
 }
 
-func previewXML(channel, handle int, streamType string) ([]byte, error) {
+func previewXML(channel, handle int, streamType string, logic *int) ([]byte, error) {
 	var b previewBody
 	b.Preview.Version = "1.1"
+	b.Preview.LogicChannel = logic
 	b.Preview.ChannelID = channel
 	b.Preview.Handle = handle
 	b.Preview.StreamType = streamType

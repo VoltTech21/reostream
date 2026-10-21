@@ -15,6 +15,16 @@ type Options struct {
 	Password string
 	Channel  int
 
+	// Lens picks the second lens of a camera that serves two from one
+	// channel, the TrackMix's zoom ("autotrack" in Reolink's RTSP and HTTP
+	// naming). Experimental: how a live request selects it is not known, so
+	// LensMethod chooses between the candidates. 1 numbers the stream 2 or
+	// 3 in the header, the values Reolink's recording search uses for the
+	// autotrack lens; 2 does that and also sends logicChannel 1, as Snap
+	// does for it; 3 sends logicChannel 1 alone. 0 means 1.
+	Lens       int
+	LensMethod int
+
 	// IdleTimeout bounds how long a read may wait for the camera to send
 	// anything before Conn gives up on it. Zero means DefaultIdleTimeout.
 	IdleTimeout time.Duration
@@ -284,14 +294,14 @@ func (c *Conn) Err() error {
 func (c *Conn) StartVideo(stream string) error {
 	c.handle++
 	c.stream = stream
-	body, err := previewXML(c.opts.Channel, c.handle, stream)
+	body, err := previewXML(c.opts.Channel, c.handle, stream, c.logicChannel())
 	if err != nil {
 		return err
 	}
 	h := Header{
 		MsgID:     MsgIDVideo,
 		Class:     ClassModern24,
-		EncOffset: EncOffsetFor(byte(c.opts.Channel), StreamID(stream), c.nextCounter(), 0),
+		EncOffset: EncOffsetFor(byte(c.opts.Channel), c.streamByte(stream), c.nextCounter(), 0),
 	}
 	return c.w.Write(h, body)
 }
@@ -517,12 +527,12 @@ func (c *Conn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.stream != "" {
-			if body, mErr := previewXML(c.opts.Channel, c.handle, ""); mErr == nil {
+			if body, mErr := previewXML(c.opts.Channel, c.handle, "", c.logicChannel()); mErr == nil {
 				h := Header{
 					MsgID: MsgIDVideo,
 					Class: ClassModern24,
 					EncOffset: EncOffsetFor(byte(c.opts.Channel),
-						StreamID(c.stream), c.nextCounter(), 0),
+						c.streamByte(c.stream), c.nextCounter(), 0),
 				}
 				_ = c.nc.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				_ = c.w.Write(h, body)
@@ -531,4 +541,24 @@ func (c *Conn) Close() error {
 		err = c.nc.Close()
 	})
 	return err
+}
+
+// streamByte is the header's stream number for stream, moved to 2 or 3 for
+// a second lens under LensMethod 1 or 2.
+func (c *Conn) streamByte(stream string) byte {
+	id := StreamID(stream)
+	if c.opts.Lens == 1 && c.opts.LensMethod != 3 && (stream == StreamMain || stream == StreamSub) {
+		id += 2
+	}
+	return id
+}
+
+// logicChannel is the Preview request's logicChannel, nil unless a second
+// lens is asked for under LensMethod 2 or 3.
+func (c *Conn) logicChannel() *int {
+	if c.opts.Lens == 1 && (c.opts.LensMethod == 2 || c.opts.LensMethod == 3) {
+		one := 1
+		return &one
+	}
+	return nil
 }

@@ -156,12 +156,14 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 			s.entries[name] = &entry{
 				rtsp: cam.RTSP,
 				cfg: stream.Config{
-					Name:     cam.Name,
-					Address:  cam.Address,
-					Username: cam.Username,
-					Password: cam.Password,
-					Stream:   st,
-					Channel:  cam.Channel,
+					Name:       cam.Name,
+					Address:    cam.Address,
+					Username:   cam.Username,
+					Password:   cam.Password,
+					Stream:     st,
+					Channel:    cam.Channel,
+					Lens:       cam.Lens,
+					LensMethod: cam.LensMethod,
 				},
 				h:    h,
 				stat: StreamStat{Camera: cam.Name, Stream: st},
@@ -426,12 +428,14 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 		e := &entry{
 			rtsp: cam.RTSP,
 			cfg: stream.Config{
-				Name:     cam.Name,
-				Address:  cam.Address,
-				Username: cam.Username,
-				Password: cam.Password,
-				Stream:   st,
-				Channel:  cam.Channel,
+				Name:       cam.Name,
+				Address:    cam.Address,
+				Username:   cam.Username,
+				Password:   cam.Password,
+				Stream:     st,
+				Channel:    cam.Channel,
+				Lens:       cam.Lens,
+				LensMethod: cam.LensMethod,
 			},
 			h:    h,
 			stat: StreamStat{Camera: cam.Name, Stream: st},
@@ -459,6 +463,7 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 func sameStream(e *entry, cam config.Camera) bool {
 	return e.cfg.Address == cam.Address &&
 		e.cfg.Channel == cam.Channel &&
+		e.cfg.Lens == cam.Lens && e.cfg.LensMethod == cam.LensMethod &&
 		e.cfg.Username == cam.Username &&
 		e.cfg.Password == cam.Password &&
 		slices.Contains(cam.RTSP, e.cfg.Stream) == slices.Contains(e.rtsp, e.cfg.Stream)

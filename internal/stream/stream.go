@@ -82,12 +82,14 @@ type SpeakerSink interface {
 }
 
 type Config struct {
-	Name     string
-	Address  string
-	Username string
-	Password string
-	Stream   string // "main", "sub" or "extern"
-	Channel  int    // the camera's channel on a hub or NVR; 0 on its own
+	Name       string
+	Address    string
+	Username   string
+	Password   string
+	Stream     string // "main", "sub" or "extern"
+	Channel    int    // the camera's channel on a hub or NVR; 0 on its own
+	Lens       int    // 1 for a second lens in one channel; see baichuan.Options
+	LensMethod int
 
 	// Sink, when non-nil, receives every decoded frame before muxing. Nil
 	// is the default and the only state the HTTP output has ever run in.
@@ -149,9 +151,11 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	}
 
 	conn, err := baichuan.Dial(ctx, cfg.Address, baichuan.Options{
-		Username: cfg.Username,
-		Password: cfg.Password,
-		Channel:  cfg.Channel,
+		Username:   cfg.Username,
+		Password:   cfg.Password,
+		Channel:    cfg.Channel,
+		Lens:       cfg.Lens,
+		LensMethod: cfg.LensMethod,
 	})
 	if err != nil {
 		return fmt.Errorf("stream: %s: dial: %w", cfg.Name, err)

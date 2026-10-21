@@ -343,3 +343,19 @@ func TestCameraAddressAndUsernameComeFromTheEnvironment(t *testing.T) {
 		t.Fatalf("unset address variable: %v", err)
 	}
 }
+
+// A camera's second lens shares its address and streams with the first, so
+// it must not trip the one-runner-per-stream check; a bad value must.
+func TestSecondLensSharesTheAddress(t *testing.T) {
+	cfg := &Config{Cameras: []Camera{
+		{Name: "backyard", Address: "192.0.2.3", Streams: []string{"main", "sub"}},
+		{Name: "backyard_zoom", Address: "192.0.2.3", Lens: 1, Streams: []string{"main", "sub"}},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("second lens rejected: %v", err)
+	}
+	cfg.Cameras[1].LensMethod = 4
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("lens_method 4 accepted")
+	}
+}

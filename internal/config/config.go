@@ -27,6 +27,12 @@ type Camera struct {
 	// channel 0, which is also what leaving it out means.
 	Channel int
 
+	// Lens 1 picks the second lens of a camera that serves two from one
+	// channel, such as the TrackMix's zoom. Experimental, see
+	// baichuan.Options.Lens; LensMethod picks how it is asked for.
+	Lens       int `toml:"lens"`
+	LensMethod int `toml:"lens_method"`
+
 	// RTSP names which of this camera's streams to serve over RTSP. Absent
 	// means none, and every stream still reaches the HTTP output either way.
 	RTSP []string
@@ -222,6 +228,12 @@ func (c *Config) Validate() error {
 		if cam.Channel < 0 || cam.Channel > 63 {
 			return fmt.Errorf("camera %q: channel %d is out of range (0 to 63)", cam.Name, cam.Channel)
 		}
+		if cam.Lens < 0 || cam.Lens > 1 {
+			return fmt.Errorf("camera %q: lens %d is out of range (0 or 1)", cam.Name, cam.Lens)
+		}
+		if cam.LensMethod < 0 || cam.LensMethod > 3 {
+			return fmt.Errorf("camera %q: lens_method %d is out of range (0 to 3)", cam.Name, cam.LensMethod)
+		}
 		if seenNames[cam.Name] {
 			return fmt.Errorf("camera name %q is used more than once", cam.Name)
 		}
@@ -244,8 +256,8 @@ func (c *Config) Validate() error {
 		// A hub serves each of its cameras as a channel on one address, so
 		// it is address and channel together that name one camera.
 		naddr := NormalizeAddr(cam.Address)
-		if cam.Channel != 0 {
-			naddr = fmt.Sprintf("%s#%d", naddr, cam.Channel)
+		if cam.Channel != 0 || cam.Lens != 0 {
+			naddr = fmt.Sprintf("%s#%d.%d", naddr, cam.Channel, cam.Lens)
 		}
 		for _, s := range cam.Streams {
 			if owner, taken := seenAddrStreams[naddr][s]; taken {

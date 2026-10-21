@@ -93,6 +93,7 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		// has. Dropping it would quietly repoint a hub camera at channel 0,
 		// which is another camera.
 		cam.Channel = existing.Channel
+		cam.Lens, cam.LensMethod = existing.Lens, existing.LensMethod
 		cfg.Cameras[i] = cam
 		// cfg.Validate: the daemon's own validation runs over the whole
 		// config, so a form submission is held to exactly the rules
@@ -221,6 +222,12 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	if cam.Channel != 0 {
 		fmt.Fprintf(&b, "channel = %d\n", cam.Channel)
+	}
+	if cam.Lens != 0 {
+		fmt.Fprintf(&b, "lens = %d\n", cam.Lens)
+	}
+	if cam.LensMethod != 0 {
+		fmt.Fprintf(&b, "lens_method = %d\n", cam.LensMethod)
 	}
 	writeList("streams", cam.Streams)
 	writeList("rtsp", cam.RTSP)

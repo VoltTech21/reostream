@@ -49,7 +49,7 @@ func TestParseNonceFromCapture(t *testing.T) {
 }
 
 func TestPreviewXML(t *testing.T) {
-	got, err := previewXML(0, 1, StreamSub)
+	got, err := previewXML(0, 1, StreamSub, nil)
 	if err != nil {
 		t.Fatalf("previewXML: %v", err)
 	}

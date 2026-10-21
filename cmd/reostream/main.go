@@ -583,9 +583,11 @@ func (c cameraTalker) Open(ctx context.Context) (rtsp.TalkSession, error) {
 	}
 	sess, err := talk.Open(ctx, func(ctx context.Context) (*baichuan.Conn, error) {
 		return baichuan.Dial(ctx, cfg.Address, baichuan.Options{
-			Username: cfg.Username,
-			Password: cfg.Password,
-			Channel:  cfg.Channel,
+			Username:   cfg.Username,
+			Password:   cfg.Password,
+			Channel:    cfg.Channel,
+			Lens:       cfg.Lens,
+			LensMethod: cfg.LensMethod,
 			// The camera sends nothing back during a talk session, and the
 			// session pings rather than relying on traffic to stay up.
 			IdleTimeout: 24 * time.Hour,
