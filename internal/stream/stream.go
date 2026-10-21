@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -221,6 +222,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	var mux *ts.Muxer
 	var reportedDroppedAudio int
 	lastPing := time.Now()
+	var lensAnswered, lensFramed bool
 
 	for {
 		select {
@@ -232,6 +234,15 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 					return fmt.Errorf("stream: %s: camera closed the connection: %w", cfg.Name, cErr)
 				}
 				return fmt.Errorf("stream: %s: camera closed the connection", cfg.Name)
+			}
+			// A second lens is experimental (see baichuan.Options.Lens), so
+			// say what the camera made of the request: refused outright,
+			// accepted and silent, or streaming. That is the whole of what a
+			// tester with the camera can tell us.
+			if cfg.Lens != 0 && msg.Header.MsgID == baichuan.MsgIDVideo && len(msg.Payload) == 0 && !lensAnswered {
+				lensAnswered = true
+				log.Printf("stream: %s: lens %d method %d: camera answered the video request with status %d %q",
+					cfg.Name, cfg.Lens, cfg.LensMethod, msg.Header.Status(), lensSnippet(msg.XML))
 			}
 			if len(msg.Payload) > 0 {
 				d.Write(msg.Payload, msg.StartsPacket)
@@ -254,6 +265,10 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						// behind a watchdog that looks satisfied while
 						// still delivering an unusable stream.
 						lastMedia = time.Now()
+						if cfg.Lens != 0 && !lensFramed {
+							lensFramed = true
+							log.Printf("stream: %s: lens %d method %d: first video frame, %d bytes", cfg.Name, cfg.Lens, cfg.LensMethod, len(f.Data))
+						}
 						if mux == nil {
 							// The video codec is not known until the first
 							// frame arrives, so the muxer is built here
@@ -387,4 +402,12 @@ func shouldPing(last, now time.Time, every time.Duration) bool {
 // it does not count here.
 func droppedEarlyAudio(kind baichuan.FrameKind) bool {
 	return kind == baichuan.FrameADPCM
+}
+
+// lensSnippet flattens up to 200 bytes of a reply for one log line.
+func lensSnippet(x []byte) string {
+	if len(x) > 200 {
+		x = x[:200]
+	}
+	return strings.Join(strings.Fields(string(x)), " ")
 }
