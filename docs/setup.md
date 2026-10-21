@@ -107,7 +107,7 @@ streams = ["main", "sub"]
 rtsp = ["main", "sub"]
 ```
 
-- A value starting with `$` is read from that environment variable.
+- Address, username, and password values starting with `$` are  read from that environment variable.
 - Unknown keys are an error at startup, so a typo fails at boot instead of serving 404s.
 - Saving from the page validates first and reloads only the cameras that changed.
 

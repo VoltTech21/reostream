@@ -109,15 +109,29 @@ func Load(path string) (*Config, error) {
 	}
 
 	for i, cam := range cfg.Cameras {
-		if !strings.HasPrefix(cam.Password, "$") {
-			continue
+		if name, ok := strings.CutPrefix(cam.Password, "$"); ok {
+			val, ok := os.LookupEnv(name)
+			if !ok {
+				return nil, fmt.Errorf("config: %s: camera %q: environment variable %s is not set", path, cam.Name, name)
+			}
+			cfg.Cameras[i].Password = val
 		}
-		name := strings.TrimPrefix(cam.Password, "$")
-		val, ok := os.LookupEnv(name)
-		if !ok {
-			return nil, fmt.Errorf("config: %s: camera %q: environment variable %s is not set", path, cam.Name, name)
+
+		if name, ok := strings.CutPrefix(cam.Username, "$"); ok {
+			val, ok := os.LookupEnv(name)
+			if !ok {
+				return nil, fmt.Errorf("config: %s: camera %q: environment variable %s is not set", path, cam.Name, name)
+			}
+			cfg.Cameras[i].Username = val
 		}
-		cfg.Cameras[i].Password = val
+
+		if name, ok := strings.CutPrefix(cam.Address, "$"); ok {
+			val, ok := os.LookupEnv(name)
+			if !ok {
+				return nil, fmt.Errorf("config: %s: camera %q: environment variable %s is not set", path, cam.Name, name)
+			}
+			cfg.Cameras[i].Address = val
+		}
 	}
 
 	if cfg.Control != nil && strings.HasPrefix(cfg.Control.Password, "$") {
