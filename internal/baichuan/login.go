@@ -105,6 +105,8 @@ const (
 	StreamMain   = "mainStream"
 	StreamSub    = "subStream"
 	StreamExtern = "externStream"
+	// StreamMobile is the TrackMix zoom lens's fluent stream.
+	StreamMobile = "mobileStream"
 )
 
 // StreamID is the value the encryption-offset field carries for each stream.
@@ -112,6 +114,8 @@ func StreamID(stream string) byte {
 	switch stream {
 	case StreamSub:
 		return 1
+	case StreamMobile:
+		return 2
 	case StreamExtern:
 		return 4
 	default:

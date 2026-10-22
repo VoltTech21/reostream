@@ -25,7 +25,9 @@ type Options struct {
 	// both the header and the Preview document, which is where the
 	// camera's own RTSP and HTTP servers send "autotrack" (Preview_01_
 	// autotrack becomes Preview_02_main); 5 does that in the document only,
-	// leaving the header on channel 0. 0 means 1.
+	// leaving the header on channel 0. 6 does what the Reolink client does
+	// for the TrackMix telephoto: main is asked for as externStream and sub
+	// as mobileStream, on the same channel. 0 means 1.
 	Lens       int
 	LensMethod int
 
@@ -297,6 +299,7 @@ func (c *Conn) Err() error {
 // StartVideo requests a stream: StreamMain, StreamSub or StreamExtern.
 func (c *Conn) StartVideo(stream string) error {
 	c.handle++
+	stream = c.lensStream(stream)
 	c.stream = stream
 	body, err := previewXML(c.previewChannel(), c.handle, stream, c.logicChannel())
 	if err != nil {
@@ -545,6 +548,20 @@ func (c *Conn) Close() error {
 		err = c.nc.Close()
 	})
 	return err
+}
+
+// lensStream is the stream to ask for: under LensMethod 6 the second
+// lens's main and sub are the camera's extern and mobile streams.
+func (c *Conn) lensStream(stream string) string {
+	if c.lensMethod() == 6 {
+		switch stream {
+		case StreamMain:
+			return StreamExtern
+		case StreamSub:
+			return StreamMobile
+		}
+	}
+	return stream
 }
 
 // lensMethod is LensMethod with 0 read as 1, or 0 when no second lens is

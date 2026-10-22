@@ -29,6 +29,8 @@ func TestSecondLensRequests(t *testing.T) {
 		{3, StreamSub, 1, true, 0, 0},
 		{4, StreamMain, 0, false, 1, 1},
 		{5, StreamSub, 1, false, 0, 1},
+		{6, StreamMain, 4, false, 0, 0},
+		{6, StreamSub, 2, false, 0, 0},
 	} {
 		const nonce = "lens-test-nonce-000000000000"
 		cam := fakecam.New(t, synthesizeSessionFixture(t, nonce, "", testDeviceInfoXML))
@@ -63,6 +65,12 @@ func TestSecondLensRequests(t *testing.T) {
 			}
 			if has := strings.Contains(string(x), "<logicChannel>1</logicChannel>"); has != tc.wantLogic {
 				t.Errorf("method %d %s: logicChannel sent = %v, want %v\n%s", tc.method, tc.stream, has, tc.wantLogic, x)
+			}
+			if tc.method == 6 {
+				want := map[string]string{StreamMain: StreamExtern, StreamSub: StreamMobile}[tc.stream]
+				if !strings.Contains(string(x), "<streamType>"+want+"</streamType>") {
+					t.Errorf("method 6 %s: Preview does not ask for %s\n%s", tc.stream, want, x)
+				}
 			}
 			if want := fmt.Sprintf("<channelId>%d</channelId>", tc.wantDoc); !strings.Contains(string(x), want) {
 				t.Errorf("method %d %s: Preview lacks %s\n%s", tc.method, tc.stream, want, x)

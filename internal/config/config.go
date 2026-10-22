@@ -231,8 +231,8 @@ func (c *Config) Validate() error {
 		if cam.Lens < 0 || cam.Lens > 1 {
 			return fmt.Errorf("camera %q: lens %d is out of range (0 or 1)", cam.Name, cam.Lens)
 		}
-		if cam.LensMethod < 0 || cam.LensMethod > 5 {
-			return fmt.Errorf("camera %q: lens_method %d is out of range (0 to 5)", cam.Name, cam.LensMethod)
+		if cam.LensMethod < 0 || cam.LensMethod > 6 {
+			return fmt.Errorf("camera %q: lens_method %d is out of range (0 to 6)", cam.Name, cam.LensMethod)
 		}
 		if seenNames[cam.Name] {
 			return fmt.Errorf("camera name %q is used more than once", cam.Name)

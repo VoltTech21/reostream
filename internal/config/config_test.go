@@ -354,8 +354,8 @@ func TestSecondLensSharesTheAddress(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("second lens rejected: %v", err)
 	}
-	cfg.Cameras[1].LensMethod = 6
+	cfg.Cameras[1].LensMethod = 7
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("lens_method 6 accepted")
+		t.Fatal("lens_method 7 accepted")
 	}
 }
