@@ -2,6 +2,7 @@ package baichuan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,11 +20,15 @@ func TestSecondLensRequests(t *testing.T) {
 		stream    string
 		wantByte  byte
 		wantLogic bool
+		wantChan  byte // header channel
+		wantDoc   int  // Preview channelId
 	}{
-		{0, StreamMain, 2, false},
-		{1, StreamSub, 3, false},
-		{2, StreamMain, 2, true},
-		{3, StreamSub, 1, true},
+		{0, StreamMain, 2, false, 0, 0},
+		{1, StreamSub, 3, false, 0, 0},
+		{2, StreamMain, 2, true, 0, 0},
+		{3, StreamSub, 1, true, 0, 0},
+		{4, StreamMain, 0, false, 1, 1},
+		{5, StreamSub, 1, false, 0, 1},
 	} {
 		const nonce = "lens-test-nonce-000000000000"
 		cam := fakecam.New(t, synthesizeSessionFixture(t, nonce, "", testDeviceInfoXML))
@@ -49,12 +54,18 @@ func TestSecondLensRequests(t *testing.T) {
 			if got := byte(h.EncOffset >> 8); got != tc.wantByte {
 				t.Errorf("method %d %s: header stream %d, want %d", tc.method, tc.stream, got, tc.wantByte)
 			}
+			if got := byte(h.EncOffset); got != tc.wantChan {
+				t.Errorf("method %d %s: header channel %d, want %d", tc.method, tc.stream, got, tc.wantChan)
+			}
 			x, err := AESDecrypt(key, body)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if has := strings.Contains(string(x), "<logicChannel>1</logicChannel>"); has != tc.wantLogic {
 				t.Errorf("method %d %s: logicChannel sent = %v, want %v\n%s", tc.method, tc.stream, has, tc.wantLogic, x)
+			}
+			if want := fmt.Sprintf("<channelId>%d</channelId>", tc.wantDoc); !strings.Contains(string(x), want) {
+				t.Errorf("method %d %s: Preview lacks %s\n%s", tc.method, tc.stream, want, x)
 			}
 			return true
 		})

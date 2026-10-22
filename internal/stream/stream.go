@@ -235,14 +235,15 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 				}
 				return fmt.Errorf("stream: %s: camera closed the connection", cfg.Name)
 			}
-			// A second lens is experimental (see baichuan.Options.Lens), so
-			// say what the camera made of the request: refused outright,
-			// accepted and silent, or streaming. That is the whole of what a
-			// tester with the camera can tell us.
-			if cfg.Lens != 0 && msg.Header.MsgID == baichuan.MsgIDVideo && len(msg.Payload) == 0 && !lensAnswered {
+			// A second lens is experimental (see baichuan.Options.Lens), as
+			// is a channel past 0 on a camera that is not a hub, so say what
+			// the camera made of the request: refused outright, accepted and
+			// silent, or streaming. That is the whole of what a tester with
+			// the camera can tell us.
+			if (cfg.Lens != 0 || cfg.Channel != 0) && msg.Header.MsgID == baichuan.MsgIDVideo && len(msg.Payload) == 0 && !lensAnswered {
 				lensAnswered = true
-				log.Printf("stream: %s: lens %d method %d: camera answered the video request with status %d %q",
-					cfg.Name, cfg.Lens, cfg.LensMethod, msg.Header.Status(), lensSnippet(msg.XML))
+				log.Printf("stream: %s: channel %d lens %d method %d: camera answered the video request with status %d %q",
+					cfg.Name, cfg.Channel, cfg.Lens, cfg.LensMethod, msg.Header.Status(), lensSnippet(msg.XML))
 			}
 			if len(msg.Payload) > 0 {
 				d.Write(msg.Payload, msg.StartsPacket)
@@ -265,9 +266,9 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						// behind a watchdog that looks satisfied while
 						// still delivering an unusable stream.
 						lastMedia = time.Now()
-						if cfg.Lens != 0 && !lensFramed {
+						if (cfg.Lens != 0 || cfg.Channel != 0) && !lensFramed {
 							lensFramed = true
-							log.Printf("stream: %s: lens %d method %d: first video frame, %d bytes", cfg.Name, cfg.Lens, cfg.LensMethod, len(f.Data))
+							log.Printf("stream: %s: channel %d lens %d method %d: first video frame, %d bytes", cfg.Name, cfg.Channel, cfg.Lens, cfg.LensMethod, len(f.Data))
 						}
 						if mux == nil {
 							// The video codec is not known until the first

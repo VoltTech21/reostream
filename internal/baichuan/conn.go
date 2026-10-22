@@ -21,7 +21,11 @@ type Options struct {
 	// LensMethod chooses between the candidates. 1 numbers the stream 2 or
 	// 3 in the header, the values Reolink's recording search uses for the
 	// autotrack lens; 2 does that and also sends logicChannel 1, as Snap
-	// does for it; 3 sends logicChannel 1 alone. 0 means 1.
+	// does for it; 3 sends logicChannel 1 alone. 4 asks for channel 1 in
+	// both the header and the Preview document, which is where the
+	// camera's own RTSP and HTTP servers send "autotrack" (Preview_01_
+	// autotrack becomes Preview_02_main); 5 does that in the document only,
+	// leaving the header on channel 0. 0 means 1.
 	Lens       int
 	LensMethod int
 
@@ -294,14 +298,14 @@ func (c *Conn) Err() error {
 func (c *Conn) StartVideo(stream string) error {
 	c.handle++
 	c.stream = stream
-	body, err := previewXML(c.opts.Channel, c.handle, stream, c.logicChannel())
+	body, err := previewXML(c.previewChannel(), c.handle, stream, c.logicChannel())
 	if err != nil {
 		return err
 	}
 	h := Header{
 		MsgID:     MsgIDVideo,
 		Class:     ClassModern24,
-		EncOffset: EncOffsetFor(byte(c.opts.Channel), c.streamByte(stream), c.nextCounter(), 0),
+		EncOffset: EncOffsetFor(c.previewHeaderChannel(), c.streamByte(stream), c.nextCounter(), 0),
 	}
 	return c.w.Write(h, body)
 }
@@ -527,11 +531,11 @@ func (c *Conn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.stream != "" {
-			if body, mErr := previewXML(c.opts.Channel, c.handle, "", c.logicChannel()); mErr == nil {
+			if body, mErr := previewXML(c.previewChannel(), c.handle, "", c.logicChannel()); mErr == nil {
 				h := Header{
 					MsgID: MsgIDVideo,
 					Class: ClassModern24,
-					EncOffset: EncOffsetFor(byte(c.opts.Channel),
+					EncOffset: EncOffsetFor(c.previewHeaderChannel(),
 						c.streamByte(c.stream), c.nextCounter(), 0),
 				}
 				_ = c.nc.SetWriteDeadline(time.Now().Add(2 * time.Second))
@@ -543,11 +547,41 @@ func (c *Conn) Close() error {
 	return err
 }
 
+// lensMethod is LensMethod with 0 read as 1, or 0 when no second lens is
+// asked for.
+func (c *Conn) lensMethod() int {
+	if c.opts.Lens != 1 {
+		return 0
+	}
+	if c.opts.LensMethod == 0 {
+		return 1
+	}
+	return c.opts.LensMethod
+}
+
+// previewChannel is the Preview document's channelId: one past the channel
+// for a second lens under LensMethod 4 or 5.
+func (c *Conn) previewChannel() int {
+	if m := c.lensMethod(); m == 4 || m == 5 {
+		return c.opts.Channel + 1
+	}
+	return c.opts.Channel
+}
+
+// previewHeaderChannel is the video request header's channel: the
+// document's, except under LensMethod 5.
+func (c *Conn) previewHeaderChannel() byte {
+	if c.lensMethod() == 5 {
+		return byte(c.opts.Channel)
+	}
+	return byte(c.previewChannel())
+}
+
 // streamByte is the header's stream number for stream, moved to 2 or 3 for
 // a second lens under LensMethod 1 or 2.
 func (c *Conn) streamByte(stream string) byte {
 	id := StreamID(stream)
-	if c.opts.Lens == 1 && c.opts.LensMethod != 3 && (stream == StreamMain || stream == StreamSub) {
+	if m := c.lensMethod(); (m == 1 || m == 2) && (stream == StreamMain || stream == StreamSub) {
 		id += 2
 	}
 	return id
@@ -556,7 +590,7 @@ func (c *Conn) streamByte(stream string) byte {
 // logicChannel is the Preview request's logicChannel, nil unless a second
 // lens is asked for under LensMethod 2 or 3.
 func (c *Conn) logicChannel() *int {
-	if c.opts.Lens == 1 && (c.opts.LensMethod == 2 || c.opts.LensMethod == 3) {
+	if m := c.lensMethod(); m == 2 || m == 3 {
 		one := 1
 		return &one
 	}
