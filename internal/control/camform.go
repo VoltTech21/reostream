@@ -93,6 +93,10 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		// has. Dropping it would quietly repoint a hub camera at channel 0,
 		// which is another camera.
 		cam.Channel = existing.Channel
+		// Likewise the ONVIF endpoint, which the form has no field for.
+		cam.ONVIF = existing.ONVIF
+		cam.ONVIFUser = existing.ONVIFUser
+		cam.ONVIFPassword = existing.ONVIFPassword
 		cfg.Cameras[i] = cam
 		// cfg.Validate: the daemon's own validation runs over the whole
 		// config, so a form submission is held to exactly the rules
@@ -224,6 +228,13 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	writeList("streams", cam.Streams)
 	writeList("rtsp", cam.RTSP)
+	if cam.ONVIF != "" {
+		fmt.Fprintf(&b, "onvif = %q\n", cam.ONVIF)
+	}
+	if cam.ONVIFUser != "" {
+		fmt.Fprintf(&b, "onvif_user = %q\n", cam.ONVIFUser)
+		fmt.Fprintf(&b, "onvif_password = %q\n", cam.ONVIFPassword)
+	}
 	return b.String()
 }
 
