@@ -99,6 +99,7 @@ func main() {
 	if d.rtspSrv != nil {
 		d.rtspSrv.Close()
 	}
+	d.onvif.Close()
 
 	// Shut the control server down in its own goroutine, not inline here.
 	// http.Server.Shutdown blocks until active connections finish and does
@@ -131,6 +132,7 @@ type daemon struct {
 	cfg        *config.Config
 	sup        *supervisor.Supervisor
 	rtspSrv    *rtsp.Server
+	onvif      *onvifServers
 	controlSrv *http.Server
 	// controlLn is the listener controlSrv is serving on, kept so a caller
 	// can read the address actually bound. With a ":0" override that is the
@@ -255,6 +257,15 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 		log.Printf("reostream: rtsp listening on %s", cfg.RTSP.Listen)
 	}
 
+	onvifSrvs, err := startONVIF(cfg.Cameras, sup)
+	if err != nil {
+		if rtspSrv != nil {
+			rtspSrv.Close()
+		}
+		cancelSup()
+		return nil, err
+	}
+
 	// The control page is a separate listener from the streaming one. The
 	// streaming port stays unauthenticated because that is what a recorder
 	// points at; this one holds camera credentials.
@@ -360,6 +371,7 @@ func startup(configFlag, dataDir, listenOverride, controlListenOverride, streamB
 		cfg:         cfg,
 		sup:         sup,
 		rtspSrv:     rtspSrv,
+		onvif:       onvifSrvs,
 		controlSrv:  controlSrv,
 		controlLn:   controlLn,
 		httpSrv:     httpSrv,

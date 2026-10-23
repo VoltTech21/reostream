@@ -233,3 +233,45 @@ func TestSettingsRefuseAHubCamera(t *testing.T) {
 		t.Fatalf("byName(standalone camera) = %v", err)
 	}
 }
+
+// The form has no ONVIF fields either. Editing a camera on the page must not
+// quietly switch its PTZ endpoint off, and the written block must carry it.
+func TestFormEditKeepsTheONVIFEndpoint(t *testing.T) {
+	cfg := &config.Config{Cameras: []config.Camera{
+		{Name: "lelentos", Address: "1.1.1.1", Password: "x", Streams: []string{"main"},
+			ONVIF: "127.0.0.1:8656", ONVIFUser: "frigate", ONVIFPassword: "$ONVIF_PW"},
+	}}
+	form := url.Values{
+		"name":     {"lelentos"},
+		"address":  {"1.1.1.1"},
+		"password": {passwordUnchanged},
+		"streams":  {"main", "sub"},
+	}
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatal(err)
+	}
+	block := cameraBlockText(cfg.Cameras[0])
+	for _, want := range []string{"onvif = \"127.0.0.1:8656\"\n", "onvif_user = \"frigate\"\n", "onvif_password = \"$ONVIF_PW\"\n"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block lost %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(cameraBlockText(config.Camera{Name: "a"}), "onvif") {
+		t.Error("a camera with no PTZ gained ONVIF lines")
+	}
+}
+
+func TestChangingAnONVIFEndpointNeedsARestart(t *testing.T) {
+	a := &config.Config{Cameras: []config.Camera{{Name: "x", ONVIF: ":8656"}}}
+	b := &config.Config{Cameras: []config.Camera{{Name: "x", ONVIF: ":8657"}}}
+	same := &config.Config{Cameras: []config.Camera{{Name: "x", ONVIF: ":8656"}}}
+	if got := listenersChanged(a, b); len(got) != 1 || got[0] != "onvif" {
+		t.Errorf("moved port: %v", got)
+	}
+	if got := listenersChanged(a, same); len(got) != 0 {
+		t.Errorf("unchanged: %v", got)
+	}
+	if got := listenersChanged(&config.Config{}, a); len(got) != 1 {
+		t.Errorf("added: %v", got)
+	}
+}

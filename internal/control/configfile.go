@@ -43,7 +43,36 @@ func listenersChanged(old, next *config.Config) []string {
 	if controlListen(old) != controlListen(next) {
 		out = append(out, "control")
 	}
+	if onvifChanged(old, next) {
+		out = append(out, "onvif")
+	}
 	return out
+}
+
+// onvifChanged reports whether any camera's ONVIF endpoint differs between
+// two configs. The endpoints start with the process, like the other
+// listeners.
+func onvifChanged(old, next *config.Config) bool {
+	type ep struct{ listen, user, pass string }
+	eps := func(c *config.Config) map[string]ep {
+		m := make(map[string]ep)
+		for _, cam := range c.Cameras {
+			if cam.ONVIF != "" {
+				m[cam.Name] = ep{cam.ONVIF, cam.ONVIFUser, cam.ONVIFPassword}
+			}
+		}
+		return m
+	}
+	a, b := eps(old), eps(next)
+	if len(a) != len(b) {
+		return true
+	}
+	for name, e := range a {
+		if b[name] != e {
+			return true
+		}
+	}
+	return false
 }
 
 func rtspListen(c *config.Config) string {

@@ -30,6 +30,18 @@ type Camera struct {
 	// RTSP names which of this camera's streams to serve over RTSP. Absent
 	// means none, and every stream still reaches the HTTP output either way.
 	RTSP []string
+
+	// ONVIF, when set, is the address to serve this camera's ONVIF
+	// pan/tilt endpoint on, one port per camera: an ONVIF client such as
+	// Frigate finds the service at a fixed path on the host and port it is
+	// given, so the port is what names the camera. Absent means no PTZ.
+	ONVIF string `toml:"onvif"`
+
+	// ONVIFUser and ONVIFPassword, when set, are required of ONVIF clients.
+	// They are this endpoint's own login, not the camera's. Both take
+	// "$NAME" like the camera's own.
+	ONVIFUser     string `toml:"onvif_user"`
+	ONVIFPassword string `toml:"onvif_password"`
 }
 
 // RTSPConfig configures the RTSP listener. Its absence turns RTSP off
@@ -120,6 +132,8 @@ func Load(path string) (*Config, error) {
 			{"address", &cfg.Cameras[i].Address},
 			{"username", &cfg.Cameras[i].Username},
 			{"password", &cfg.Cameras[i].Password},
+			{"onvif_user", &cfg.Cameras[i].ONVIFUser},
+			{"onvif_password", &cfg.Cameras[i].ONVIFPassword},
 		} {
 			if !strings.HasPrefix(*f.v, "$") {
 				continue
@@ -212,6 +226,7 @@ func (c *Config) Validate() error {
 	// listing all three, and forbidding it would only punish an unusual
 	// but harmless way of writing the file.
 	seenAddrStreams := make(map[string]map[string]string)
+	seenONVIF := make(map[string]string)
 	for _, cam := range c.Cameras {
 		if cam.Name == "" {
 			return fmt.Errorf("camera has no name")
@@ -226,6 +241,19 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("camera name %q is used more than once", cam.Name)
 		}
 		seenNames[cam.Name] = true
+
+		if cam.ONVIF != "" {
+			if _, _, err := net.SplitHostPort(cam.ONVIF); err != nil {
+				return fmt.Errorf("camera %q: onvif %q is not a host:port address", cam.Name, cam.ONVIF)
+			}
+			if owner, taken := seenONVIF[cam.ONVIF]; taken {
+				return fmt.Errorf("camera %q and camera %q both serve ONVIF on %s: each camera needs its own port", owner, cam.Name, cam.ONVIF)
+			}
+			seenONVIF[cam.ONVIF] = cam.Name
+		}
+		if (cam.ONVIFUser == "") != (cam.ONVIFPassword == "") {
+			return fmt.Errorf("camera %q: onvif_user and onvif_password go together", cam.Name)
+		}
 
 		if len(cam.Streams) == 0 {
 			return fmt.Errorf("camera %q has no streams", cam.Name)

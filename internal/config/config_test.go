@@ -343,3 +343,40 @@ func TestCameraAddressAndUsernameComeFromTheEnvironment(t *testing.T) {
 		t.Fatalf("unset address variable: %v", err)
 	}
 }
+
+func TestONVIFEndpointsMustBeAddressesAndDistinct(t *testing.T) {
+	cam := func(name, onvif string) Camera {
+		return Camera{Name: name, Address: "192.0.2." + name, Streams: []string{"main"}, ONVIF: onvif}
+	}
+	ok := &Config{Cameras: []Camera{cam("1", "127.0.0.1:8656"), cam("2", "127.0.0.1:8657"), cam("3", "")}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid ONVIF endpoints refused: %v", err)
+	}
+	for name, cfg := range map[string]*Config{
+		"not an address": {Cameras: []Camera{cam("1", "8656")}},
+		"shared port":    {Cameras: []Camera{cam("1", ":8656"), cam("2", ":8656")}},
+		"half a login":   {Cameras: []Camera{{Name: "1", Address: "a", Streams: []string{"main"}, ONVIF: ":1", ONVIFUser: "u"}}},
+	} {
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestONVIFLoginCanComeFromTheEnvironment(t *testing.T) {
+	t.Setenv("TEST_ONVIF_USER", "frigate")
+	t.Setenv("TEST_ONVIF_PASSWORD", "s3cret")
+	path := filepath.Join(t.TempDir(), "c.toml")
+	text := "[[camera]]\nname = \"a\"\naddress = \"192.0.2.1\"\nstreams = [\"main\"]\n" +
+		"onvif = \"127.0.0.1:8656\"\nonvif_user = \"$TEST_ONVIF_USER\"\nonvif_password = \"$TEST_ONVIF_PASSWORD\"\n"
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Cameras[0]; got.ONVIFUser != "frigate" || got.ONVIFPassword != "s3cret" {
+		t.Fatalf("login = %q / %q", got.ONVIFUser, got.ONVIFPassword)
+	}
+}

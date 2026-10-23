@@ -106,6 +106,7 @@ Also on port 8560:
 - Two-way audio: on cameras with a speaker, Frigate's talk button works through it.
 - Sessions are closed cleanly. A camera left with an open session refuses connections
   for minutes.
+- Pan and tilt for Frigate, through a small ONVIF endpoint per camera; see `docs/ptz.md`.
 - A web page on port 8562 for status, live view, config, logs and camera settings.
 
 No ffmpeg, GStreamer or RTSP server in the serving path.
@@ -148,6 +149,7 @@ and writing settings and what to watch out for.
 ## More
 
 - `docs/setup.md`: other ways to run it, the config file, the control page, RTSP, the frames feed
+- `docs/ptz.md`: pan and tilt for Frigate, over ONVIF
 - `docs/control.md`: camera control with `reocam`
 - `docs/protocol.md`: what the Baichuan wire actually does
 - `docs/measurements.md`: how every number above was measured
