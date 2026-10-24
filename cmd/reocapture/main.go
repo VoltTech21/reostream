@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
@@ -211,11 +213,16 @@ func decode(lg *logger, n int, dir string, r io.Reader, s *session) {
 		if dir == "APP>CAM" && h.MsgID == baichuan.MsgIDTalk && len(m.Payload) > 0 && len(m.XML) == 0 {
 			continue // talk audio
 		}
-		doc := m.XML
-		if len(m.PayloadXML) > 0 && strings.Contains(string(m.PayloadXML), "<") {
-			doc = append(append([]byte(nil), doc...), m.PayloadXML...)
+		// A payload is logged only when it decrypts to a document. Anything
+		// else (a snapshot, an exported image, audio) is just counted, so no
+		// picture or sound ever reaches the log, even scrambled.
+		doc := clean(m.XML)
+		if isDoc(m.PayloadXML) {
+			doc += " " + clean(m.PayloadXML)
+		} else if len(m.Payload) > 0 {
+			doc += fmt.Sprintf(" (+%d bytes of data, not saved)", len(m.Payload))
 		}
-		lg.printf("conn %d %s msg %d (%s) enc=%08x status=%d %s", n, dir, h.MsgID, baichuan.MsgName(h.MsgID), h.EncOffset, h.Status(), clean(doc))
+		lg.printf("conn %d %s msg %d (%s) enc=%08x status=%d %s", n, dir, h.MsgID, baichuan.MsgName(h.MsgID), h.EncOffset, h.Status(), doc)
 	}
 }
 
@@ -225,9 +232,31 @@ var (
 	ipRe     = regexp.MustCompile(`\b(\d{1,3}\.){3}\d{1,3}\b`)
 )
 
+// isDoc reports a payload that decrypted to an XML document rather than
+// binary data.
+func isDoc(b []byte) bool {
+	t := strings.TrimSpace(string(b))
+	return utf8.ValidString(t) && strings.HasPrefix(t, "<") && printable(t)
+}
+
+func printable(s string) bool {
+	for _, r := range s {
+		if r == utf8.RuneError || (r < 0x20 && r != '\n' && r != '\r' && r != '\t') || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // clean turns a decrypted document into one log line with the secrets
-// blanked.
+// blanked. Something that is not text is described, never written.
 func clean(b []byte) string {
+	if len(bytes.TrimSpace(b)) == 0 {
+		return "(empty)"
+	}
+	if !utf8.Valid(b) || !printable(string(b)) {
+		return fmt.Sprintf("(%d bytes of data, not saved)", len(b))
+	}
 	s := strings.Join(strings.Fields(string(b)), " ")
 	s = strings.TrimPrefix(s, `<?xml version="1.0" encoding="UTF-8" ?>`)
 	s = secretRe.ReplaceAllString(s, "<$1>(removed)</")
