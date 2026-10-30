@@ -46,7 +46,7 @@ reach. reostream connects and tells you what it is before anything is saved.</p>
 <button type="submit" class="quiet">Look up this address</button>
 </form>
 <div id="result"></div>
-<form id="add-camera" method="post" action="/cameras/add" hidden>
+<form id="add-camera" method="post" action="{{base}}/cameras/add" hidden>
 <input type="hidden" name="address" id="add-address">
 <input type="hidden" name="username" id="add-username">
 <input type="hidden" name="password" id="add-password">
@@ -94,7 +94,7 @@ async function scan(ranges) {
     elapsed.textContent = Math.round((Date.now() - started) / 1000) + 's';
   }, 1000);
   try {
-    var resp = await fetch('/setup/discover', {method: 'POST', body: body});
+    var resp = await fetch('{{base}}/setup/discover', {method: 'POST', body: body});
     discoverResult.innerHTML = await resp.text();
   } catch (e) {
     discoverResult.innerHTML = '<p class="outcome-refused">The scan could not be reached. ' +
@@ -128,7 +128,7 @@ document.addEventListener('click', async function (e) {
   var was = button.textContent;
   button.textContent = 'Connecting…';
   try {
-    var resp = await fetch('/setup/identify', {method: 'POST', body: body});
+    var resp = await fetch('{{base}}/setup/identify', {method: 'POST', body: body});
     card.outerHTML = await resp.text();
     // Carry the password the operator just typed into the card that came
     // back, so Add sends it with this camera. The server never put it in
@@ -166,7 +166,7 @@ document.addEventListener('submit', async function (e) {
   var button = form.querySelector('button');
   button.disabled = true;
   try {
-    var resp = await fetch('/setup/add-found', {method: 'POST', body: body});
+    var resp = await fetch('{{base}}/setup/add-found', {method: 'POST', body: body});
     discoverResult.innerHTML = await resp.text();
   } finally {
     button.disabled = false;
@@ -183,7 +183,7 @@ probeForm.addEventListener('submit', async function (e) {
   e.preventDefault();
   var body = new URLSearchParams(new FormData(probeForm));
   result.innerHTML = '<p class="hint">Asking the camera&hellip;</p>';
-  var resp = await fetch('/setup/probe', {method: 'POST', body: body, headers: {'Accept': 'application/json'}});
+  var resp = await fetch('{{base}}/setup/probe', {method: 'POST', body: body, headers: {'Accept': 'application/json'}});
   var found = await resp.json();
   renderProbe(found);
 });

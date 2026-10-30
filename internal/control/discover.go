@@ -184,6 +184,11 @@ func localSweepRanges() []string {
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 func clientSweepRange(r *http.Request) string {
+	// Behind Home Assistant's ingress RemoteAddr is the Supervisor, on
+	// Home Assistant's own internal network, where no camera is.
+	if viaIngress(r) {
+		return ""
+	}
 	addr, err := netip.ParseAddr(hostOfAddr(r.RemoteAddr))
 	if err != nil || !addr.Is4() {
 		return ""
@@ -652,7 +657,7 @@ func (s *Server) serveDiscover(w http.ResponseWriter, r *http.Request) {
 	if len(wanted) == 0 {
 		wanted = autoSweepRanges(r, s.opts.ConfigPath)
 		if len(wanted) == 0 {
-			s.renderDiscover(w, DiscoverResult{Err: "there is no network to scan automatically yet. type the address of a camera you have, and reostream will look on its network."})
+			s.renderDiscover(w, r, DiscoverResult{Err: "there is no network to scan automatically yet. type the address of a camera you have, and reostream will look on its network."})
 			return
 		}
 	}
@@ -661,7 +666,7 @@ func (s *Server) serveDiscover(w http.ResponseWriter, r *http.Request) {
 	for _, want := range wanted {
 		p, err := parseSweepRange(want)
 		if err != nil {
-			s.renderDiscover(w, DiscoverResult{Err: err.Error(), Range: want})
+			s.renderDiscover(w, r, DiscoverResult{Err: err.Error(), Range: want})
 			return
 		}
 		if seen[p.String()] {
@@ -672,7 +677,7 @@ func (s *Server) serveDiscover(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.beginSweep() {
-		s.renderDiscover(w, DiscoverResult{Err: "a scan is already running; wait for it to finish. " +
+		s.renderDiscover(w, r, DiscoverResult{Err: "a scan is already running; wait for it to finish. " +
 			"two at once would put twice the dials on the same wire and probe the same new cameras twice."})
 		return
 	}
@@ -689,7 +694,7 @@ func (s *Server) serveDiscover(w http.ResponseWriter, r *http.Request) {
 	// discover tries admin with no password, and the page asks only for the
 	// cameras that reject it.
 	res := s.discover(ctx, ranges, r.FormValue("username"), r.FormValue("password"))
-	s.renderDiscover(w, res)
+	s.renderDiscover(w, r, res)
 }
 
 // serveIdentify re-probes one camera with a password the operator typed
@@ -727,18 +732,19 @@ func (s *Server) serveIdentify(w http.ResponseWriter, r *http.Request) {
 		Report:    rep,
 		Suggested: nameFor(rep, addr),
 	}
-	s.renderCard(w, cam)
+	s.renderCard(w, r, cam)
 }
 
 // renderDiscover writes the fragment. Like serveProbe it clones the
 // template set and bypasses the layout, because this is swapped into a
 // page that is already open.
-func (s *Server) renderDiscover(w http.ResponseWriter, res DiscoverResult) {
+func (s *Server) renderDiscover(w http.ResponseWriter, r *http.Request, res DiscoverResult) {
 	t, err := s.tmpl.Clone()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	t.Funcs(requestFuncs(r))
 	if _, err := t.ParseFS(templateFS, "templates/discover.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -753,12 +759,13 @@ func (s *Server) renderDiscover(w http.ResponseWriter, res DiscoverResult) {
 // place. It is the same "found-camera-card" block the discover fragment
 // renders in its loop, so a re-probed camera looks exactly like a scanned
 // one.
-func (s *Server) renderCard(w http.ResponseWriter, cam DiscoveredCamera) {
+func (s *Server) renderCard(w http.ResponseWriter, r *http.Request, cam DiscoveredCamera) {
 	t, err := s.tmpl.Clone()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	t.Funcs(requestFuncs(r))
 	if _, err := t.ParseFS(templateFS, "templates/discover.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

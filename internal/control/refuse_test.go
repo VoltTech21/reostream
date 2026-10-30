@@ -23,10 +23,9 @@ func TestRefusedMessagesAreNeverWritable(t *testing.T) {
 		id   uint32
 		name string // the firmware's exact description, capitalization included
 	}{
-		{baichuan.MsgIDSetAutoUpdate, "set auto update"}, // firmware
-		{baichuan.MsgIDReboot, "reboot"},                 // takes the camera off the fleet for a minute
-		{baichuan.MsgIDRestore, "restore"},               // factory reset
-		{baichuan.MsgIDSetUserCfg, "Set user cfg"},       // can lock an operator out of their own camera
+		{baichuan.MsgIDReboot, "reboot"},           // takes the camera off the fleet for a minute
+		{baichuan.MsgIDRestore, "restore"},         // factory reset
+		{baichuan.MsgIDSetUserCfg, "Set user cfg"}, // can lock an operator out of their own camera
 	}
 
 	resolved := 0
@@ -98,5 +97,13 @@ func TestWriteBlockHonorsTheRefusal(t *testing.T) {
 	}
 	if result.Detail == "" {
 		t.Fatal("refused with no reason given")
+	}
+}
+
+// "set auto update" is the camera's own update switch, which the Firmware
+// updates group writes; refusing it left a toggle that could never change.
+func TestTheAutoUpdateSwitchIsWritable(t *testing.T) {
+	if yes, why := refused(baichuan.MsgIDSetAutoUpdate); yes {
+		t.Fatalf("set auto update refused: %s", why)
 	}
 }

@@ -559,7 +559,7 @@ func (s *Server) serveApplyClips(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if host == "" {
-			host = uploadHost(cam, f.Host, hostOnly(r.Host))
+			host = uploadHost(cam, f.Host, pageHost(r))
 		}
 		if host == "" {
 			say("refused", "could not work out an address this camera can reach reostream on; enter one under Upload to")

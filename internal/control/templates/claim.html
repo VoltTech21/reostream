@@ -14,7 +14,7 @@
 <p class="subtitle">Nobody owns this reostream yet. It needs the one-time token it printed when it started, and the password you want to use from now on.</p>
 {{if .Error}}<p class="outcome-refused">{{.Error}}</p>{{end}}
 
-<form method="post" action="/claim">
+<form method="post" action="{{base}}/claim">
 <label class="field">
 <span class="label">Token
 {{/* Where the token comes from is a question you ask once. It is a ?
@@ -58,7 +58,7 @@
 (function () {
   // A refusal renders a new suggestion. Put back the password this tab
   // sent, so one the operator already copied is not silently replaced.
-  var form = document.querySelector('form[action="/claim"]');
+  var form = document.querySelector('form[action="{{base}}/claim"]');
   var field = document.querySelector('input[name=password]');
   var key = 'reostream-claim-password';
   if (!form || !field) return;

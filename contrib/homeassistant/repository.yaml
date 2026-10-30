@@ -1,0 +1,7 @@
+# This directory is a Home Assistant add-on repository on its own: Home
+# Assistant only reads repository.yaml at the root of the git repository it
+# is given, so these files are published as the root of a separate one. See
+# README.md.
+name: reostream
+url: https://github.com/VoltTech21/reostream
+maintainer: Riley Poe <riley@audiotronix.co>

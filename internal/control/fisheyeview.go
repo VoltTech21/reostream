@@ -44,7 +44,7 @@ func (s *Server) serveFisheyeView(w http.ResponseWriter, r *http.Request) {
 		page.Playable = true
 		page.URL = tileURL(s.opts.StreamBase, path)
 	}
-	s.render(w, "view.html", page)
+	s.render(w, r, "view.html", page)
 }
 
 // dewarpStream chooses which stream this page plays.

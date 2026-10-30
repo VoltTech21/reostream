@@ -270,7 +270,7 @@ func (s *Server) serveRecordings(w http.ResponseWriter, r *http.Request) {
 		page.Clips = append(page.Clips, c)
 	}
 	sort.Strings(page.Kinds)
-	s.render(w, "recordings.html", page)
+	s.render(w, r, "recordings.html", page)
 }
 
 func sameDay(a, b time.Time) bool {

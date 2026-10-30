@@ -108,7 +108,7 @@ func (s *Server) servePasswordPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, "password.html", page)
+	s.render(w, r, "password.html", page)
 }
 
 func (s *Server) serveApplyPassword(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +117,7 @@ func (s *Server) serveApplyPassword(w http.ResponseWriter, r *http.Request) {
 	raw, err := loadRawConfig(s.opts.ConfigPath)
 	if err != nil {
 		page.Error = err.Error()
-		s.render(w, "password.html", page)
+		s.render(w, r, "password.html", page)
 		return
 	}
 
@@ -142,7 +142,7 @@ func (s *Server) serveApplyPassword(w http.ResponseWriter, r *http.Request) {
 			page.FromEnv, page.EnvVar = true, name
 			if r.FormValue("detach") == "" {
 				page.Error = fmt.Sprintf("This install reads its password from the environment variable %s. Changing it here writes the new password into %s and the daemon stops reading %s -- so remove it from wherever this daemon is started, or the next deploy will look like it changed the password back. Tick the box to go ahead, or set %s where the daemon starts instead.", name, s.opts.ConfigPath, name, name)
-				s.render(w, "password.html", page)
+				s.render(w, r, "password.html", page)
 				return
 			}
 		}
@@ -154,26 +154,29 @@ func (s *Server) serveApplyPassword(w http.ResponseWriter, r *http.Request) {
 	s.authMu.RLock()
 	auth := s.auth
 	s.authMu.RUnlock()
-	if !auth.AllowNoPassword && !auth.Check(current) {
+	// Through Home Assistant's ingress there is no current password to
+	// ask for: the install was claimed with one nobody was shown (see
+	// claimGate), and Home Assistant has already signed this user in.
+	if !auth.AllowNoPassword && !viaIngress(r) && !auth.Check(current) {
 		page.Error = "That is not the current password."
-		s.render(w, "password.html", page)
+		s.render(w, r, "password.html", page)
 		return
 	}
 	if err := validClaimPassword(next); err != nil {
 		page.Error = err.Error()
-		s.render(w, "password.html", page)
+		s.render(w, r, "password.html", page)
 		return
 	}
 	if next == current {
 		page.Error = "That is already the password."
-		s.render(w, "password.html", page)
+		s.render(w, r, "password.html", page)
 		return
 	}
 
 	updated, err := setControlPassword(raw, next)
 	if err != nil {
 		page.Error = err.Error()
-		s.render(w, "password.html", page)
+		s.render(w, r, "password.html", page)
 		return
 	}
 	// The same write path the raw editor and the camera form use, so the
@@ -181,7 +184,7 @@ func (s *Server) serveApplyPassword(w http.ResponseWriter, r *http.Request) {
 	// third one.
 	if _, err := s.writeAndApply(updated); err != nil {
 		page.Error = err.Error()
-		s.render(w, "password.html", page)
+		s.render(w, r, "password.html", page)
 		return
 	}
 
@@ -191,6 +194,12 @@ func (s *Server) serveApplyPassword(w http.ResponseWriter, r *http.Request) {
 	// changed.
 	if s.auth.Store != nil {
 		s.auth.Store.RevokeAll()
+	}
+	// Ingress never signs in here, so there is no sign-in page to return
+	// to; the fleet is where the operator was.
+	if viaIngress(r) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
 	}
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -207,7 +216,7 @@ func (s *Server) serveLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.CookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     cookiePath(r),
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,

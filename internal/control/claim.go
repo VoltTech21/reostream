@@ -509,13 +509,13 @@ func (s *Server) serveClaimForm(w http.ResponseWriter, r *http.Request) {
 	// and so no password is generated: offering one on a page that cannot
 	// accept it is noise.
 	if _, err := os.Stat(s.opts.ConfigPath); err == nil {
-		s.render(w, "claim.html", claimPage{
+		s.render(w, r, "claim.html", claimPage{
 			Title:   "Claim this install",
 			Refused: configPresentMessage(s.opts.ConfigPath),
 		})
 		return
 	}
-	s.render(w, "claim.html", claimFormPage(""))
+	s.render(w, r, "claim.html", claimFormPage(""))
 }
 
 // serveClaim checks the one-time token, takes the password, writes the
@@ -534,7 +534,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	if !sameOriginPost(r) {
 		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "claim.html", claimFormPage("That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here."))
+		s.render(w, r, "claim.html", claimFormPage("That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here."))
 		return
 	}
 
@@ -551,17 +551,53 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	// docker-proxy the passer-by and the operator are the same key.
 	if !claimTokenMatches(s.claimToken(), r.FormValue("token")) {
 		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "claim.html", claimFormPage("That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- a few lines below \"reostream: not yet claimed\". Copy it from there."))
+		s.render(w, r, "claim.html", claimFormPage("That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- a few lines below \"reostream: not yet claimed\". Copy it from there."))
 		return
 	}
 
 	password := r.FormValue("password")
 	if err := validClaimPassword(password); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		s.render(w, "claim.html", claimFormPage(err.Error()))
+		s.render(w, r, "claim.html", claimFormPage(err.Error()))
 		return
 	}
 
+	if err := s.writeClaim(password); err != nil {
+		// A claim that lost a race with another claim gets the answer a
+		// late claim gets anywhere else on this route: the screen is gone,
+		// because the install now has an owner. Only a real write failure
+		// is a 500.
+		if errors.Is(err, errAlreadyClaimed) {
+			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, errConfigPresent) {
+			w.WriteHeader(http.StatusConflict)
+			s.render(w, r, "claim.html", claimPage{
+				Title:   "Claim this install",
+				Refused: configPresentMessage(s.opts.ConfigPath),
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		s.render(w, r, "claim.html", claimFormPage(err.Error()))
+		return
+	}
+
+	// That it was claimed, and from where. Never the password: this line
+	// goes to stderr, to `docker logs`, and to the in-memory log buffer
+	// the Logs page serves to anyone signed in.
+	log.Printf("reostream: control: this install was claimed from %s; the page now requires the password that was set, and the claim token is spent",
+		hostOfAddr(r.RemoteAddr))
+
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// writeClaim writes the config that makes password this install's, and
+// makes it live in this process. It is the claim itself, shared by the
+// claim screen and by the first request through Home Assistant's ingress
+// (see claimGate); each of those decides for itself who may make it.
+func (s *Server) writeClaim(password string) error {
 	// configMu, the same lock every other write to this file takes, so two
 	// claim attempts cannot both find the install unclaimed and both
 	// write. saveConfig, not a private write path: it validates through
@@ -569,6 +605,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	// in-place fallback a bind-mounted config needs, and creates the data
 	// directory a fresh volume does not have yet.
 	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	err := func() error {
 		if s.claimed() {
 			return errAlreadyClaimed
@@ -596,37 +633,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 		s.claimTok = ""
 		s.authMu.Unlock()
 	}
-	s.configMu.Unlock()
-
-	if err != nil {
-		// A claim that lost a race with another claim gets the answer a
-		// late claim gets anywhere else on this route: the screen is gone,
-		// because the install now has an owner. Only a real write failure
-		// is a 500.
-		if errors.Is(err, errAlreadyClaimed) {
-			http.NotFound(w, r)
-			return
-		}
-		if errors.Is(err, errConfigPresent) {
-			w.WriteHeader(http.StatusConflict)
-			s.render(w, "claim.html", claimPage{
-				Title:   "Claim this install",
-				Refused: configPresentMessage(s.opts.ConfigPath),
-			})
-			return
-		}
-		w.WriteHeader(http.StatusInternalServerError)
-		s.render(w, "claim.html", claimFormPage(err.Error()))
-		return
-	}
-
-	// That it was claimed, and from where. Never the password: this line
-	// goes to stderr, to `docker logs`, and to the in-memory log buffer
-	// the Logs page serves to anyone signed in.
-	log.Printf("reostream: control: this install was claimed from %s; the page now requires the password that was set, and the claim token is spent",
-		hostOfAddr(r.RemoteAddr))
-
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	return err
 }
 
 // claimGate sends every request on an unclaimed install to the claim
@@ -639,12 +646,48 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 // unclaimed beats no-cameras. An unclaimed install has no owner, so
 // nobody should be adding cameras to it -- or reading the credentials of
 // cameras already on it -- until somebody has taken it.
+//
+// Home Assistant's ingress is the exception. The claim exists to decide who
+// owns an install nobody has signed in to yet, and a request relayed by
+// ingress comes from a Home Assistant user who already has; making them
+// fetch a token from the add-on's log to prove it again would add nothing.
+// So the first such request claims the install itself, with a generated
+// password nobody has been shown. That closes the page on its own port,
+// which the add-on's host network leaves reachable from the LAN, until
+// somebody sets a password they know under Settings, Password -- which,
+// through ingress, does not ask for the old one.
 func (s *Server) claimGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.claimed() || r.URL.Path == "/claim" || strings.HasPrefix(r.URL.Path, "/assets/") {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if viaIngress(r) {
+			s.claimForIngress()
+			// Through even when that could not write, for the reason the
+			// claim screen refuses a file it would overwrite: a config is
+			// already there, and the Home Assistant user is the one who
+			// can see and fix it.
+			next.ServeHTTP(w, r)
+			return
+		}
 		http.Redirect(w, r, "/claim", http.StatusSeeOther)
 	})
+}
+
+// claimForIngress claims an unclaimed install for the Home Assistant user
+// whose request ingress relayed. See claimGate for why that is allowed.
+func (s *Server) claimForIngress() {
+	pw, err := newSuggestedPassword()
+	if err != nil {
+		log.Printf("reostream: control: could not claim through Home Assistant: %v", err)
+		return
+	}
+	switch err := s.writeClaim(pw); {
+	case err == nil:
+		log.Printf("reostream: control: this install was claimed through Home Assistant ingress; to open the page on its own port too, set a password under Settings, Password")
+	case errors.Is(err, errAlreadyClaimed):
+	default:
+		log.Printf("reostream: control: could not claim through Home Assistant: %v", err)
+	}
 }

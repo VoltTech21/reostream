@@ -10,7 +10,7 @@
 <div class="live-bar">
 <span class="live-bar-label">Stream</span>
 <div class="seg live-streams" role="radiogroup" aria-label="Stream">
-{{range .Streams}}<button type="button" role="radio" class="seg-opt{{if not .Playable}} struck{{end}}" data-stream="{{.Name}}" data-url="{{.URL}}" data-fps="{{printf "%.1f" .FPS}}" data-mb="{{.Mbps}}" data-codec="{{.Codec}}"{{if not .Playable}} disabled title="{{if .Codec}}{{.Codec}}{{else}}no video yet{{end}}: this browser can't play it"{{end}}>{{.Name}}</button>{{end}}
+{{range .Streams}}<button type="button" role="radio" class="seg-opt{{if not .Playable}} struck{{end}}" data-stream="{{.Name}}" data-url="{{at (.URL)}}" data-fps="{{printf "%.1f" .FPS}}" data-mb="{{.Mbps}}" data-codec="{{.Codec}}" data-rotate="{{.Rotate}}"{{if not .Playable}} disabled title="{{if .Codec}}{{.Codec}}{{else}}no video yet{{end}}: this browser can't play it"{{end}}>{{.Name}}</button>{{end}}
 </div>
 <span class="live-bar-note" id="live-note"></span>
 <span class="live-bar-stats mono" id="live-stats"></span>
@@ -70,7 +70,7 @@
 <button type="button" class="quick-btn" id="live-copy" aria-expanded="false" aria-controls="live-urls"{{if not .CopyURLs}} disabled{{end}}>
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>
 <span>Copy URL</span></button>
-{{if .Dewarp}}<a class="quick-btn" href="/cameras/{{.Camera.Name}}/view">
+{{if .Dewarp}}<a class="quick-btn" href="{{base}}/cameras/{{.Camera.Name}}/view">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4v16"/></svg>
 <span>Dewarp</span></a>{{end}}
 {{if .HasFloodlight}}<button type="button" class="quick-btn" id="live-flood" data-camera="{{.Camera.Name}}" aria-pressed="{{if eq .FloodlightCurrent "on"}}true{{else}}false{{end}}" data-was="{{if eq .FloodlightCurrent "on"}}off{{else}}{{.FloodlightCurrent}}{{end}}">
@@ -85,10 +85,10 @@
 </div>
 
 
-<script src="/assets/mpegts.js"></script>
-<script src="/assets/snapshot.js"></script>
-<script src="/assets/live.js"></script>
-<script src="/assets/talk.js"></script>
+<script src="{{base}}/assets/mpegts.js"></script>
+<script src="{{base}}/assets/snapshot.js"></script>
+<script src="{{base}}/assets/live.js"></script>
+<script src="{{base}}/assets/talk.js"></script>
 
 {{else}}
 {{template "camsettings-open" .Head}}
@@ -114,7 +114,7 @@
 <h2>Encoding</h2>
 </div>
 {{if .Encoding.Err}}<p class="outcome-refused">{{.Encoding.Err}}</p>{{end}}
-<form class="control" method="post" action="/cameras/{{.Camera.Name}}/encoding" onsubmit="return confirm('{{.Encoding.Confirm}}')">
+<form class="control" method="post" action="{{base}}/cameras/{{.Camera.Name}}/encoding" onsubmit="return confirm('{{.Encoding.Confirm}}')">
 
 <div class="setting">
 <p><span class="tier tier-interruption" title="Saving this briefly interrupts the stream"></span><label for="enc-main-size">Main resolution</label></p>
@@ -200,12 +200,12 @@
 <div class="sec-head">
 <h2>View</h2>
 </div>
-<p class="hint">Changes what the camera records. To only change what you see, use <a href="/cameras/{{.Camera.Name}}/view">Dewarp</a>.</p>
-{{with .Group.Tile}}{{if .Playable}}<div class="wide-preview"><p class="sec-preview-head"><span class="live-dot"></span>LIVE <span class="hint">sub stream</span></p><div class="cam-video" data-src="{{.URL}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div></div>{{end}}{{end}}
+<p class="hint">Changes what the camera records. To only change what you see, use <a href="{{base}}/cameras/{{.Camera.Name}}/view">Dewarp</a>.</p>
+{{with .Group.Tile}}{{if .Playable}}<div class="wide-preview"><p class="sec-preview-head"><span class="live-dot"></span>LIVE <span class="hint">sub stream</span></p><div class="cam-video" data-src="{{at (.URL)}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div></div>{{end}}{{end}}
 {{if .FishEyeErr}}<p class="outcome-refused">{{.FishEyeErr}}</p>{{end}}
 <div class="setting">
 <p><span class="tier tier-reboot" title="Saving this restarts the camera"></span>Picture</p>
-<form class="control" method="post" action="/cameras/{{.Camera.Name}}/fisheye" onsubmit="return confirm('{{.FishEyeConfirm}}')">
+<form class="control" method="post" action="{{base}}/cameras/{{.Camera.Name}}/fisheye" onsubmit="return confirm('{{.FishEyeConfirm}}')">
 <div class="segmented" role="radiogroup" aria-label="Fisheye view">
 {{$currentView := .FishEyeCurrent}}
 {{range .FishEyeOptions}}<label title="{{.What}}"><input type="radio" name="option" value="{{.Value}}"{{if eq .Value $currentView}} checked{{end}}><span>{{.Value}}</span></label>{{end}}
@@ -223,16 +223,16 @@
 <section>
 <div class="sec-head">
 <h2>Lens alignment</h2>
-<a href="/cameras/{{.Camera.Name}}/align">Align against the picture &rarr;</a>
+<a href="{{base}}/cameras/{{.Camera.Name}}/align">Align against the picture &rarr;</a>
 </div>
-{{with .Group.Tile}}{{if .Playable}}<div class="wide-preview"><p class="sec-preview-head"><span class="live-dot"></span>LIVE <span class="hint">sub stream</span></p><div class="cam-video" data-src="{{.URL}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div></div>{{end}}{{end}}
+{{with .Group.Tile}}{{if .Playable}}<div class="wide-preview"><p class="sec-preview-head"><span class="live-dot"></span>LIVE <span class="hint">sub stream</span></p><div class="cam-video" data-src="{{at (.URL)}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div></div>{{end}}{{end}}
 {{/* The boxes only when the numbers in them came from the camera. A failed
      read leaves three zeros and a zero range, and the reset buttons would
      carry 0 as the factory value -- so the form would offer to set this
      camera to zero and call it the factory alignment. */}}
 {{if .StitchErr}}<p class="outcome-refused">{{.StitchErr}}</p>
 {{else}}
-<form class="control autosave" method="post" action="/cameras/{{.Camera.Name}}/stitch">
+<form class="control autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/stitch">
 <div class="setting">
 <p><span class="tier tier-instant" title="Saves instantly, nothing stops"></span><label for="st-distance">Focus distance</label>{{template "info" "The distance where the two lenses line up. Nearer things double, farther things clip."}}</p>
 <div class="control">
@@ -286,7 +286,7 @@
 {{if .Encoding.Have}}
 <section>
 <div class="sec-head"><h2>Microphone</h2><span class="sec-where">on camera</span></div>
-<form class="setting autosave" method="post" action="/cameras/{{.Camera.Name}}/encoding" onsubmit="return confirm('This restarts the stream for a few seconds. ' + (this.audio.value === '1' ? 'Turn the microphone on?' : 'Turn the microphone off?'))">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/encoding" onsubmit="return confirm('This restarts the stream for a few seconds. ' + (this.audio.value === '1' ? 'Turn the microphone on?' : 'Turn the microphone off?'))">
 <p><span class="tier tier-interruption" title="Saving this briefly interrupts the stream"></span>Record audio{{template "info" "Off sends silence to every recorder."}}</p>
 <div class="control">
 <input type="hidden" name="audio" value="{{.Encoding.Current.Audio}}">
@@ -303,7 +303,7 @@
 <h2>Sound</h2>
 </div>
 {{if .Siren.Err}}<p class="outcome-refused">{{.Siren.Err}}</p>{{end}}
-<form class="control autosave" method="post" action="/cameras/{{.Camera.Name}}/siren">
+<form class="control autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/siren">
 {{if $volume}}
 <div class="setting">
 <p><span class="tier tier-instant" title="Saves instantly, nothing stops"></span>Speaker volume{{template "info" "Also how loud talk comes out."}}</p>
@@ -355,7 +355,7 @@ function netConfirm(f) {
 {{range .NetPort.Services}}
 <div class="setting">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>{{.Label}}{{template "info" .Help}}</p>
-<form class="control autosave" method="post" action="/cameras/{{$.Camera.Name}}/netport" data-label="{{.Label}}" data-port="{{.Port}}" onsubmit="return netConfirm(this)">
+<form class="control autosave" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/netport" data-label="{{.Label}}" data-port="{{.Port}}" onsubmit="return netConfirm(this)">
 <input type="hidden" name="service" value="{{.Key}}">
 <input type="hidden" name="value" value="{{if .On}}1{{else}}0{{end}}">
 <button type="button" class="switch" aria-pressed="{{if .On}}true{{else}}false{{end}}" aria-label="{{.Label}}"><span class="knob"></span></button>
@@ -376,7 +376,7 @@ function netConfirm(f) {
 <div class="sec-head"><h2>Auto return</h2><span class="sec-where">on camera</span></div>
 {{if .PTZ.GuardErr}}<p class="outcome-refused">{{.PTZ.GuardErr}}</p>
 {{else}}
-<form class="setting autosave" method="post" action="/cameras/{{.Camera.Name}}/ptz/guard">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/guard">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Return to guard position{{template "info" "Goes back to the guard position after it has been left alone."}}</p>
 <div class="control">
 <input type="hidden" name="enable" value="{{if .PTZ.Guard.Enable}}1{{else}}0{{end}}">
@@ -384,13 +384,13 @@ function netConfirm(f) {
 {{if not .PTZ.Guard.Valid}}<span class="hint">No guard position set; set one in the Reolink app.</span>{{end}}
 </div>
 </form>
-<form class="setting autosave" id="row-guard-timeout" method="post" action="/cameras/{{.Camera.Name}}/ptz/guard">
+<form class="setting autosave" id="row-guard-timeout" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/guard">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>After</p>
 <div class="control">
 <input type="number" name="timeout" min="10" max="300" step="1" value="{{.PTZ.Guard.Timeout}}" style="width:90px"> <span>seconds</span>
 </div>
 </form>
-<form class="setting" method="post" action="/cameras/{{.Camera.Name}}/ptz/guardpos" data-nav>
+<form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/guardpos" data-nav>
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Guard position{{template "info" "Point the camera where it should rest (Live tab), then save that spot here."}}</p>
 <div class="control">
 <button type="submit" name="op" value="set">Set to where it points now</button>
@@ -401,7 +401,7 @@ function netConfirm(f) {
 </section>
 <section>
 <div class="sec-head"><h2>Calibrate</h2><span class="sec-where">on camera</span></div>
-<form class="setting" method="post" action="/cameras/{{.Camera.Name}}/ptz/calibrate" data-nav onsubmit="return confirm('Calibrate? The camera turns through its whole range for a minute or two.')">
+<form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/calibrate" data-nav onsubmit="return confirm('Calibrate? The camera turns through its whole range for a minute or two.')">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Pan and tilt{{template "info" "The camera turns to both ends of each axis to relearn its limits. Use it if positions or presets have drifted."}}</p>
 <div class="control">
 {{if .PTZ.Calibrated}}<span class="hint">{{.PTZ.Calibrated}}</span>{{end}}
@@ -412,7 +412,7 @@ function netConfirm(f) {
 {{if .Track.Supported}}
 <section>
 <div class="sec-head"><h2>Auto tracking</h2><span class="sec-where">on camera</span></div>
-<form class="setting autosave" method="post" action="/cameras/{{.Camera.Name}}/ptz/track">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/track">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Follow what moves{{template "info" "The camera turns to follow a person, vehicle or animal it detects, then goes back."}}</p>
 <div class="control">
 <input type="hidden" name="on" value="{{if .Track.On}}1{{else}}0{{end}}">
@@ -421,7 +421,7 @@ function netConfirm(f) {
 </form>
 <div id="row-track-what">
 {{range .Track.Kinds}}
-<form class="setting autosave" method="post" action="/cameras/{{$.Camera.Name}}/ptz/track">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/ptz/track">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Follow {{.Label}}</p>
 <div class="control">
 <input type="hidden" name="{{.Key}}" value="{{if .On}}1{{else}}0{{end}}">
@@ -429,14 +429,14 @@ function netConfirm(f) {
 </div>
 </form>
 {{end}}
-<form class="setting autosave" method="post" action="/cameras/{{.Camera.Name}}/ptz/track">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/track">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Go back after it leaves{{template "info" "Seconds after the target is out of sight before the camera returns."}}</p>
 <div class="control"><select name="aiDisappearBackTime">
 {{if not (.Track.HasChoice .Track.DisappearBack)}}<option value="{{.Track.DisappearBack}}" selected>{{.Track.DisappearBack}} s</option>{{end}}
 {{range .Track.BackChoices}}<option value="{{.}}"{{if eq . $.Track.DisappearBack}} selected{{end}}>{{.}} s</option>{{end}}
 </select></div>
 </form>
-<form class="setting autosave" method="post" action="/cameras/{{.Camera.Name}}/ptz/track">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/track">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Go back after it stops{{template "info" "Seconds after the target stops moving before the camera returns."}}</p>
 <div class="control"><select name="aiStopBackTime">
 {{if not (.Track.HasChoice .Track.StopBack)}}<option value="{{.Track.StopBack}}" selected>{{.Track.StopBack}} s</option>{{end}}
@@ -457,7 +457,7 @@ function netConfirm(f) {
 <div class="setting"><p>Saved here</p><div class="control"><span class="mono">{{.Count}} clip{{if ne .Count 1}}s{{end}}{{if not .Last.IsZero}} &middot; last {{.Last.Format "Jan 2 15:04"}}{{end}}</span></div></div>
 {{if .CamErr}}<p class="outcome-refused">{{.CamErr}}</p>{{end}}
 {{if .LowDisk}}<p class="outcome-refused">{{.LowDisk}}</p>{{end}}
-<form method="post" action="/cameras/{{$.Camera.Name}}/clips" class="clips-form" data-nav>
+<form method="post" action="{{base}}/cameras/{{$.Camera.Name}}/clips" class="clips-form" data-nav>
 <div class="setting"><p>Stream{{template "info" "Main is full resolution, often H.265. Sub is smaller and plays in every browser; not yet tried on a camera."}}</p>
 <div class="control"><div class="seg" role="radiogroup">
 <label class="seg-radio"><input type="radio" name="stream" value="main" checked><span>Main</span></label>
@@ -480,7 +480,7 @@ function netConfirm(f) {
 <section>
 <div class="sec-head"><h2>Remove {{.Camera.Name}}</h2></div>
 <p class="hint">Nothing changes on the camera.</p>
-<form method="post" action="/cameras/{{.Camera.Name}}/remove" data-nav
+<form method="post" action="{{base}}/cameras/{{.Camera.Name}}/remove" data-nav
   onsubmit="return confirm('Remove {{.Camera.Name}} from reostream?')">
 <button type="submit" class="danger-btn">Remove {{.Camera.Name}}</button>
 </form>
@@ -488,16 +488,16 @@ function netConfirm(f) {
 {{end}}
 
 {{template "camsettings-close"}}
-<script src="/assets/mpegts.js"></script>
-<script src="/assets/snapshot.js"></script>
-<script src="/assets/settings.js"></script>
-<script src="/assets/encoding.js"></script>
-<script src="/assets/live.js"></script>
-<script src="/assets/schedule.js"></script>
-<script src="/assets/zone.js"></script>
-<script src="/assets/mask.js"></script>
-<script src="/assets/rules.js"></script>
-<script src="/assets/sound.js"></script>
+<script src="{{base}}/assets/mpegts.js"></script>
+<script src="{{base}}/assets/snapshot.js"></script>
+<script src="{{base}}/assets/settings.js"></script>
+<script src="{{base}}/assets/encoding.js"></script>
+<script src="{{base}}/assets/live.js"></script>
+<script src="{{base}}/assets/schedule.js"></script>
+<script src="{{base}}/assets/zone.js"></script>
+<script src="{{base}}/assets/mask.js"></script>
+<script src="{{base}}/assets/rules.js"></script>
+<script src="{{base}}/assets/sound.js"></script>
 {{end}}
 {{end}}
 
@@ -512,7 +512,7 @@ function netConfirm(f) {
 </span>
 </div>
 {{if gt (len $.Head.Cameras) 1}}
-<form class="copy-panel" method="post" action="/cameras/{{$.Camera.Name}}/copy" data-report hidden>
+<form class="copy-panel" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/copy" data-report hidden>
 <input type="hidden" name="group" value="{{$group.Title}}">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <p class="hint">Copy {{$group.Title}} to:</p>
@@ -548,7 +548,7 @@ function netConfirm(f) {
 {{$current := index $.Values (.Key .XPath)}}{{$field := .}}
 <div class="setting" id="row-{{.Slug}}">
 <p><span class="tier tier-{{$group.Tier}}" title="{{$group.TierLabel}}"></span>{{.Label}}{{with .Help}}{{template "info" .}}{{end}}{{if $.Reset .}}<span class="changed" title="Changed from factory"></span>{{end}}</p>
-<form class="control autosave" method="post" action="/cameras/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
+<form class="control autosave" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/settings"{{if $group.ConfirmReason}} onsubmit="return confirm('{{$group.ConfirmReason}}')"{{end}}>
 <input type="hidden" name="block" value="{{index $.ResolvedBlock $group.Title}}">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 {{/* FormXPath, not XPath: a control that changes two elements together
@@ -619,7 +619,7 @@ function netConfirm(f) {
 {{if $.FloodlightErr}}<p class="outcome-refused">{{$.FloodlightErr}}</p>{{end}}
 <div class="setting">
 <p><span class="tier tier-{{$group.Tier}}" title="{{$group.TierLabel}}"></span>Floodlight{{template "info" "Motion: on when something moves. Schedule: on at the hours set in the Reolink app."}}</p>
-<form class="control autosave" method="post" action="/cameras/{{$.Camera.Name}}/floodlight" onsubmit="return confirm('{{$.FloodlightConfirm}}')">
+<form class="control autosave" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/floodlight" onsubmit="return confirm('{{$.FloodlightConfirm}}')">
 <div class="segmented" role="radiogroup" aria-label="Floodlight">
 {{$currentFloodlight := $.FloodlightCurrent}}
 {{range $.FloodlightOptions}}<label><input type="radio" name="option" value="{{.Value}}"{{if eq .Value $currentFloodlight}} checked{{end}}><span>{{.Value}}</span></label>{{end}}
@@ -631,7 +631,7 @@ function netConfirm(f) {
 {{if $prev}}{{with $.Group.Tile}}{{if .Playable}}
 <aside class="sec-preview">
 <p class="sec-preview-head"><span class="live-dot"></span>LIVE <span class="hint">sub stream</span></p>
-<div class="cam-video" data-src="{{.URL}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>
+<div class="cam-video" data-src="{{at (.URL)}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>
 </aside>
 {{end}}{{end}}{{end}}
 </div>
@@ -652,7 +652,7 @@ window.addEventListener("load", function () {
 <section class="sched">
 <div class="sec-head"><h2>{{$s.Title}}</h2><span class="sec-where">on camera</span></div>
 {{with $s.Blurb}}<p class="hint">{{.}}</p>{{end}}
-<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/schedule">
+<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/schedule">
 <input type="hidden" name="block" value="{{$s.Block}}">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="type" value="">
@@ -683,11 +683,11 @@ window.addEventListener("load", function () {
 <section class="zone">
 <div class="sec-head"><h2>Detection zone</h2><span class="sec-where">on camera</span></div>
 <p class="hint">Paint out the places to ignore, like a road or a tree that moves in the wind.{{if $z.HasAI}} Applies to motion, people, vehicles and animals.{{end}}</p>
-<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/zone">
+<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/zone">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="mask" value="{{$z.Mask}}">
 <div class="zone-wrap" data-w="{{$z.W}}" data-h="{{$z.H}}" style="aspect-ratio: {{$z.W}} / {{$z.H}}">
-{{with $.Group.Tile}}{{if .Playable}}<div class="cam-video" data-src="{{.URL}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>{{end}}{{end}}
+{{with $.Group.Tile}}{{if .Playable}}<div class="cam-video" data-src="{{at (.URL)}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>{{end}}{{end}}
 <canvas class="zone-canvas" aria-label="Detection zone, {{$z.W}} by {{$z.H}} cells"></canvas>
 </div>
 <div class="zone-actions">
@@ -709,11 +709,11 @@ window.addEventListener("load", function () {
 <section class="mask">
 <div class="sec-head"><h2>Privacy mask</h2><span class="sec-where">on camera</span></div>
 <p class="hint">Black out up to {{$m.Max}} areas, like a neighbor's window. They are blacked out in every stream and recording, including Frigate's.</p>
-<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/mask">
+<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/mask">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="rects" value="{{$m.Rects}}">
 <div class="mask-wrap" data-max="{{$m.Max}}">
-{{with $.Group.Tile}}{{if .Playable}}<div class="cam-video" data-src="{{.URL}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>{{end}}{{end}}
+{{with $.Group.Tile}}{{if .Playable}}<div class="cam-video" data-src="{{at (.URL)}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>{{end}}{{end}}
 <div class="mask-layer" aria-label="Privacy mask boxes"></div>
 </div>
 <div class="zone-actions">
@@ -736,14 +736,14 @@ window.addEventListener("load", function () {
 <div class="sec-head"><h2>{{$k.Title}}</h2><span class="sec-where">on camera &middot; {{len $set.Rules}} of {{$set.Max}}</span></div>
 <p class="hint">{{$k.Blurb}} Drag the points on the picture.</p>
 {{range $set.Rules}}
-<form class="control rule" method="post" action="/cameras/{{$.Camera.Name}}/rule" data-line="{{if $k.Line}}1{{end}}" data-min="{{$set.MinPoints}}" data-max="{{$set.MaxPoints}}">
+<form class="control rule" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/rule" data-line="{{if $k.Line}}1{{end}}" data-min="{{$set.MinPoints}}" data-max="{{$set.MaxPoints}}">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="kind" value="{{$k.Key}}">
 <input type="hidden" name="index" value="{{.Index}}">
 <input type="hidden" name="op" value="modify">
 <input type="hidden" name="points" value="{{.Points}}">
 <div class="rule-wrap">
-{{with $.Group.Tile}}{{if .Playable}}<div class="cam-video" data-src="{{.URL}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>{{end}}{{end}}
+{{with $.Group.Tile}}{{if .Playable}}<div class="cam-video" data-src="{{at (.URL)}}" data-autoplay="1"><img alt="" hidden><video muted playsinline hidden></video></div>{{end}}{{end}}
 <svg class="rule-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="{{$k.Title}} {{.Name}}"></svg>
 </div>
 <div class="rule-fields">
@@ -765,7 +765,7 @@ window.addEventListener("load", function () {
 </form>
 {{end}}
 {{if lt (len $set.Rules) $set.Max}}
-<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/rule">
+<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/rule">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="kind" value="{{$k.Key}}">
 <input type="hidden" name="op" value="add">
@@ -801,8 +801,8 @@ window.addEventListener("load", function () {
 <div class="setting"><p>Left limit</p><p class="exact">{{$t.Label $t.Left}}</p></div>
 <div class="setting"><p>Right limit</p><p class="exact">{{$t.Label $t.Right}}</p></div>
 <div class="zone-actions">
-{{range $side := (split "left right")}}<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/tracklimit"><input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}"><input type="hidden" name="side" value="{{$side}}"><button type="submit">Set {{$side}} limit here</button></form>{{end}}
-<form class="control" method="post" action="/cameras/{{$.Camera.Name}}/tracklimit"><input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}"><input type="hidden" name="side" value="full"><button type="submit" class="linkish">Full range</button></form>
+{{range $side := (split "left right")}}<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/tracklimit"><input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}"><input type="hidden" name="side" value="{{$side}}"><button type="submit">Set {{$side}} limit here</button></form>{{end}}
+<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/tracklimit"><input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}"><input type="hidden" name="side" value="full"><button type="submit" class="linkish">Full range</button></form>
 </div>
 </section>
 {{end}}
@@ -814,7 +814,7 @@ window.addEventListener("load", function () {
 <p class="hint">Turns the camera's video, sound and controls off until you turn it back on. reostream checks every 15 seconds and picks the stream back up when it ends; set hold_picture on the camera to keep showing the last picture meanwhile.</p>
 <div class="setting">
 <p><span class="tier tier-interruption" title="Stops the stream"></span>Privacy mode</p>
-<form class="control autosave" method="post" action="/cameras/{{$.Camera.Name}}/privacymode" onsubmit="return confirm('{{if $v.On}}Turn privacy mode off and resume the camera?{{else}}Turn privacy mode on? The camera stops recording and streaming until you turn it off.{{end}}')">
+<form class="control autosave" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/privacymode" onsubmit="return confirm('{{if $v.On}}Turn privacy mode off and resume the camera?{{else}}Turn privacy mode on? The camera stops recording and streaming until you turn it off.{{end}}')">
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="value" value="{{if $v.On}}1{{else}}0{{end}}">
 <button type="button" class="switch" aria-pressed="{{if $v.On}}true{{else}}false{{end}}" aria-label="Privacy mode"><span class="knob"></span></button>

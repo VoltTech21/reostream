@@ -231,7 +231,18 @@ func (c *Conn) nextCounter() byte {
 // the confusion a first time user hits when a typed password is wrong. This
 // sentinel is what lets a caller tell the two apart and say "authentication
 // failed" instead of "something is wrong with the network".
+//
+// A Reolink NVR (RLN8-410, v3.5.1.368 emulated) does send a document for a
+// wrong password, <LoginErrInfo> with the attempts left before it locks
+// logins, which is a refusal too and not a DeviceInfo.
 var ErrUnauthorized = errors.New("baichuan: authentication rejected (empty login reply)")
+
+// ErrLoginRefused is a login answered with status 400 and no body. Some
+// firmware answers every login that way for a minute or more after a burst
+// of logins (RLC-410 v3.0.0.136, Duo 3, E1 Pro, emulated 2026-10-29), while
+// a wrong password there is 401. Calling it a wrong password sends someone
+// to retype a password that is right.
+var ErrLoginRefused = errors.New("baichuan: camera refused the login (status 400, no reason given)")
 
 // login performs the handshake observed on the wire: a zero-length
 // negotiation probe, the camera's nonce, a hashed login, then DeviceInfo.
@@ -268,11 +279,25 @@ func (c *Conn) login() error {
 		return fmt.Errorf("baichuan: read login reply: %w", err)
 	}
 	if len(reply.XML) == 0 {
+		why := ErrUnauthorized
+		if reply.Header.Status() == 400 {
+			why = ErrLoginRefused
+		}
 		return fmt.Errorf("%w (status %d, msgid %d, class 0x%04x, %d body bytes)",
-			ErrUnauthorized, reply.Header.Status(), reply.Header.MsgID, reply.Header.Class, len(reply.Payload))
+			why, reply.Header.Status(), reply.Header.MsgID, reply.Header.Class, len(reply.Payload))
 	}
 	key := AESKey(nonce, c.opts.Password)
 	c.deviceInfo = loginReplyXML(reply, key)
+	if bytes.Contains(c.deviceInfo, []byte("<LoginErrInfo")) {
+		left := ""
+		if i := bytes.Index(c.deviceInfo, []byte("<remainTimes>")); i >= 0 {
+			rest := c.deviceInfo[i+len("<remainTimes>"):]
+			if j := bytes.IndexByte(rest, '<'); j >= 0 {
+				left = fmt.Sprintf(", %s tries left before it locks logins", rest[:j])
+			}
+		}
+		return fmt.Errorf("%w (status %d%s)", ErrUnauthorized, reply.Header.Status(), left)
+	}
 
 	c.r.SetAESKey(key)
 	c.w.SetAESKey(key)
@@ -425,6 +450,36 @@ func (c *Conn) StartVideoOn(channel, handle int, stream string) error {
 	c.also = append(c.also, alsoStream{channel, handle, stream})
 	c.mu.Unlock()
 	return nil
+}
+
+// StopVideoOn stops one stream StartVideoOn opened, leaving the connection
+// and every other stream on it running. A recorder's shared connection
+// (see Shared) uses it when the last reader of a stream goes away.
+func (c *Conn) StopVideoOn(channel, handle int, stream string) error {
+	c.mu.Lock()
+	for i, a := range c.also {
+		if a == (alsoStream{channel, handle, stream}) {
+			c.also = append(c.also[:i:i], c.also[i+1:]...)
+			break
+		}
+	}
+	c.mu.Unlock()
+	return c.stopVideo(channel, handle, stream)
+}
+
+// stopVideo sends the stream-stop message: the preview request again, with
+// the same channel and handle and no stream type.
+func (c *Conn) stopVideo(channel, handle int, stream string) error {
+	body, err := previewXML(channel, handle, "")
+	if err != nil {
+		return err
+	}
+	h := Header{
+		MsgID:     MsgIDVideo,
+		Class:     ClassModern24,
+		EncOffset: EncOffsetFor(byte(channel), StreamID(stream), c.nextCounter(), 0),
+	}
+	return c.w.Write(h, body)
 }
 
 // TalkAbility asks the camera to describe its two-way audio support: the
@@ -680,30 +735,15 @@ func (c *Conn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.done)
 		if c.stream != "" {
-			if body, mErr := previewXML(c.opts.Channel, c.handle, ""); mErr == nil {
-				h := Header{
-					MsgID: MsgIDVideo,
-					Class: ClassModern24,
-					EncOffset: EncOffsetFor(byte(c.opts.Channel),
-						StreamID(c.stream), c.nextCounter(), 0),
-				}
-				_ = c.nc.SetWriteDeadline(time.Now().Add(2 * time.Second))
-				_ = c.w.Write(h, body)
-			}
+			_ = c.nc.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_ = c.stopVideo(c.opts.Channel, c.handle, c.stream)
 		}
 		c.mu.Lock()
 		also := c.also
 		c.mu.Unlock()
 		for _, a := range also {
-			if body, mErr := previewXML(a.channel, a.handle, ""); mErr == nil {
-				h := Header{
-					MsgID:     MsgIDVideo,
-					Class:     ClassModern24,
-					EncOffset: EncOffsetFor(byte(a.channel), StreamID(a.stream), c.nextCounter(), 0),
-				}
-				_ = c.nc.SetWriteDeadline(time.Now().Add(2 * time.Second))
-				_ = c.w.Write(h, body)
-			}
+			_ = c.nc.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_ = c.stopVideo(a.channel, a.handle, a.stream)
 		}
 		err = c.nc.Close()
 	})

@@ -238,5 +238,5 @@ func (s *Server) serveAlign(w http.ResponseWriter, r *http.Request) {
 			page.Have = true
 		}
 	}
-	s.render(w, "align.html", page)
+	s.render(w, r, "align.html", page)
 }

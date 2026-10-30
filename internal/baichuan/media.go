@@ -382,6 +382,14 @@ func isVideoMagic(b []byte) bool {
 	return len(b) >= 4 && b[0] >= '0' && b[0] <= '9' && (b[1] == '0' || b[1] == '1') && b[2] == 'd' && b[3] == 'c'
 }
 
+// isAudio reports an audio packet of the given kind on any channel: the
+// first digit is the channel, as for video, so the TrackMix zoom lens sends
+// its AAC as "15wb" (firmware v3.0.0.5428, emulated 2026-10-29).
+func isAudio(b, magic []byte) bool {
+	return len(b) >= 4 && b[0] >= '0' && b[0] <= '9' && b[1] == magic[1] &&
+		b[2] == magic[2] && b[3] == magic[3]
+}
+
 func match(b, magic []byte) bool {
 	return len(b) >= 4 && b[0] == magic[0] && b[1] == magic[1] &&
 		b[2] == magic[2] && b[3] == magic[3]
@@ -453,14 +461,14 @@ func (d *Depacketizer) Next() (Frame, bool) {
 			d.consume(hdr + prefix + size)
 			return f, true
 
-		case match(d.buf, magicAAC), match(d.buf, magicADPCM):
+		case isAudio(d.buf, magicAAC), isAudio(d.buf, magicADPCM):
 			// magic(4) size(2) size(2)
 			size := int(binary.LittleEndian.Uint16(d.buf[4:]))
 			if len(d.buf) < 8+size {
 				return Frame{}, false
 			}
 			kind := FrameAAC
-			if match(d.buf, magicADPCM) {
+			if isAudio(d.buf, magicADPCM) {
 				kind = FrameADPCM
 			}
 			f := Frame{Kind: kind, Data: append([]byte(nil), d.buf[8:8+size]...)}
@@ -489,6 +497,15 @@ func (d *Depacketizer) Next() (Frame, bool) {
 			return f, true
 
 		default:
+			// The v3.0.0.136 firmware of the RLC-410-5MP and RLC-422 sends
+			// several whole packets back to back in one message after the
+			// first, each zero-padded to 8 bytes, with no extension header to
+			// mark them as packet starts. Step over that padding when a packet
+			// follows it, and only then: up to 7 zero bytes, then a magic.
+			if n := padBeforePacket(d.buf); n > 0 {
+				d.buf, d.filler = d.buf[n:], d.filler+n
+				continue
+			}
 			// Not at a packet boundary. Packets always begin at the start of a
 			// message carrying an extension header, so anything here is
 			// trailing filler from the packet just emitted: leave it for the
@@ -497,6 +514,22 @@ func (d *Depacketizer) Next() (Frame, bool) {
 			return Frame{}, false
 		}
 	}
+}
+
+// padBeforePacket returns how many zero bytes (1 to 7) precede a packet
+// magic at the start of b, or 0 when b does not start that way.
+func padBeforePacket(b []byte) int {
+	for n := 1; n < 8 && n < len(b); n++ {
+		if b[n-1] != 0 {
+			return 0
+		}
+		at := b[n:]
+		if isVideoMagic(at) || isAudio(at, magicAAC) || isAudio(at, magicADPCM) ||
+			match(at, magicInfoV1) || match(at, magicInfoV2) {
+			return n
+		}
+	}
+	return 0
 }
 
 // consume drops a packet of length n. Any bytes left in the buffer afterwards

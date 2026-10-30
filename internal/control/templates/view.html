@@ -12,7 +12,7 @@
 <p class="subtitle">Dewarped in your browser. The camera keeps sending its raw circle.</p>
 </div>
 <div class="actions">
-<a href="/cameras/{{.Camera}}"><button type="button">Camera settings</button></a>
+<a href="{{base}}/cameras/{{.Camera}}"><button type="button">Camera settings</button></a>
 </div>
 </div>
 
@@ -41,7 +41,7 @@
 <button type="button" id="dewarp-reset">Recenter panes</button>
 </div>
 
-<div id="dewarp" data-url="{{.URL}}">
+<div id="dewarp" data-url="{{at (.URL)}}">
 <canvas id="dewarp-canvas"></canvas>
 <video id="dewarp-video" playsinline muted hidden></video>
 </div>
@@ -56,13 +56,13 @@
 <label>Lens field of view <input type="range" id="cal-fov" min="150" max="220" step="1" value="180"> <output id="cal-fov-out"></output></label>
 </details>
 
-<script src="/assets/mpegts.js"></script>
-<script src="/assets/fisheye.js"></script>
-<script src="/assets/fisheyeview.js"></script>
+<script src="{{base}}/assets/mpegts.js"></script>
+<script src="{{base}}/assets/fisheye.js"></script>
+<script src="{{base}}/assets/fisheyeview.js"></script>
 {{else}}
 <div class="alert">
 <span>This camera has no stream a browser can play, so there is nothing to dewarp.</span>
-<a href="/cameras/{{.Camera}}">Open {{.Camera}} &rarr;</a>
+<a href="{{base}}/cameras/{{.Camera}}">Open {{.Camera}} &rarr;</a>
 </div>
 {{end}}
 {{end}}

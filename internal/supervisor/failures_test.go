@@ -60,3 +60,13 @@ func TestAChangedReasonIsLogged(t *testing.T) {
 		t.Errorf("want both reasons logged:\n%s", b)
 	}
 }
+func TestANVRsTriesLeftReachesThePlainMessage(t *testing.T) {
+	err := fmt.Errorf("stream: nvr: dial: %w (status 400, 8 tries left before it locks logins)", baichuan.ErrUnauthorized)
+	got := plainError(err)
+	if !strings.HasPrefix(got, "wrong username or password") || !strings.HasSuffix(got, "; 8 tries left before it locks logins") {
+		t.Errorf("plainError = %q", got)
+	}
+	if got := plainError(fmt.Errorf("dial: %w", baichuan.ErrLoginRefused)); strings.Contains(got, "retrying") {
+		t.Errorf("refused login says retrying itself, and the log line adds it again: %q", got)
+	}
+}

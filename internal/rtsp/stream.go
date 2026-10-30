@@ -75,7 +75,7 @@ type videoEncoder interface {
 // they belong in the SDP. Everything below stays nil until then.
 type Stream struct {
 	// epoch90 is added to every RTP timestamp: the wall clock in 90 kHz
-	// ticks when this stream was made. Each run of the daemon starts its
+	// ticks at this stream's first video frame. Each run of the daemon starts its
 	// timeline from zero, so without it a restart sent timestamps back to
 	// where the last run began. go2rtc keeps a recorder (Frigate's)
 	// attached across that restart and passes the jump straight on, and
@@ -363,10 +363,15 @@ func (s *Stream) videoFrame(f baichuan.Frame) {
 	// what readers expect; what they cannot absorb is the clock going
 	// backwards.
 	s.mu.Lock()
+	now := s.wallNow()
 	if s.videoClock == nil {
 		s.videoClock = ts.NewClock()
+		// The clock's first frame is PTS zero, so the epoch is the wall
+		// clock at that frame, not when the stream was registered: a camera
+		// that took longer to answer this run than the last would otherwise
+		// start the new timeline behind where the old one stopped.
+		s.epoch90 = wallEpoch90(now)
 	}
-	now := s.wallNow()
 	if s.rebaseClock {
 		// The gap is wall time since the last frame of the old connection,
 		// which is the outage as a reader experienced it. For a reconnect
@@ -378,6 +383,7 @@ func (s *Stream) videoFrame(f baichuan.Frame) {
 	s.lastVideoWall = now
 	ts90 := s.videoClock.PTS(f.Micros)
 	s.lastVideo = ts90
+	epoch := s.epoch90
 	s.mu.Unlock()
 
 	if s.readerCount() == 0 {
@@ -404,11 +410,14 @@ func (s *Stream) videoFrame(f baichuan.Frame) {
 	if err != nil {
 		return
 	}
+	ntp := ntpOf90(ts90 + epoch)
 	for _, p := range pkts {
-		p.Timestamp = uint32(ts90 + s.epoch90)
+		p.Timestamp = uint32(ts90 + epoch)
 		// A write error is a reader problem, not a camera problem. gortsplib
-		// drops the reader; the camera goroutine carries on.
-		_ = ss.WritePacketRTP(media, p)
+		// drops the reader; the camera goroutine carries on. The sender
+		// report's wall time comes from the same timeline as the RTP
+		// timestamp; see ntpOf90.
+		_ = ss.WritePacketRTPWithNTP(media, p, ntp)
 	}
 }
 
@@ -469,10 +478,10 @@ func (s *Stream) aacFrame(f baichuan.Frame) {
 	if err != nil {
 		return
 	}
-	ts := s.audioRTPTime(f)
+	ts, ntp := s.audioRTPTime(f)
 	for _, p := range pkts {
 		p.Timestamp = ts
-		_ = ss.WritePacketRTP(media, p)
+		_ = ss.WritePacketRTPWithNTP(media, p, ntp)
 	}
 }
 
@@ -510,15 +519,27 @@ func (s *Stream) observeAudio(f baichuan.Frame) {
 //
 // RTP for AAC runs at the sample rate, not at 90 kHz, so the reconstructed
 // 90 kHz value is converted down.
-func (s *Stream) audioRTPTime(f baichuan.Frame) uint32 {
+func (s *Stream) audioRTPTime(f baichuan.Frame) (uint32, time.Time) {
 	s.mu.Lock()
-	clock, lastVideo, cfg := s.audioClock, s.lastVideo, s.audioCfg
+	clock, lastVideo, cfg, epoch := s.audioClock, s.lastVideo, s.audioCfg, s.epoch90
 	s.mu.Unlock()
 	if clock == nil || cfg == nil {
-		return 0
+		return 0, time.Now()
 	}
 	pts90 := clock.PTS(lastVideo, f.Data)
-	return uint32((pts90 + s.epoch90) * uint64(cfg.SampleRate) / rtpClockHz)
+	return uint32((pts90 + epoch) * uint64(cfg.SampleRate) / rtpClockHz), ntpOf90(pts90 + epoch)
+}
+
+// ntpOf90 is the wall time a point on the RTP timeline stands for. The
+// timeline is 90 kHz ticks since 1970 (wallEpoch90 plus the camera's own
+// frame clock), and the RTCP sender report has to agree with it: stamped
+// with the time a packet happened to be written instead, as WritePacketRTP
+// does, a reader that maps RTP to wall time through the reports (ffmpeg,
+// and so Frigate pointed straight at reostream) sees the mapping move with
+// every report and its timestamps step back by up to 200 ms at keyframes
+// (emulated Duo 3 and RLC-410, 2026-10-29).
+func ntpOf90(t90 uint64) time.Time {
+	return time.Unix(int64(t90/rtpClockHz), int64(t90%rtpClockHz)*1_000_000_000/rtpClockHz)
 }
 
 // initialize builds the description from the parameter sets carried in a

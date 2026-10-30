@@ -465,7 +465,7 @@ func (s *Server) serveTime(w http.ResponseWriter, r *http.Request) {
 		page.ResultsTarget = fleet.Target
 		page.Results = fleet.Results
 	}
-	s.render(w, "time.html", page)
+	s.render(w, r, "time.html", page)
 }
 
 // applyEveryCamera reports whether the operator ticked "apply to every

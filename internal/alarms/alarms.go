@@ -60,6 +60,10 @@ func stateOf(events []baichuan.AlarmEvent) State {
 		if e.Motion() {
 			s.Motion = true
 		}
+		if e.Visitor() && !seen["visitor"] {
+			seen["visitor"] = true
+			s.Objects = append(s.Objects, "visitor")
+		}
 		for _, t := range e.AI {
 			if n := normalize(t); n != "" && !seen[n] {
 				seen[n] = true

@@ -86,6 +86,18 @@ settable.
 **One connection per stream, not per camera.** Main, sub and extern can be streamed
 simultaneously.
 
+**A recorder streams many channels on one connection.** Each preview request is
+answered by media messages carrying the request's own encryption offset, channel,
+stream id and counter alike, so the channel and stream bytes say which preview a message
+belongs to. On an RLN8-410 (3.5.1.368, 2026-10-28) channel 1 main (3840x2160 HEVC, 25 fps)
+and sub (896x512 H.264, 15 fps) ran together on one connection at full rate, and ten sub
+previews on one connection all ran at 15 fps. Two requests for the same channel and stream
+are both served, as separate copies distinguishable only by the counter byte, so a client
+should ask once and fan out. The recorder sends a preview's info packet (picture size) once,
+when it starts; a second reader joining later needs it handed over. Asking for an empty
+channel gets status 400 and nothing else. The recorder's limit is on connections: a user's
+RLN8-410 took about ten, and reset the eleventh and twelfth during negotiation.
+
 ## Sessions
 
 Closing must send the stream-stop message; that is what releases the camera's session.

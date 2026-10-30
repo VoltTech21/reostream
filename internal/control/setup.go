@@ -6,6 +6,8 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 
 	"github.com/VoltTech21/reostream/internal/config"
@@ -36,16 +38,48 @@ type RecorderURLs struct {
 	// RTSPHost and RTSPPort are the RTSP listener as a recorder dials it;
 	// RTSPPort is empty when RTSP is off.
 	RTSPHost, RTSPPort string
+	// LoginUser and LoginPassword are the [rtsp] login every URL above
+	// already carries, for a recorder that asks for them in fields of
+	// their own instead (Blue Iris). Empty when no login is set.
+	LoginUser, LoginPassword string
 }
 
 // httpStreamURL is where the streaming listener serves one stream: main is
 // the camera's bare name, and every other stream carries its own name as a
-// suffix. It is the single place that shape is written down.
-func httpStreamURL(base, camera, stream string) string {
+// suffix. It is the single place that shape is written down. login is the
+// "user:password@" a guarded listener needs, or empty.
+func httpStreamURL(login, base, camera, stream string) string {
 	if stream == "main" {
-		return fmt.Sprintf("http://%s/%s.ts", base, camera)
+		return fmt.Sprintf("http://%s%s/%s.ts", login, base, camera)
 	}
-	return fmt.Sprintf("http://%s/%s_%s.ts", base, camera, stream)
+	return fmt.Sprintf("http://%s%s/%s_%s.ts", login, base, camera, stream)
+}
+
+// streamLogin is the [rtsp] login as the userinfo part of a URL,
+// "user:password@", escaped the way a URL needs it, and the login itself.
+// Every URL a recorder is handed carries it, since one pasted without it
+// is a 401 that looks like a broken stream.
+//
+// The config may be LoadRaw's, with "$NAME" still in it. This process
+// resolved the same reference at startup, so the environment has it; one
+// that does not resolve is shown as written rather than as nothing.
+func streamLogin(cfg *config.Config) (userinfo, user, pass string) {
+	user, pass, ok := cfg.RTSP.Credentials()
+	if !ok {
+		return "", "", ""
+	}
+	user, pass = fromEnv(user), fromEnv(pass)
+	return url.UserPassword(user, pass).String() + "@", user, pass
+}
+
+// fromEnv resolves a "$NAME" config value from the environment.
+func fromEnv(v string) string {
+	if name, ok := strings.CutPrefix(v, "$"); ok {
+		if val, set := os.LookupEnv(name); set {
+			return val
+		}
+	}
+	return v
 }
 
 // portOf takes the port from a listen address, which is normally written
@@ -64,6 +98,8 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 	// the host and port they are meant to be.
 	httpBase := net.JoinHostPort(host, portOf(cfg.Listen))
 	out := RecorderURLs{StreamHTTP: make(map[string]map[string]string, len(cfg.Cameras)), StreamRTSP: make(map[string]map[string]string), FrigateInputs: map[string][]frigateInput{}, RTSPHost: host}
+	login, user, pass := streamLogin(cfg)
+	out.LoginUser, out.LoginPassword = user, pass
 	if cfg.RTSP != nil {
 		out.RTSPPort = portOf(cfg.RTSP.Listen)
 	}
@@ -71,12 +107,12 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 	frigate.WriteString("cameras:\n")
 
 	for _, cam := range cfg.Cameras {
-		main := httpStreamURL(httpBase, cam.Name, "main")
+		main := httpStreamURL(login, httpBase, cam.Name, "main")
 		out.HTTP = append(out.HTTP, main)
 
 		byStream := make(map[string]string, len(cam.Streams))
 		for _, s := range cam.Streams {
-			byStream[s] = httpStreamURL(httpBase, cam.Name, s)
+			byStream[s] = httpStreamURL(login, httpBase, cam.Name, s)
 		}
 		out.StreamHTTP[cam.Name] = byStream
 
@@ -86,7 +122,7 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 		detect := main
 		for _, s := range cam.Streams {
 			if s == "sub" {
-				detect = httpStreamURL(httpBase, cam.Name, "sub")
+				detect = httpStreamURL(login, httpBase, cam.Name, "sub")
 			}
 		}
 		out.Cameras = append(out.Cameras, cam.Name)
@@ -108,7 +144,7 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 				if s != "main" {
 					suffix = "_" + s
 				}
-				u := fmt.Sprintf("rtsp://%s/%s%s", rtspBase, cam.Name, suffix)
+				u := fmt.Sprintf("rtsp://%s%s/%s%s", login, rtspBase, cam.Name, suffix)
 				out.RTSP = append(out.RTSP, u)
 				if out.StreamRTSP[cam.Name] == nil {
 					out.StreamRTSP[cam.Name] = map[string]string{}
@@ -140,7 +176,7 @@ func (s *Server) serveSetup(w http.ResponseWriter, r *http.Request) {
 	} else if ranges := localSweepRanges(); len(ranges) > 0 {
 		prefill = ranges[0]
 	}
-	s.render(w, "setup.html", struct {
+	s.render(w, r, "setup.html", struct {
 		Title          string
 		AutoRangesJSON template.JS
 		Prefill        string
@@ -161,14 +197,14 @@ func (s *Server) serveURLs(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadRaw(s.opts.ConfigPath)
 	if err != nil {
 		page.Error = err.Error()
-		s.render(w, "urls.html", page)
+		s.render(w, r, "urls.html", page)
 		return
 	}
 	// The host the operator reached this page on, not the config's listen
 	// address: that is normally a wildcard, and a URL built from 0.0.0.0
 	// works from nowhere.
-	page.URLs = recorderURLs(cfg, hostOnly(r.Host))
-	s.render(w, "urls.html", page)
+	page.URLs = recorderURLs(cfg, pageHost(r))
+	s.render(w, r, "urls.html", page)
 }
 
 // nvrPage is Settings > Connect to NVR.
@@ -201,10 +237,10 @@ func (s *Server) serveNVR(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadRaw(s.opts.ConfigPath)
 	if err != nil {
 		page.Error = err.Error()
-		s.render(w, "nvr.html", page)
+		s.render(w, r, "nvr.html", page)
 		return
 	}
-	page.URLs = recorderURLs(cfg, hostOnly(r.Host))
+	page.URLs = recorderURLs(cfg, pageHost(r))
 	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		page.Pasted = r.FormValue("frigate")
@@ -215,7 +251,7 @@ func (s *Server) serveNVR(w http.ResponseWriter, r *http.Request) {
 			page.Merged, page.Updated, page.Added = string(out), updated, added
 		}
 	}
-	s.render(w, "nvr.html", page)
+	s.render(w, r, "nvr.html", page)
 }
 
 // hostOnly strips the port from a Host header, which carries one whenever

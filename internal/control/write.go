@@ -160,6 +160,8 @@ func (s *Server) writeBlockWith(ctx context.Context, cam Camera, id uint32, body
 		return WriteResult{}, fmt.Errorf("control: reading %s before writing for %q: %w", pair.Name, cam.Name, err)
 	}
 
+	body = freshClock(pair, body, before)
+
 	writeCtx, writeCancel := context.WithTimeout(ctx, readTimeout)
 	status, err := baichuan.WriteConfig(writeCtx, conn, id, body)
 	writeCancel()
@@ -314,5 +316,32 @@ func (s *Server) serveWrite(w http.ResponseWriter, r *http.Request) {
 		page.RestoreValue = string(result.Before)
 		page.RestoreHidden = map[string]string{"verify": "true"}
 	}
-	s.render(w, "result.html", page)
+	s.render(w, r, "result.html", page)
+}
+
+// clockFields are the camera's clock as the general block carries it.
+var clockFields = []string{"year", "month", "day", "hour", "minute", "second"}
+
+// freshClock gives a general block write the clock time just read rather
+// than the one in the document the page was built from. The block carries
+// the clock, and the camera sets it from whatever a write sends, so
+// changing the device name or the login lockout echoed a time minutes old
+// and set the camera's clock back by however long the page had been open.
+// The read moments before the write keeps that to the time between the two.
+// Any other block, or a field either document lacks, is left as it was.
+func freshClock(pair baichuan.ConfigPair, body, before []byte) []byte {
+	if pair.Get != baichuan.MsgIDGetGeneral || len(before) == 0 {
+		return body
+	}
+	for _, f := range clockFields {
+		path := "SystemGeneral/" + f
+		v, ok := fieldValue(before, path)
+		if !ok {
+			continue
+		}
+		if next, err := setField(body, path, v); err == nil {
+			body = next
+		}
+	}
+	return body
 }

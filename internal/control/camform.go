@@ -263,7 +263,7 @@ func (s *Server) availableStreams(ctx context.Context, raw config.Camera) []stri
 }
 
 func (s *Server) serveCameras(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "cameras.html", s.camerasPage(r.Context()))
+	s.render(w, r, "cameras.html", s.camerasPage(r.Context()))
 }
 
 // cameraBlockText renders one camera as the [[camera]] block a person
@@ -471,7 +471,7 @@ func (s *Server) saveCamera(w http.ResponseWriter, r *http.Request) {
 	fail := func(err error) {
 		page := s.camerasPage(r.Context())
 		page.Error = err.Error()
-		s.render(w, "cameras.html", page)
+		s.render(w, r, "cameras.html", page)
 	}
 
 	text, err := loadRawConfig(s.opts.ConfigPath)
@@ -513,7 +513,7 @@ func (s *Server) saveCamera(w http.ResponseWriter, r *http.Request) {
 	} else {
 		page.ReloadNote = note
 	}
-	s.render(w, "cameras.html", page)
+	s.render(w, r, "cameras.html", page)
 }
 
 // serveRemoveCamera takes one camera out of the config and reloads, through
@@ -530,14 +530,14 @@ func (s *Server) serveRemoveCamera(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		page := s.camerasPage(r.Context())
 		page.Error = err.Error()
-		s.render(w, "cameras.html", page)
+		s.render(w, r, "cameras.html", page)
 		return
 	}
 	newText, ok := removeCameraBlock(text, name)
 	if !ok {
 		page := s.camerasPage(r.Context())
 		page.Error = fmt.Sprintf("there is no camera named %q to remove", name)
-		s.render(w, "cameras.html", page)
+		s.render(w, r, "cameras.html", page)
 		return
 	}
 	note, err := s.writeAndApply(newText)
@@ -547,7 +547,7 @@ func (s *Server) serveRemoveCamera(w http.ResponseWriter, r *http.Request) {
 	} else {
 		page.ReloadNote = note
 	}
-	s.render(w, "cameras.html", page)
+	s.render(w, r, "cameras.html", page)
 }
 
 func cloneValues(v url.Values) url.Values {

@@ -64,6 +64,19 @@ func TestDialWrapsErrUnauthorizedOnAnEmptyLoginReply(t *testing.T) {
 	}
 }
 
+// A Reolink NVR answers a wrong password with a document, LoginErrInfo,
+// instead of an empty reply. It is still a wrong password.
+func TestDialWrapsErrUnauthorizedOnLoginErrInfo(t *testing.T) {
+	const nonce = "probe-test-nonce-0000000000"
+	cam := fakecam.New(t, synthesizeSessionFixture(t, nonce, "", xmlHeader+
+		`<body><LoginErrInfo version="1.1"><remainTimes>8</remainTimes></LoginErrInfo></body>`))
+
+	_, err := Dial(context.Background(), cam.Addr(), Options{Password: ""})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want it to wrap ErrUnauthorized", err)
+	}
+}
+
 func TestGetSupportReadsTheSupportBlock(t *testing.T) {
 	const nonce = "probe-test-nonce-0000000000"
 	cam := fakecam.New(t, synthesizeSessionFixture(t, nonce, "", testDeviceInfoXML,

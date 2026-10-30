@@ -16,12 +16,12 @@
 {{range .Cards}}
 <div class="wall-tile">
 {{template "cameravideo" .}}
-<a class="wall-label" href="/cameras/{{.Camera}}"><span class="dot state-{{.State}}"></span>{{.Camera}}</a>
+<a class="wall-label" href="{{base}}/cameras/{{.Camera}}"><span class="dot state-{{.State}}"></span>{{.Camera}}</a>
 </div>
 {{end}}
 </div>
 
-<script src="/assets/mpegts.js"></script>
-<script src="/assets/snapshot.js"></script>
-<script src="/assets/dashboard.js"></script>
+<script src="{{base}}/assets/mpegts.js"></script>
+<script src="{{base}}/assets/snapshot.js"></script>
+<script src="{{base}}/assets/dashboard.js"></script>
 {{end}}

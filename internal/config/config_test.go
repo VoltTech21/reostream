@@ -383,3 +383,63 @@ func TestAlwaysOnNeedsAUID(t *testing.T) {
 		t.Fatalf("Validate = %v, want an always_on refusal", err)
 	}
 }
+
+// The video outputs' login is optional, and an [rtsp] section without one
+// is open exactly as before.
+func TestRTSPWithoutALoginIsOpen(t *testing.T) {
+	cfg, err := Load("testdata/rtsp.toml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, _, ok := cfg.RTSP.Credentials(); ok {
+		t.Fatal("an [rtsp] section with no username asks for a login")
+	}
+	var off *RTSPConfig
+	if _, _, ok := off.Credentials(); ok {
+		t.Fatal("no [rtsp] section at all asks for a login")
+	}
+}
+
+// The login takes "$NAME" like every other secret in the file, so it can
+// stay out of the file.
+func TestRTSPLoginComesFromTheEnvironment(t *testing.T) {
+	t.Setenv("TEST_RTSP_USER", "frigate")
+	t.Setenv("TEST_RTSP_PASS", "s3cret")
+	path := filepath.Join(t.TempDir(), "c.toml")
+	text := "[rtsp]\nlisten = \":8561\"\nusername = \"$TEST_RTSP_USER\"\npassword = \"$TEST_RTSP_PASS\"\n"
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	user, pass, ok := cfg.RTSP.Credentials()
+	if !ok || user != "frigate" || pass != "s3cret" {
+		t.Fatalf("credentials = %q, %q, %v; want the environment's values", user, pass, ok)
+	}
+
+	os.Unsetenv("TEST_RTSP_PASS")
+	if _, err := Load(path); err == nil {
+		t.Fatal("an unset $NAME for the rtsp password was accepted")
+	}
+}
+
+// Half a login is refused rather than read as one: a password with no
+// username would look protected in the file and be open on the wire.
+func TestRTSPLoginNeedsBothHalves(t *testing.T) {
+	for _, r := range []RTSPConfig{
+		{Listen: ":8561", Password: "x"},
+		{Listen: ":8561", Username: "x"},
+		{Listen: ":8561", Username: "a:b", Password: "x"},
+	} {
+		cfg := Config{RTSP: &r}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("username %q, password %q was accepted", r.Username, r.Password)
+		}
+	}
+	cfg := Config{RTSP: &RTSPConfig{Listen: ":8561", Username: "frigate", Password: "x"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a whole login was refused: %v", err)
+	}
+}

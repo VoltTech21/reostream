@@ -209,3 +209,35 @@ func TestASavedEncodingNamesTheStreamThatChanged(t *testing.T) {
 		t.Errorf("a write touching both streams says %q", got)
 	}
 }
+
+// cam-19 behind the NVR: the camera runs 6144 kbps at 3840*2160 but the NVR
+// offers 4096 at most. Turning the microphone on leaves both streams as
+// they are, so it must not be refused over that bitrate; changing main's
+// frame rate does touch main, so the bitrate is checked then.
+func TestTurningTheMicrophoneOnIgnoresUntouchedStreams(t *testing.T) {
+	page := encodingPage{Options: []cgi.EncOptions{{
+		Main: cgi.EncStreamOptions{Size: "3840*2160", Width: 3840, Height: 2160,
+			BitRates: []int{1024, 1536, 2048, 3072, 4096}, FrameRates: []int{25, 20, 15},
+			GOPMin: 1, GOPMax: 4, Profiles: []string{"High"}, VTypes: []string{"h265"}},
+		Sub: cgi.EncStreamOptions{Size: "896*512", Width: 896, Height: 512,
+			BitRates: []int{256, 512}, FrameRates: []int{15, 10},
+			GOPMin: 1, GOPMax: 4, Profiles: []string{"High"}, VTypes: []string{"h264"}},
+	}}}
+	page.Have = true
+	cur := cgi.Enc{
+		Main: cgi.EncStream{Size: "3840*2160", Width: 3840, Height: 2160, BitRate: 6144, FrameRate: 25, GOP: 1, Profile: "High", VType: "h265"},
+		Sub:  cgi.EncStream{Size: "896*512", Width: 896, Height: 512, BitRate: 512, FrameRate: 15, GOP: 1, Profile: "High", VType: "h264"},
+	}
+
+	micOn := cur
+	micOn.Audio = 1
+	if err := checkEncChanges(cur, micOn, page); err != nil {
+		t.Errorf("turning the microphone on was refused: %v", err)
+	}
+
+	mainFPS := cur
+	mainFPS.Main.FrameRate = 20
+	if err := checkEncChanges(cur, mainFPS, page); err == nil {
+		t.Error("a main change kept a bitrate the camera does not offer and was not refused")
+	}
+}

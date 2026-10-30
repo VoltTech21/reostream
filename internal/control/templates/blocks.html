@@ -39,7 +39,7 @@
 </div>
 </summary>
 {{if .Editable}}
-<form method="post" action="/cameras/{{$.Camera.Name}}/write/{{.Set}}">
+<form method="post" action="{{base}}/cameras/{{$.Camera.Name}}/write/{{.Set}}">
 <textarea name="body" rows="10" class="doc">{{.Seed}}</textarea>
 <input type="hidden" name="verify" value="true">
 <div style="display:flex;align-items:center;gap:12px;margin-top:12px">

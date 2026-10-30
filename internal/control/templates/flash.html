@@ -11,7 +11,7 @@
 <span class="flash-mark" aria-hidden="true">{{if eq .Outcome "refused"}}&#10005;{{else}}&#10003;{{end}}</span>
 <span class="flash-text">{{.Message}}</span>
 {{if .UndoAction}}
-<form class="flash-undo" method="post" action="{{.UndoAction}}">
+<form class="flash-undo" method="post" action="{{at (.UndoAction)}}">
 {{range $k, $v := .UndoHidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
 {{end}}<input type="hidden" name="{{.UndoParam}}" value="{{.UndoValue}}">
 <button type="submit" class="linkish">undo</button>

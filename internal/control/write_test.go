@@ -362,3 +362,18 @@ func TestServeWriteEndToEndReportsConfirmed(t *testing.T) {
 		t.Fatalf("got %d, want 200", resp.StatusCode)
 	}
 }
+
+// Changing the login lockout must not set the camera's clock back to when
+// the page was loaded.
+func TestGeneralWriteTakesTheClockJustRead(t *testing.T) {
+	pair, ok := pairForSet(baichuan.MsgIDGetGeneral + 1)
+	if !ok {
+		t.Skip("no set general pair")
+	}
+	page := []byte("<body><SystemGeneral><year>2026</year><month>10</month><day>26</day><hour>14</hour><minute>42</minute><second>58</second><loginLock>1</loginLock></SystemGeneral></body>")
+	now := []byte("<body><SystemGeneral><year>2026</year><month>10</month><day>26</day><hour>14</hour><minute>51</minute><second>3</second><loginLock>0</loginLock></SystemGeneral></body>")
+	got := string(freshClock(pair, page, now))
+	if !strings.Contains(got, "<minute>51</minute><second>3</second>") || !strings.Contains(got, "<loginLock>1</loginLock>") {
+		t.Fatalf("got %s", got)
+	}
+}

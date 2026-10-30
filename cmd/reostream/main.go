@@ -76,9 +76,14 @@ func main() {
 	controlListenOverride := flag.String("control-listen", "", "address for the page, overriding the config file's [control].listen. Symmetric with -listen; mostly useful for moving the page off 8562 without editing the config")
 	saveListen := flag.Bool("save-listen", false, "write the -listen, -rtsp-listen and -control-listen addresses given on this command line into the existing config file, so later starts without them keep them. Off by default: without it the flags only override the file for this run")
 	streamBase := flag.String("stream-base", "", "browser reachable base URL for live tiles, for example http://192.0.2.10:8560 (empty means the control page's own same-origin /stream/ mount, which is the right default; only set this to point tiles at a different listener)")
+	basePath := flag.String("base-path", "", "serve the page under this path prefix, for example /reostream, overriding the config file's [control].base_path")
+	haIngress := flag.Bool("ha-ingress", false, "trust Home Assistant's ingress proxy (172.30.32.2) to say the page's path prefix and to have signed the user in. Set by the Home Assistant add-on; nothing else should need it")
+	recorderStreams := flag.Int("recorder-streams-per-connection", -1, fmt.Sprintf("how many streams one connection to an NVR or Home Hub carries before another is opened (default %d); 0 gives every stream its own connection, which a recorder that holds about ten connections runs out of. Cameras on their own always get one connection per stream", baichuan.DefaultMaxPreviews))
 	flag.Parse()
+	stream.SetRecorderSharing(*recorderStreams)
 
-	d, err := startup(*configFlag, *dataDir, *listenOverride, *rtspListenOverride, *controlListenOverride, *streamBase)
+	d, err := startup(*configFlag, *dataDir, *listenOverride, *rtspListenOverride, *controlListenOverride, *streamBase,
+		pageOptions{basePath: *basePath, haIngress: *haIngress})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reostream: %v\n", err)
 		os.Exit(1)
@@ -159,7 +164,14 @@ type daemon struct {
 // error here is always fatal in main: a config that exists and fails to
 // parse or validate, an explicit -config pointing at nothing, or a listener
 // that fails to start.
-func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlListenOverride, streamBase string) (*daemon, error) {
+// pageOptions is how the command line places the control page behind a
+// proxy. See internal/control/basepath.go.
+type pageOptions struct {
+	basePath  string
+	haIngress bool
+}
+
+func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlListenOverride, streamBase string, page pageOptions) (*daemon, error) {
 	explicitConfig := configFlag != ""
 	configPath := resolveConfigPath(dataDir, configFlag)
 
@@ -249,8 +261,16 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 		cfg.RTSP.Listen = rtspListenOverride
 	}
 	var rtspSrv *rtsp.Server
+	// One login, from [rtsp], guards both video outputs; see
+	// config.RTSPConfig. The control page's live tiles are not behind it:
+	// they read the hubs in process through the page's own /stream/ mount,
+	// which the control password already guards.
+	streamUser, streamPass, streamLogin := cfg.RTSP.Credentials()
 	if cfg.RTSP != nil {
 		rtspSrv = rtsp.New(cfg.RTSP.Listen)
+		if streamLogin {
+			rtspSrv.RequireLogin(streamUser, streamPass)
+		}
 	}
 	sup.AttachSinks(func(camera, st string) stream.FrameSink {
 		path := rtsp.Path(camera, st)
@@ -297,8 +317,8 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 	}
 
 	// The control page is a separate listener from the streaming one. The
-	// streaming port stays unauthenticated because that is what a recorder
-	// points at; this one holds camera credentials.
+	// streaming port is open unless [rtsp] sets a login, because that is
+	// what a recorder points at; this one holds camera credentials.
 	var controlSrv *http.Server
 	var controlLn net.Listener
 	var claimToken string
@@ -315,7 +335,13 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 		controlListen = controlListenOverride
 	}
 	if cfg.Control != nil && controlListen != "" {
+		basePath := cfg.Control.BasePath
+		if page.basePath != "" {
+			basePath = page.basePath
+		}
 		ctl, err := control.New(control.Options{
+			BasePath:        basePath,
+			HAIngress:       page.haIngress,
 			Password:        cfg.Control.Password,
 			AllowNoPassword: cfg.Control.AllowNoPassword,
 			Status:          srv,
@@ -379,13 +405,13 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 	}
 
 	streamHandler := srv.Handler()
-	httpSrv := &http.Server{Addr: listen, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpSrv := &http.Server{Addr: listen, Handler: server.RequireLogin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if frames.Handles(r) {
 			framesSrv.ServeHTTP(w, r)
 			return
 		}
 		streamHandler.ServeHTTP(w, r)
-	})}
+	}), streamUser, streamPass)}
 
 	runDone := make(chan error, 1)
 	go func() {

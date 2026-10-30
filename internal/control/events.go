@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -49,6 +51,14 @@ type eventRelay struct {
 	// camera. See motionReported.
 	wake     func(camera string, on bool)
 	reported map[string]bool
+
+	// mq is the running relay's publisher, closed by the next syncRelay
+	// before it opens its own, so that the old connection's "offline" is
+	// said before the new one's "online". discovered is every Home
+	// Assistant discovery topic the relay has published, so the next one
+	// can remove what it no longer announces. See hadiscovery.go.
+	mq         *mqtt.Client
+	discovered map[string]bool
 }
 
 // motionReported takes one message from a camera's motion_topic: "ON" or
@@ -210,11 +220,20 @@ func (s *Server) syncRelay() {
 		}
 	}
 	topics := motionTopics(cfg.Cameras)
+	prefix := strings.Trim(ev.Prefix, "/")
+	if prefix == "" {
+		prefix = "reostream"
+	}
+	var discovery []discoveryMessage
+	if ev.MQTT != "" && ev.HADiscovery {
+		discovery = haDiscoveryMessages(prefix, buildVersion(), cfg.Cameras)
+	}
 	key := ""
 	if ev.MQTT != "" || ev.Frigate != "" {
 		b, _ := json.Marshal(ev)
 		t, _ := json.Marshal(topics)
-		key = string(b) + "|" + strings.Join(names, ",") + "|" + string(t)
+		d, _ := json.Marshal(discovery)
+		key = string(b) + "|" + strings.Join(names, ",") + "|" + string(t) + "|" + string(d)
 	}
 	relay.mu.Lock()
 	defer relay.mu.Unlock()
@@ -225,6 +244,36 @@ func (s *Server) syncRelay() {
 		relay.cancel()
 		relay.cancel = nil
 	}
+	// The old relay's connection is closed before this one's opens, so
+	// that its "offline" reaches Home Assistant before this one's "online"
+	// rather than after it.
+	if relay.mq != nil {
+		relay.mq.Shutdown()
+		relay.mq = nil
+	}
+	var mq *mqtt.Client
+	if ev.MQTT != "" {
+		mq = mqtt.New(ev.MQTT, "reostream-events", ev.MQTTUser, ev.MQTTPassword)
+		if len(discovery) > 0 {
+			mq.SetPresence(haStatusTopic(prefix), "online", "offline")
+		}
+		// Entities the last relay announced and this one does not -- a
+		// camera removed or renamed, or discovery turned off -- are
+		// removed from Home Assistant. With no broker any more there is
+		// nobody to tell, and they stay there, unavailable. One failure
+		// ends the loop: this runs under relay.mu, and every further
+		// attempt at a broker that is down costs another dial timeout.
+		for _, t := range staleDiscovery(relay.discovered, discovery) {
+			if mq.Publish(t, nil, 0, true) != nil {
+				break
+			}
+		}
+	}
+	relay.mq = mq
+	relay.discovered = map[string]bool{}
+	for _, m := range discovery {
+		relay.discovered[m.Topic] = true
+	}
 	relay.key = key
 	relay.handle = nil
 	if key == "" {
@@ -232,15 +281,6 @@ func (s *Server) syncRelay() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	relay.cancel = cancel
-	prefix := strings.Trim(ev.Prefix, "/")
-	if prefix == "" {
-		prefix = "reostream"
-	}
-	var mq *mqtt.Client
-	if ev.MQTT != "" {
-		mq = mqtt.New(ev.MQTT, "reostream-events", ev.MQTTUser, ev.MQTTPassword)
-		go func() { <-ctx.Done(); mq.Close() }()
-	}
 	fr := &frigateEvents{base: strings.TrimRight(ev.Frigate, "/"), motion: ev.FrigateMotion, open: map[string]string{}}
 	var pubMu sync.Mutex
 	handle := func(c alarms.Change) {
@@ -248,6 +288,11 @@ func (s *Server) syncRelay() {
 		pubMu.Lock()
 		defer pubMu.Unlock()
 		var notes []string
+		// A change that raced the relay being replaced is dropped: its
+		// client has been shut down, and the new relay has its own.
+		if ctx.Err() != nil {
+			return
+		}
 		if mq != nil {
 			state := "OFF"
 			if c.On {
@@ -292,6 +337,9 @@ func (s *Server) syncRelay() {
 		})
 		log.Printf("control: listening for motion on %d topics", len(list))
 	}
+	if len(discovery) > 0 {
+		s.startDiscovery(ctx, mq, ev, prefix, cfg.Cameras, discovery)
+	}
 	relay.watched = map[string]bool{}
 	for _, name := range names {
 		relay.watched[name] = true
@@ -316,6 +364,23 @@ type frigateEvents struct {
 
 var frigateClient = &http.Client{Timeout: 8 * time.Second}
 
+// frigatePortHint is for the address people copy from their browser:
+// Frigate's web port 8971 wants a login and, over https, has a certificate
+// made for a name, not an address. Its API port 5000 takes events as is.
+const frigatePortHint = " (use Frigate's API port: http://<frigate-ip>:5000, published in its Docker ports, not the 8971 web address)"
+
+// frigateFailed says why a Frigate call did not go through.
+func frigateFailed(err error) string {
+	msg := "frigate: " + err.Error()
+	var cert *tls.CertificateVerificationError
+	if errors.As(err, &cert) || strings.Contains(msg, "x509:") || strings.Contains(msg, "server gave HTTP response to HTTPS client") {
+		msg += frigatePortHint
+	} else if strings.Contains(msg, "connection refused") {
+		msg += " (nothing answers there: Frigate's port 5000 has to be published, 5000:5000 in its Docker ports, or set under Network in the Home Assistant add-on)"
+	}
+	return msg
+}
+
 func (f *frigateEvents) change(ctx context.Context, c alarms.Change) string {
 	if c.Kind == "motion" && !f.motion {
 		return ""
@@ -333,7 +398,7 @@ func (f *frigateEvents) change(ctx context.Context, c alarms.Change) string {
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := frigateClient.Do(req)
 		if err != nil {
-			return "frigate: " + err.Error()
+			return frigateFailed(err)
 		}
 		defer resp.Body.Close()
 		var out struct {
@@ -341,6 +406,9 @@ func (f *frigateEvents) change(ctx context.Context, c alarms.Change) string {
 			Message string `json:"message"`
 		}
 		json.NewDecoder(resp.Body).Decode(&out)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return "frigate: 401 " + out.Message + frigatePortHint
+		}
 		if resp.StatusCode != http.StatusOK || out.EventID == "" {
 			return fmt.Sprintf("frigate: %d %s", resp.StatusCode, out.Message)
 		}
@@ -357,7 +425,7 @@ func (f *frigateEvents) change(ctx context.Context, c alarms.Change) string {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := frigateClient.Do(req)
 	if err != nil {
-		return "frigate: " + err.Error()
+		return frigateFailed(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -378,7 +446,7 @@ func (s *Server) serveEventsPage(w http.ResponseWriter, r *http.Request) {
 	if cfg, err := config.LoadRaw(s.opts.ConfigPath); err == nil && cfg.Events != nil {
 		page.Events = *cfg.Events
 	}
-	s.render(w, "events.html", page)
+	s.render(w, r, "events.html", page)
 }
 
 func (s *Server) serveRecentEvents(w http.ResponseWriter, r *http.Request) {
@@ -395,6 +463,7 @@ func (s *Server) saveEventsPage(w http.ResponseWriter, r *http.Request) {
 		Prefix:        strings.Trim(strings.TrimSpace(r.FormValue("prefix")), "/"),
 		Frigate:       strings.TrimRight(strings.TrimSpace(r.FormValue("frigate")), "/"),
 		FrigateMotion: r.FormValue("frigate_motion") == "1",
+		HADiscovery:   r.FormValue("ha_discovery") == "1",
 	}
 	if ev.MQTTPassword == "" {
 		if cfg, err := config.LoadRaw(s.opts.ConfigPath); err == nil && cfg.Events != nil {
@@ -413,6 +482,9 @@ func (s *Server) saveEventsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if ev.FrigateMotion {
 		b.WriteString("frigate_motion = true\n")
+	}
+	if ev.HADiscovery {
+		b.WriteString("ha_discovery = true\n")
 	}
 	text, err := loadRawConfig(s.opts.ConfigPath)
 	if err == nil {

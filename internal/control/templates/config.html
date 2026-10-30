@@ -4,7 +4,7 @@
 <div class="sec-head"><h2>Config file</h2></div>
 <p class="hint">The file on disk. Saving checks it with the same parser the daemon boots with, so a broken file is refused before it is written.</p>
 {{if .Error}}<p class="outcome-refused">{{.Error}}</p>{{end}}
-<form method="post" action="/config">
+<form method="post" action="{{base}}/config">
 <div class="editor">
 <div class="filebar">
 <code>{{.Path}}</code>

@@ -33,7 +33,13 @@ func plainError(err error) string {
 	s := err.Error()
 	switch {
 	case errors.Is(err, baichuan.ErrUnauthorized):
-		return "wrong username or password (a Reolink NVR or Home Hub that added this camera may have changed it)"
+		msg := "wrong username or password (a Reolink NVR or Home Hub that added this camera may have changed it)"
+		if i := strings.LastIndex(s, ", "); i >= 0 && strings.Contains(s[i:], "tries left") {
+			msg += "; " + strings.TrimSuffix(s[i+2:], ")")
+		}
+		return msg
+	case errors.Is(err, baichuan.ErrLoginRefused):
+		return "the camera is refusing logins for now, often for a minute or two after many logins"
 	case strings.Contains(s, "no route to host"), strings.Contains(s, "connection refused"),
 		strings.Contains(s, "network is unreachable"), strings.Contains(s, "no answer for uid"):
 		return "can't reach the camera (" + lastPart(s) + ")"

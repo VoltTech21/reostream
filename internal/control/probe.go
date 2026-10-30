@@ -37,6 +37,7 @@ func (s *Server) serveProbe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	t.Funcs(requestFuncs(r))
 	if _, err := t.ParseFS(templateFS, "templates/probe.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -378,8 +379,8 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 	}
 
 	// Turn on the services a non-technical user would otherwise have to find
-	// in a desktop app: RTSP so a recorder can pull the camera (and the only
-	// way to reach a second/zoom lens), ONVIF for PTZ, and the web page.
+	// in a desktop app: RTSP so a recorder can pull the camera (and the
+	// fallback for a second/zoom lens), ONVIF for PTZ, and the web page.
 	// Harmless when already on, and reported so the user knows it happened.
 	svcCtx, svcCancel := context.WithTimeout(ctx, 3*time.Second)
 	if changed, err := conn.EnableServices(svcCtx, baichuan.UsefulServices); err != nil {
@@ -490,7 +491,14 @@ func describeDialError(err error) string {
 		// "automatically add devices in LAN" switch) replaces that
 		// camera's password with a random one it keeps to itself, so a
 		// login that worked yesterday can fail with nothing typed wrong.
-		return "authentication failed (401): check the username and password. If this camera was ever added to a Reolink NVR or Home Hub, it may have set its own password: add the camera through the NVR instead (its address and channel), or set a new password for it in the NVR"
+		msg := "wrong username or password"
+		if s := err.Error(); strings.Contains(s, "tries left") {
+			// An NVR says how many tries are left before it locks logins.
+			msg += " (" + strings.TrimSuffix(s[strings.LastIndex(s, ", ")+2:], ")") + ")"
+		}
+		return msg + ": check them. If this camera was ever added to a Reolink NVR or Home Hub, it may have set its own password: add the camera through the NVR instead (its address and channel), or set a new password for it in the NVR"
+	case errors.Is(err, baichuan.ErrLoginRefused):
+		return "the camera refused the login without saying why. Some cameras do that for a minute or two after many logins in a row; wait a moment and try again"
 	case strings.Contains(err.Error(), "connection refused"):
 		return "nothing is listening on port 9000 at that address"
 	case errors.Is(err, context.DeadlineExceeded):

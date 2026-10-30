@@ -30,7 +30,7 @@
 {{if .RestoreAction}}
 <h2>Restore</h2>
 <p class="hint">Send the "Before" value back through the same verified write path.</p>
-<form method="post" action="{{.RestoreAction}}" onsubmit="return confirm('Restore the previous value?')">
+<form method="post" action="{{at (.RestoreAction)}}" onsubmit="return confirm('Restore the previous value?')">
 {{range $k, $v := .RestoreHidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
 {{end}}
 <input type="hidden" name="{{.RestoreParam}}" value="{{.RestoreValue}}">

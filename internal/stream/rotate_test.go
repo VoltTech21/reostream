@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 )
 
@@ -56,5 +57,34 @@ func TestRotationForPrefersTheSetting(t *testing.T) {
 	plain := []byte(`<body><DeviceInfo><type>ipc</type><needRotate>0</needRotate></DeviceInfo></body>`)
 	if deg, _, _ := rotationFor(Config{}, plain); deg != 0 {
 		t.Errorf("needRotate 0 gave %d", deg)
+	}
+}
+
+// The NT17 Duo 3 says 7680x2160 in its media info while encoding 2160x7680,
+// so whether the picture is sideways is read from the keyframe's SPS. These
+// are the SPS of one-frame encodes at 64x256 and 256x64.
+func TestPictureSizeReadsTheSPS(t *testing.T) {
+	unhex := func(s string) []byte {
+		b, err := hex.DecodeString(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append([]byte{0, 0, 0, 1}, b...)
+	}
+	for _, c := range []struct {
+		codec, sps string
+		w, h       int
+	}{
+		{"H265", "4201010408000003009e0800000300001e900410080b2cacd24995e02dc08080010000030001000003000108", 64, 256},
+		{"H265", "4201010408000003009e0800000300001e900101020b2cacd24995e02dc08080010000030001000003000108", 256, 64},
+		{"H264", "67f4000a919b28810d80880000030008000003001078912cb0", 64, 256},
+	} {
+		w, h, ok := pictureSize(c.codec, unhex(c.sps))
+		if !ok || w != c.w || h != c.h {
+			t.Errorf("%s: got %dx%d ok=%v, want %dx%d", c.codec, w, h, ok, c.w, c.h)
+		}
+	}
+	if _, _, ok := pictureSize("H265", []byte{0, 0, 0, 1, 0x26, 0x01, 0xDD}); ok {
+		t.Error("found a size in a unit with no SPS")
 	}
 }

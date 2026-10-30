@@ -2,6 +2,9 @@
 // browser, mix to mono, resample to 16 kHz, cut to 5 s, and post the 16-bit
 // samples; the server encodes and uploads them.
 (function () {
+  // The prefix the page is served under: "" at the root, or a proxy's or
+  // Home Assistant ingress's path. layout.html puts it in a meta tag.
+  var pageBase = (document.querySelector('meta[name="reostream-base"]') || {}).content || '';
   document.querySelectorAll('section.sound').forEach(function (sec) {
     var cam = sec.dataset.camera;
     var file = sec.querySelector('.sound-file');
@@ -34,7 +37,7 @@
           pcm[i] = v < 0 ? v * 32768 : v * 32767;
         }
         say('Uploading to the camera...');
-        return fetch('/cameras/' + encodeURIComponent(cam) + '/sound', {
+        return fetch(pageBase + '/cameras/' + encodeURIComponent(cam) + '/sound', {
           method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: pcm.buffer
         });
       }).then(function (r) { return r.json(); }).then(function (j) {
@@ -45,7 +48,7 @@
     });
     test.addEventListener('click', function () {
       if (!confirm('Play the siren sound out loud on the camera?')) return;
-      fetch('/cameras/' + encodeURIComponent(cam) + '/sound/test', { method: 'POST' })
+      fetch(pageBase + '/cameras/' + encodeURIComponent(cam) + '/sound/test', { method: 'POST' })
         .then(function (r) { return r.json(); })
         .then(function (j) { say(j.ok ? 'Playing on the camera.' : 'Could not play: ' + j.detail); });
     });

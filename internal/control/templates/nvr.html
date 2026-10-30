@@ -19,7 +19,7 @@
 <section>
 <div class="sec-head"><h2>Update my Frigate config</h2></div>
 <p class="hint">Paste your config. Cameras with the same name get reostream's inputs; the rest is kept.</p>
-<form method="post" action="/settings/nvr" data-nav>
+<form method="post" action="{{base}}/settings/nvr" data-nav>
 <textarea name="frigate" class="snippet-in" rows="10" spellcheck="false" placeholder="mqtt:&#10;  host: ...&#10;cameras:&#10;  ...">{{.Pasted}}</textarea>
 <button type="submit">Update</button>
 </form>
@@ -49,6 +49,7 @@
 <div class="sec-head"><h2>Blue Iris</h2></div>
 {{if $u.RTSPPort}}
 <p class="hint">Add camera, Make: Generic/ONVIF, then for each camera:</p>
+{{if $u.LoginUser}}<p class="hint">User <span class="mono">{{$u.LoginUser}}</span>, password <span class="mono">{{$u.LoginPassword}}</span> (the <code>[rtsp]</code> login).</p>{{end}}
 <table class="nvr-table">
 <tr><th>Camera</th><th>Address</th><th>Main stream</th><th>Sub stream</th></tr>
 {{range $u.Cameras}}{{$c := .}}{{$r := index $u.StreamRTSP $c}}
@@ -112,4 +113,4 @@
 </script>
 {{end}}
 
-{{define "nvr-rtsp-off"}}<p class="hint">RTSP is off. Turn it on with <code>[rtsp]</code> in the <a href="/config">config file</a>.</p>{{end}}
+{{define "nvr-rtsp-off"}}<p class="hint">RTSP is off. Turn it on with <code>[rtsp]</code> in the <a href="{{base}}/config">config file</a>.</p>{{end}}

@@ -22,7 +22,7 @@
 <p class="subtitle">{{.HealthyCount}} of {{len .Cards}} cameras are healthy.</p>
 </div>
 <div class="actions">
-<a class="add-cam" href="/setup">+ Add camera</a>
+<a class="add-cam" href="{{base}}/setup">+ Add camera</a>
 </div>
 </div>
 
@@ -32,7 +32,7 @@
 <div class="alert">
 <span>{{.Sentence}}</span>
 <code class="exact">{{.Detail}}</code>
-<a href="/cameras/{{.Camera}}">Open {{.Camera}} &rarr;</a>
+<a href="{{base}}/cameras/{{.Camera}}">Open {{.Camera}} &rarr;</a>
 </div>
 {{end}}
 
@@ -65,14 +65,14 @@
 {{template "cameravideo" .}}
 <span class="tile-state state-{{.State}}"><span class="d"></span>{{stateLabel .State}}</span>
 {{if and .Tile.Battery (ge .Tile.Level 0)}}<span class="tile-battery{{if lt .Tile.Level 20}} low{{end}}" title="Battery">{{.Tile.Level}}%</span>{{end}}
-<a class="tile-name" href="/cameras/{{$camera}}"><span class="dot state-{{.State}}"></span>{{$camera}}</a>
+<a class="tile-name" href="{{base}}/cameras/{{$camera}}"><span class="dot state-{{.State}}"></span>{{$camera}}</a>
 </div>
 <div class="camcard-body">
 
 <div class="camcard-head">
-<a class="cam-name" href="/cameras/{{$camera}}">{{$camera}}</a>
+<a class="cam-name" href="{{base}}/cameras/{{$camera}}">{{$camera}}</a>
 {{if .Address}}<a class="exact camaddr" href="http://{{.Address}}" target="_blank" rel="noopener noreferrer" title="Open the camera's own page">{{.Address}}&nbsp;&#8599;</a>{{end}}
-<a class="camcard-gear" href="/cameras/{{$camera}}/settings/image" aria-label="{{$camera}} settings" title="Settings"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
+<a class="camcard-gear" href="{{base}}/cameras/{{$camera}}/settings/image" aria-label="{{$camera}} settings" title="Settings"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
 </div>
 
 {{if not .Streams}}
@@ -165,7 +165,7 @@
     } else if (currentOrder() !== before) {
       arrange.disabled = true;
       arrange.textContent = 'Saving';
-      fetch('/fleet/order', { method: 'POST', body: new URLSearchParams({ order: currentOrder() }) })
+      fetch('{{base}}/fleet/order', { method: 'POST', body: new URLSearchParams({ order: currentOrder() }) })
         .then(function (r) {
           if (!r.ok) return r.text().then(function (t) { throw new Error(t); });
           location.reload();
@@ -228,13 +228,13 @@
   fleet.addEventListener('pointercancel', drop);
 })();
 </script>
-<script src="/assets/mpegts.js"></script>
-<script src="/assets/snapshot.js"></script>
-<script src="/assets/dashboard.js"></script>
+<script src="{{base}}/assets/mpegts.js"></script>
+<script src="{{base}}/assets/snapshot.js"></script>
+<script src="{{base}}/assets/dashboard.js"></script>
 {{end}}
 
 {{define "cameravideo"}}
-{{if .Tile.Battery}}<div class="cam-video" data-src="{{.Tile.Still}}" data-live="{{.Tile.URL}}" data-battery="1">{{else}}<div class="cam-video"{{if .Tile.Playable}} data-src="{{.Tile.URL}}" data-autoplay="1"{{if .Tile.ExternURL}} data-extern="{{.Tile.ExternURL}}"{{end}}{{end}}>{{end}}
+{{if .Tile.Battery}}<div class="cam-video" data-src="{{at (.Tile.Still)}}" data-live="{{at (.Tile.URL)}}" data-battery="1">{{else}}<div class="cam-video"{{if .Tile.Playable}} data-src="{{at (.Tile.URL)}}" data-autoplay="1"{{if .Tile.ExternURL}} data-extern="{{at (.Tile.ExternURL)}}"{{end}}{{end}}>{{end}}
 {{/* Filled by dashboard.js, which decodes one frame in the browser and
      draws it here. It starts empty rather than pointing at the keyframe
      endpoint: that endpoint serves the raw elementary stream, which no

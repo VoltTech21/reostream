@@ -4,7 +4,7 @@
 {{if .Error}}
 <p class="state-down">
 Could not read the config: {{.Error}}. Fix it on the
-<a href="/config">config page</a> before trusting anything below.
+<a href="{{base}}/config">config page</a> before trusting anything below.
 </p>
 {{end}}
 
@@ -22,7 +22,7 @@ Could not read the config: {{.Error}}. Fix it on the
 {{else}}
 <h2>RTSP</h2>
 <p>No RTSP output is configured. Add an <code>[rtsp]</code> section on the
-<a href="/config">config page</a> and list the streams to serve on each camera.</p>
+<a href="{{base}}/config">config page</a> and list the streams to serve on each camera.</p>
 {{end}}
 </div>
 
@@ -32,5 +32,5 @@ Could not read the config: {{.Error}}. Fix it on the
 <ul>{{range .URLs.HTTP}}<li><code>{{.}}</code></li>{{end}}</ul>
 </div>
 
-<p><a href="/">Watch it work</a></p>
+<p><a href="{{base}}/">Watch it work</a></p>
 {{end}}

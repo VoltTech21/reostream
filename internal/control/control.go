@@ -142,6 +142,13 @@ type Options struct {
 	RTSPListen    string
 	ControlListen string
 
+	// BasePath serves the page under a path prefix, for a reverse proxy
+	// that puts it somewhere other than "/". HAIngress trusts Home
+	// Assistant's ingress proxy to say what the prefix is and to have
+	// signed the user in already. See basepath.go for both.
+	BasePath  string
+	HAIngress bool
+
 	// Probe asks a camera what it is, for the setup flow. Nil means
 	// probeCamera; tests substitute their own so they never dial a real
 	// camera.
@@ -342,6 +349,9 @@ func templateFuncs(opts Options) template.FuncMap {
 		"lower":        strings.ToLower,
 		"inc":          func(n int) int { return n + 1 },
 		"split":        strings.Fields,
+		"base":         func() string { return "" },
+		"at":           func(u string) string { return u },
+		"ingress":      func() bool { return false },
 	}
 }
 
@@ -420,8 +430,18 @@ func (s *Server) authNow() webui.Auth {
 // makes a claim take effect without a restart. webui.Auth.Wrap is still
 // what decides; the only difference from calling it directly is that the
 // Auth it decides with is read now rather than at registration.
+//
+// A request through Home Assistant's ingress is let through: Home
+// Assistant signed the user in before relaying it, and only relays it from
+// an address nothing else can connect from (see viaIngress). Asking for a
+// second password inside Home Assistant's own page would add a step
+// without adding a lock.
 func (s *Server) wrap(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if viaIngress(r) {
+			h.ServeHTTP(w, r)
+			return
+		}
 		s.authNow().Wrap(h).ServeHTTP(w, r)
 	})
 }
@@ -672,12 +692,27 @@ func (s *Server) Handler() http.Handler {
 		streamSrv := server.New(s.opts.Hubs).AllowWake()
 		mux.Handle("GET /stream/", s.wrap(http.StripPrefix("/stream", streamSrv.StreamHandler())))
 	}
-	return s.claimGate(mux)
+	return s.withBase(s.claimGate(mux))
 }
 
 // render writes one page. data must carry a Title, which layout.html uses.
-func (s *Server) render(w http.ResponseWriter, name string, data any) {
-	s.rend.Render(w, "templates/"+name, data)
+func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, data any) {
+	s.rend.RenderWith(w, "templates/"+name, data, requestFuncs(r))
+}
+
+// requestFuncs are the template functions whose answer depends on the
+// request: where the page is mounted, and whether Home Assistant's ingress
+// is in front of it. templateFuncs registers each of them too, answering
+// for a page at "/" with nothing in front, so every template parses; these
+// replace them for one render. See basepath.go.
+func requestFuncs(r *http.Request) template.FuncMap {
+	base := basePath(r)
+	ingress := viaIngress(r)
+	return template.FuncMap{
+		"base":    func() string { return base },
+		"at":      func(u string) string { return at(base, u) },
+		"ingress": func() bool { return ingress },
+	}
 }
 
 func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
@@ -707,7 +742,7 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 	// below comes from memory and is still worth showing.
 	var urls RecorderURLs
 	if err == nil {
-		urls = recorderURLs(cfg, hostOnly(r.Host))
+		urls = recorderURLs(cfg, pageHost(r))
 	}
 	// The overlay switches each card offers come from the curated OSD group
 	// itself, not a second list written out in the template: the XPath the
@@ -725,7 +760,7 @@ func (s *Server) serveDashboard(w http.ResponseWriter, r *http.Request) {
 	// Flash: the status page's own overlay switches post through the
 	// curated-setting handler and name this page as where they came from,
 	// so a toggle from here lands back here with its one-line report.
-	s.render(w, "dashboard.html", struct {
+	s.render(w, r, "dashboard.html", struct {
 		Title        string
 		Cards        []statusCard
 		Alerts       []Alert
@@ -746,9 +781,9 @@ func (s *Server) serveWall(w http.ResponseWriter, r *http.Request) {
 	}
 	var urls RecorderURLs
 	if err == nil {
-		urls = recorderURLs(cfg, hostOnly(r.Host))
+		urls = recorderURLs(cfg, pageHost(r))
 	}
-	s.render(w, "wall.html", struct {
+	s.render(w, r, "wall.html", struct {
 		Title string
 		Cards []statusCard
 	}{Title: "Wall", Cards: s.statusCards(urls)})

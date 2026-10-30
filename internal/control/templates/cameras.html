@@ -8,12 +8,12 @@
 {{end}}
 {{range .Cameras}}
 <section class="camlist-item">
-<div class="sec-head"><h2><a href="/cameras/{{.Name}}">{{.Name}}</a></h2></div>
+<div class="sec-head"><h2><a href="{{base}}/cameras/{{.Name}}">{{.Name}}</a></h2></div>
 {{if not .Group.Rows}}<p class="hint">No status yet.</p>{{end}}
 {{range .Group.Rows}}
 <p class="camlist-stream"><span class="dot state-{{.State}}" style="background:currentColor"></span><span class="mono">{{streamOf .Name}}</span><span class="dim">{{stateLabel .State}}</span><span class="mono dim">{{printf "%.1f" .FPS}} fps &middot; {{.MbpsBitrate}} Mb</span></p>
 {{end}}
-<form class="camlist-form" method="post" action="/cameras/add">
+<form class="camlist-form" method="post" action="{{base}}/cameras/add">
 <input type="hidden" name="name" value="{{.Name}}">
 <div class="camlist-fields">
 <label class="field"><span class="label">Address</span><input name="address" value="{{.Address}}"></label>

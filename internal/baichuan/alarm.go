@@ -27,10 +27,37 @@ type AlarmEvent struct {
 	Raw       []byte
 }
 
-// Motion reports whether the camera says something is moving.
+// statusWords splits Status, which the firmware builds as a comma list
+// ("MD", "visitor", "MD,visitor", "IOAlarm", "none").
+func (e AlarmEvent) statusWords() []string {
+	var out []string
+	for _, w := range strings.Split(strings.ToLower(e.Status), ",") {
+		if w = strings.TrimSpace(w); w != "" && w != "none" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// Motion reports whether the camera says something is moving. A doorbell's
+// call button arrives as status "visitor"; that is a press, not motion.
 func (e AlarmEvent) Motion() bool {
-	s := strings.ToLower(e.Status)
-	return s != "" && s != "none"
+	for _, w := range e.statusWords() {
+		if w != "visitor" {
+			return true
+		}
+	}
+	return false
+}
+
+// Visitor reports a doorbell's call button being pressed.
+func (e AlarmEvent) Visitor() bool {
+	for _, w := range e.statusWords() {
+		if w == "visitor" {
+			return true
+		}
+	}
+	return false
 }
 
 // StartAlarms asks the camera to push its alarm events.

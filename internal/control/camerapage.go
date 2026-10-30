@@ -349,6 +349,9 @@ type liveStream struct {
 	Playable bool
 	FPS      float64
 	Mbps     string
+	// Rotate is how far the player turns the picture, degrees
+	// anticlockwise: what the stream marks itself with (hub.SetRotate).
+	Rotate int
 }
 
 // catGroups maps a settings category to the curated groups it shows.
@@ -425,6 +428,11 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 		// in the browser (live.js), not guessed here.
 		ls := liveStream{Name: name, Codec: codec, Playable: browserPlayable(codec) || isHEVC(codec),
 			FPS: row.FPS, Mbps: row.MbpsBitrate()}
+		if s.opts.Hubs != nil {
+			if h, ok := s.opts.Hubs.Hub(cam.Name + "/" + name); ok {
+				ls.Rotate = h.Rotate()
+			}
+		}
 		if sfx, ok := suffix[name]; ok {
 			ls.URL = tileURL(base, "/"+cam.Name+sfx+".ts")
 			if name == "main" {
@@ -435,7 +443,7 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	// The default stream is picked in the browser (live.js): the sharpest
 	// one it can decode, or the one last chosen for this camera.
-	s.render(w, "camera.html", page)
+	s.render(w, r, "camera.html", page)
 }
 
 // copyURL is one line of the Live tab's Copy URL list.
@@ -448,7 +456,7 @@ func (s *Server) copyURLsFor(r *http.Request, cam Camera) []copyURL {
 	if err != nil {
 		return nil
 	}
-	u := recorderURLs(cfg, hostOnly(r.Host))
+	u := recorderURLs(cfg, pageHost(r))
 	var out []copyURL
 	seen := map[string]bool{}
 	add := func(label, url string) {
@@ -474,7 +482,7 @@ func (s *Server) streamURLsFor(r *http.Request, cam Camera) map[string]string {
 	if err != nil {
 		return nil
 	}
-	return recorderURLs(cfg, hostOnly(r.Host)).StreamHTTP[cam.Name]
+	return recorderURLs(cfg, pageHost(r)).StreamHTTP[cam.Name]
 }
 
 // serveCameraSettingsIndex sends the bare Settings tab to its first
@@ -549,7 +557,7 @@ func (s *Server) serveCameraSettings(w http.ResponseWriter, r *http.Request) {
 
 	if cat == "clips" {
 		ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
-		page.Clips = s.readClipsView(ctx, cam, hostOnly(r.Host))
+		page.Clips = s.readClipsView(ctx, cam, pageHost(r))
 		cancel()
 	}
 	if cat == "ptz" {
@@ -631,7 +639,7 @@ func (s *Server) serveCameraSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.render(w, "camera.html", page)
+	s.render(w, r, "camera.html", page)
 }
 
 // readGroups seeds every curated group on the page from the camera, the
@@ -643,6 +651,9 @@ func (s *Server) readGroups(ctx context.Context, conn *baichuan.Conn, page *came
 	defer func() { page.Groups = shown }()
 	for _, g := range page.Groups {
 		if g.NeedsFloodlight && page.Support != nil && !page.Support.HasFloodlight(0) {
+			continue
+		}
+		if g.NeedsFTP && page.Support != nil && page.Support.LacksFTP() {
 			continue
 		}
 		pair, doc, failReason := resolveGroupBlock(ctx, conn, g)

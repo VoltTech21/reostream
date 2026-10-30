@@ -1,6 +1,9 @@
 // Hold-to-talk on the camera page: the microphone goes to the camera's
 // speaker over a WebSocket as 16 bit PCM, for as long as the button is held.
 (function () {
+  // The prefix the page is served under: "" at the root, or a proxy's or
+  // Home Assistant ingress's path. layout.html puts it in a meta tag.
+  var pageBase = (document.querySelector('meta[name="reostream-base"]') || {}).content || '';
   var btn = document.getElementById('talk-button');
   if (!btn) return;
   var status = document.getElementById('talk-status');
@@ -44,7 +47,7 @@
 
     ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/cameras/' +
+    ws = new WebSocket(proto + '//' + location.host + pageBase + '/cameras/' +
       encodeURIComponent(btn.dataset.camera) + '/talk?rate=' + Math.round(ctx.sampleRate));
     ws.binaryType = 'arraybuffer';
     ws.onmessage = function (m) { if (typeof m.data === 'string') say(m.data); };

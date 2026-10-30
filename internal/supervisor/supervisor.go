@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/VoltTech21/reostream/internal/baichuan"
 	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/hub"
 	"github.com/VoltTech21/reostream/internal/stream"
@@ -757,7 +758,7 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 		case <-ctx.Done():
 			e.h.Close()
 			return
-		case <-time.After(backoff):
+		case <-time.After(retryAfter(err, backoff)):
 		}
 
 		// Only reached by actually looping back to run again, so this
@@ -805,7 +806,7 @@ func (s *Supervisor) setResult(e *entry, err error) {
 	s.mu.Lock()
 	e.stat.Running = false
 	if err != nil {
-		e.stat.LastError = err.Error()
+		e.stat.LastError = plainError(err)
 		e.stat.LastErrorAt = time.Now()
 	}
 	s.mu.Unlock()
@@ -835,4 +836,18 @@ func (s *Supervisor) PrivacyOff(camera string) {
 			}
 		}
 	}
+}
+
+// authRetry is how long a stream waits after a wrong password before trying
+// again. Cameras and NVRs count failed logins and lock them out, an NVR after
+// ten (RLN8-410, emulated), so retrying at the usual pace would lock out the
+// right password too once it is fixed, and a password does not fix itself
+// in fifteen seconds.
+const authRetry = 5 * time.Minute
+
+func retryAfter(err error, backoff time.Duration) time.Duration {
+	if errors.Is(err, baichuan.ErrUnauthorized) {
+		return authRetry
+	}
+	return backoff
 }

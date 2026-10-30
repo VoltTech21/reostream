@@ -125,6 +125,7 @@ type Hub struct {
 	keyframe      []byte
 	keyframeAt    time.Time
 	onDemand      bool
+	rotate        int
 
 	statsMu     sync.Mutex
 	stats       FrameStats
@@ -341,6 +342,24 @@ func (h *Hub) SetKeyframe(codec string, es []byte) {
 	h.keyframe = es
 	h.keyframeAt = time.Now()
 	h.mu.Unlock()
+}
+
+// SetRotate records how many degrees anticlockwise this stream's picture
+// is meant to be shown turned (0, 90, 180 or 270), so a page playing it
+// can turn it. The stream already says so inside the video (an H.265
+// orientation SEI), but browsers ignore that, which left a sideways Duo 3
+// main stream sideways in reostream's own player (#15).
+func (h *Hub) SetRotate(deg int) {
+	h.mu.Lock()
+	h.rotate = deg
+	h.mu.Unlock()
+}
+
+// Rotate reports what SetRotate last recorded.
+func (h *Hub) Rotate() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rotate
 }
 
 // RestoreKeyframe puts back a keyframe saved before a restart, with the

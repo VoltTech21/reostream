@@ -127,6 +127,24 @@ func readEncoding(ctx context.Context, c *cgi.Client, channel int) (encodingPage
 	}, nil
 }
 
+// checkEncChanges checks only the streams a save changed. A camera behind
+// an NVR can run a bitrate the NVR does not list (cam-19: 6144 kbps at
+// 3840*2160, with 4096 the highest offered), and turning the microphone on
+// must not be refused over a setting nobody touched.
+func checkEncChanges(cur, next cgi.Enc, page encodingPage) error {
+	if next.Main != cur.Main {
+		if err := checkEncChoice(next.Main, page.MainOptionsFor(next.Main.Size), "main"); err != nil {
+			return err
+		}
+	}
+	if next.Sub != cur.Sub {
+		if err := checkEncChoice(next.Sub, page.SubOptionsFor(next.Sub.Size), "sub"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // checkEncChoice reports whether one stream's requested settings are a
 // combination the camera said it would take.
 //
@@ -267,11 +285,7 @@ func (s *Server) serveApplyEncoding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := checkEncChoice(next.Main, page.MainOptionsFor(next.Main.Size), "main"); err != nil {
-		s.encodingOutcome(w, r, name, "refused", err.Error())
-		return
-	}
-	if err := checkEncChoice(next.Sub, page.SubOptionsFor(next.Sub.Size), "sub"); err != nil {
+	if err := checkEncChanges(cur, next, page); err != nil {
 		s.encodingOutcome(w, r, name, "refused", err.Error())
 		return
 	}

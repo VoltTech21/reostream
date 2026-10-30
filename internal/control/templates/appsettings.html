@@ -12,12 +12,12 @@
 <nav class="catnav" aria-label="reostream settings">
 <p class="catnav-title">reostream</p>
 <ul>
-<li><a href="/password"{{if eq . "password"}} aria-current="page"{{end}}>Password</a></li>
-<li><a href="/config"{{if eq . "config"}} aria-current="page"{{end}}>Config file</a></li>
-<li><a href="/cameras"{{if eq . "cameras"}} aria-current="page"{{end}}>Camera list</a></li>
-<li><a href="/settings/nvr"{{if eq . "nvr"}} aria-current="page"{{end}}>Connect to NVR</a></li>
-<li><a href="/settings/events"{{if eq . "events"}} aria-current="page"{{end}}>Events</a></li>
-<li><a href="/settings/about"{{if eq . "about"}} aria-current="page"{{end}}>About</a></li>
+<li><a href="{{base}}/password"{{if eq . "password"}} aria-current="page"{{end}}>Password</a></li>
+<li><a href="{{base}}/config"{{if eq . "config"}} aria-current="page"{{end}}>Config file</a></li>
+<li><a href="{{base}}/cameras"{{if eq . "cameras"}} aria-current="page"{{end}}>Camera list</a></li>
+<li><a href="{{base}}/settings/nvr"{{if eq . "nvr"}} aria-current="page"{{end}}>Connect to NVR</a></li>
+<li><a href="{{base}}/settings/events"{{if eq . "events"}} aria-current="page"{{end}}>Events</a></li>
+<li><a href="{{base}}/settings/about"{{if eq . "about"}} aria-current="page"{{end}}>About</a></li>
 </ul>
 </nav>
 <div class="cam-pane">
@@ -38,7 +38,7 @@
 <div class="setting"><p>Streams (RTSP)</p><div class="control"><span class="mono">{{if .RTSPListen}}{{.RTSPListen}}{{else}}off{{end}}</span><span class="hint">Opt-in, set by [rtsp] listen in the config file.</span></div></div>
 <div class="setting"><p>This page</p><div class="control"><span class="mono">{{.ControlListen}}</span></div></div>
 <div class="setting"><p>Cameras</p><div class="control"><span class="mono">{{.Cameras}}</span></div></div>
-<p class="hint">Changing a listen address is done in the <a href="/config">config file</a> and takes effect when reostream restarts.</p>
+<p class="hint">Changing a listen address is done in the <a href="{{base}}/config">config file</a> and takes effect when reostream restarts.</p>
 </section>
 <section>
 <div class="sec-head"><h2>License</h2></div>

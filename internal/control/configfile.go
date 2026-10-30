@@ -283,7 +283,7 @@ func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		page.Error = err.Error()
 	}
-	s.render(w, "config.html", page)
+	s.render(w, r, "config.html", page)
 }
 
 // writeAndApply validates and writes text, applies the new camera list to
@@ -362,13 +362,13 @@ func (s *Server) saveConfigPage(w http.ResponseWriter, r *http.Request) {
 	text := r.FormValue("toml")
 	note, err := s.writeAndApply(text)
 	if err != nil {
-		s.render(w, "config.html", configPage{
+		s.render(w, r, "config.html", configPage{
 			Path:  s.opts.ConfigPath,
 			Title: "Config", Text: text, Error: err.Error(),
 		})
 		return
 	}
-	s.render(w, "config.html", configPage{
+	s.render(w, r, "config.html", configPage{
 		Path: s.opts.ConfigPath, Title: "Config", Text: text, Saved: true, ReloadNote: note,
 	})
 }

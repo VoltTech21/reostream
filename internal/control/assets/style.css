@@ -94,12 +94,12 @@ code, pre, .mono { font-family: var(--mono); }
   margin: 0;
 }
 
+/* The mark is a camera lens on the accent square, the same as the favicon. */
 .sidebar .brand::before {
   content: "";
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--accent);
+  width: 18px;
+  height: 18px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='22' height='22' rx='6' fill='%2360a5fa'/%3E%3Ccircle cx='12' cy='12' r='6.2' fill='none' stroke='%230b1220' stroke-width='2.2'/%3E%3Ccircle cx='12' cy='12' r='2.4' fill='%230b1220'/%3E%3Ccircle cx='18.3' cy='5.7' r='1.3' fill='%230b1220'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .sidebar .brand .version {
@@ -1352,6 +1352,17 @@ a.camaddr:hover { color: var(--accent); text-decoration: underline; }
   display: grid; place-items: center;
 }
 .live-player video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* A stream marked to be shown turned (the Duo 3 and Elite Pro 16 MP main
+   streams arrive sideways, #15). Browsers ignore the mark inside the video,
+   so the player turns the element. For a quarter turn the element is laid
+   out with the box's width and height swapped, then rotated back into it;
+   container units give it the box's size in either direction. */
+.live-player { container-type: size; }
+.live-player.turn-quarter video {
+  inset: auto; left: 50%; top: 50%; width: 100cqh; height: 100cqw;
+  transform: translate(-50%, -50%) rotate(var(--turn));
+}
+.live-player.turn-half video { transform: rotate(180deg); }
 .live-tag {
   /* Bottom left: the top-left corner is where Reolink cameras draw their
      own date and time, and the badge covered it (click test, 10-27). */

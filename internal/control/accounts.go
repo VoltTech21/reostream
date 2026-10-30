@@ -62,7 +62,7 @@ func (s *Server) serveAccounts(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.dial(ctx, cam)
 	if err != nil {
 		page.Err = fmt.Sprintf("could not connect: %v", err)
-		s.render(w, "accounts.html", page)
+		s.render(w, r, "accounts.html", page)
 		return
 	}
 	defer conn.Close()
@@ -87,5 +87,5 @@ func (s *Server) serveAccounts(w http.ResponseWriter, r *http.Request) {
 		page.XML = string(xml)
 	}
 
-	s.render(w, "accounts.html", page)
+	s.render(w, r, "accounts.html", page)
 }

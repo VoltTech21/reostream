@@ -14,7 +14,7 @@ type loginPage struct {
 }
 
 func (s *Server) serveLoginForm(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "login.html", loginPage{Title: "Sign in"})
+	s.render(w, r, "login.html", loginPage{Title: "Sign in"})
 }
 
 // serveLogin compares the submitted password and answers. There is NOTHING
@@ -60,7 +60,7 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	auth := s.authNow()
 	if !auth.Check(got) {
 		w.WriteHeader(http.StatusUnauthorized)
-		s.render(w, "login.html", loginPage{Title: "Sign in", Failed: true})
+		s.render(w, r, "login.html", loginPage{Title: "Sign in", Failed: true})
 		return
 	}
 	tok, err := s.sessions.Issue()
@@ -71,7 +71,7 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.CookieName,
 		Value:    tok,
-		Path:     "/",
+		Path:     cookiePath(r),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		// Matches webui.SessionTTL so the browser drops the cookie at the

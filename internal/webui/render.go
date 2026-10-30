@@ -28,10 +28,23 @@ func NewRenderer(fsys fs.FS, glob string, funcs template.FuncMap) (*Renderer, er
 // the clone on every call, because each page defines its own "body" block
 // and a single shared set would have them collide.
 func (r *Renderer) Render(w http.ResponseWriter, page string, data any) {
+	r.RenderWith(w, page, data, nil)
+}
+
+// RenderWith is Render with funcs replacing, for this one page, functions
+// of the same names registered at NewRenderer. It is how a value that
+// belongs to one request, such as the path prefix the page is served
+// under, reaches every template without every page's data carrying it.
+// The clone is this call's own, so this is safe while other requests
+// render with other values.
+func (r *Renderer) RenderWith(w http.ResponseWriter, page string, data any, funcs template.FuncMap) {
 	t, err := r.base.Clone()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if funcs != nil {
+		t.Funcs(funcs)
 	}
 	if _, err := t.ParseFS(r.fsys, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

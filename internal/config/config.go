@@ -68,6 +68,24 @@ type Camera struct {
 // always served, and RTSP is opt-in for consumers that cannot take it.
 type RTSPConfig struct {
 	Listen string
+
+	// Username and Password, when set, are required of every reader of
+	// the video outputs: RTSP (Basic or Digest) and the HTTP streaming
+	// port (Basic). Unset is open, which is what every setup before them
+	// was, so an upgrade does not lock a recorder out. They live here
+	// rather than in a section of their own because a recorder holds one
+	// login for reostream, whichever output it reads. Either may be
+	// "$NAME", read from the environment like a camera's password.
+	Username string
+	Password string
+}
+
+// Credentials reports whether the video outputs require a login, and which.
+func (r *RTSPConfig) Credentials() (user, pass string, ok bool) {
+	if r == nil || r.Username == "" {
+		return "", "", false
+	}
+	return r.Username, r.Password, true
 }
 
 // ControlConfig configures the operator page's listener. Its absence turns
@@ -82,6 +100,10 @@ type ControlConfig struct {
 	// an empty password is much more often a mistake, and this page can
 	// read and write camera credentials.
 	AllowNoPassword bool `toml:"allow_no_password"`
+
+	// BasePath serves the page under a path prefix, such as "/reostream",
+	// for a reverse proxy that puts it there. Empty is the root.
+	BasePath string `toml:"base_path"`
 }
 
 // Config is the top level shape of the TOML file.
@@ -118,6 +140,10 @@ type EventsConfig struct {
 	// FrigateMotion also sends plain motion to Frigate, which finds motion
 	// itself, so it is off unless asked for.
 	FrigateMotion bool `toml:"frigate_motion"`
+	// HADiscovery announces each camera to Home Assistant over MQTT
+	// discovery, so it appears there as a device with its sensors. It
+	// needs MQTT set.
+	HADiscovery bool `toml:"ha_discovery"`
 }
 
 // FTPConfig is the clip receiver: cameras upload each recording here over
@@ -170,11 +196,12 @@ var validStreamNames = map[string]bool{
 }
 
 // Load reads and validates the config file at path. A camera address,
-// username or password, or the control password, that starts with "$" is
-// resolved from the named environment variable rather
-// than stored in the file; an unset variable is an error rather than an
-// empty password, because a camera that silently never authenticates is
-// much harder to notice than a process that refuses to start.
+// username or password, the control password, or the [rtsp] username or
+// password, that starts with "$" is resolved from the named environment
+// variable rather than stored in the file; an unset variable is an error
+// rather than an empty password, because a camera that silently never
+// authenticates is much harder to notice than a process that refuses to
+// start.
 //
 // This resolves [control]'s password too, which is right for the one
 // process that both dials cameras and listens on the control port.
@@ -212,6 +239,26 @@ func Load(path string) (*Config, error) {
 			val, ok := os.LookupEnv(name)
 			if !ok {
 				return nil, fmt.Errorf("config: %s: camera %q: %s: environment variable %s is not set", path, cam.Name, f.key, name)
+			}
+			*f.v = val
+		}
+	}
+
+	if cfg.RTSP != nil {
+		for _, f := range []struct {
+			key string
+			v   *string
+		}{
+			{"username", &cfg.RTSP.Username},
+			{"password", &cfg.RTSP.Password},
+		} {
+			if !strings.HasPrefix(*f.v, "$") {
+				continue
+			}
+			name := strings.TrimPrefix(*f.v, "$")
+			val, ok := os.LookupEnv(name)
+			if !ok {
+				return nil, fmt.Errorf("config: %s: rtsp: %s: environment variable %s is not set", path, f.key, name)
 			}
 			*f.v = val
 		}
@@ -276,6 +323,20 @@ func (c *Config) Validate() error {
 	if c.Control != nil && c.Control.Listen != "" &&
 		c.Control.Password == "" && !c.Control.AllowNoPassword {
 		return fmt.Errorf("control: listen is set with no password; set one or set allow_no_password = true")
+	}
+
+	if r := c.RTSP; r != nil && (r.Username != "" || r.Password != "") {
+		// A password with no username would read as "protected" in the
+		// file and be open on the wire: gortsplib refuses an empty
+		// username, and so would the Basic check on the HTTP port.
+		if r.Username == "" || r.Password == "" {
+			return fmt.Errorf("rtsp: set both username and password, or neither")
+		}
+		// Basic authentication sends "user:password" and splits it at the
+		// first colon, so a colon in the username can never match.
+		if strings.Contains(r.Username, ":") {
+			return fmt.Errorf("rtsp: username cannot contain a colon")
+		}
 	}
 
 	// An empty Cameras list is deliberately not rejected here: the loop

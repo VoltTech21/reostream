@@ -180,20 +180,51 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 		return fmt.Errorf("stream: %s: unknown stream %q", cfg.Name, cfg.Stream)
 	}
 
-	conn, err := baichuan.Dial(ctx, cfg.Address, baichuan.Options{
+	opts := baichuan.Options{
 		Username:    cfg.Username,
 		Password:    cfg.Password,
 		Channel:     cfg.Channel,
 		UID:         cfg.UID,
 		IdleTimeout: cfg.IdleTimeout,
-	})
+	}
+	// Behind an NVR or Home Hub the stream is a reader on a connection
+	// other streams share (see baichuan.Shared); a camera on its own still
+	// gets a connection of its own, conn, and src is that connection.
+	var conn *baichuan.Conn
+	var sub *baichuan.Sub
+	var src source
+	if p := currentPool(); p != nil {
+		channel, want := cfg.Channel, kind
+		if zoom {
+			// A recorder offers no lens of its own to unlock: the zoom
+			// is asked for as the channel it has always been asked for,
+			// without channel 0's sub stream, which on a recorder is
+			// another camera's picture.
+			channel = zoomChannel
+			if cfg.Stream == "zoom_sub" {
+				want = baichuan.StreamSub
+			}
+		}
+		sub, conn, err = p.Open(ctx, cfg.Address, opts, channel, want)
+	} else {
+		conn, err = baichuan.Dial(ctx, cfg.Address, opts)
+	}
 	if err != nil {
 		return fmt.Errorf("stream: %s: dial: %w", cfg.Name, err)
 	}
-	// Close unconditionally on every return path. Close sends the
-	// stream-stop message that releases the camera's session; skipping it
-	// leaves the camera refusing new connections on this stream for minutes.
-	defer conn.Close()
+	if sub != nil {
+		src = sub
+		// Close leaves the connection to the streams still on it, and
+		// stops this one's preview if nobody else is reading it.
+		defer sub.Close()
+	} else {
+		src = conn
+		// Close unconditionally on every return path. Close sends the
+		// stream-stop message that releases the camera's session; skipping
+		// it leaves the camera refusing new connections on this stream for
+		// minutes.
+		defer conn.Close()
+	}
 
 	// net/http recovers a handler panic on its own, but nothing does that
 	// for this goroutine. Registered after defer conn.Close() above, so it
@@ -213,7 +244,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	// A camera that encodes its picture sideways says so at login; see
 	// rotate.go. Nothing is logged for the flag itself: an upright camera
 	// sends it too, so only a picture that is actually turned is logged.
-	rotate, rotateFromCamera, _ := rotationFor(cfg, conn.DeviceInfo())
+	rotate, rotateFromCamera, _ := rotationFor(cfg, src.DeviceInfo())
 	var infoW, infoH int
 	rotateLogged := false
 
@@ -222,20 +253,31 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	// camera whose Support block cannot be read is left as it was rather
 	// than failing the stream, since video does not depend on it.
 	if ss, ok := cfg.Sink.(SpeakerSink); ok {
-		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		sup, err := baichuan.GetSupport(sctx, conn)
-		cancel()
+		var sup baichuan.Support
+		var err error
+		if sub != nil {
+			sup, err = sub.Support()
+		} else {
+			sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			sup, err = baichuan.GetSupport(sctx, conn)
+			cancel()
+		}
 		if err == nil {
 			ss.SetSpeaker(sup.CanTalk())
 		}
 	}
 
-	if zoom {
+	switch {
+	case sub != nil:
+		// Subscribing already asked for the stream.
+	case zoom:
 		if err := startZoom(conn, cfg.Stream); err != nil {
 			return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
 		}
-	} else if err := conn.StartVideo(kind); err != nil {
-		return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
+	default:
+		if err := conn.StartVideo(kind); err != nil {
+			return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
+		}
 	}
 	gotVideo := false
 
@@ -267,13 +309,30 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	var reportedDroppedAudio int
 	lastPing := time.Now()
 
+	// On a connection of its own, a camera that goes quiet is caught by
+	// the connection's idle timeout. A stream sharing a recorder's
+	// connection has no such backstop: the other cameras keep the
+	// connection busy while this one's messages stop altogether, so the
+	// check after each message below would never run again. A ticker
+	// checks it instead.
+	var watch <-chan time.Time
+	if sub != nil {
+		t := time.NewTicker(min(mediaTimeout/4, time.Second))
+		defer t.Stop()
+		watch = t.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case msg, open := <-conn.Messages():
+		case <-watch:
+			if time.Since(lastMedia) >= mediaTimeout {
+				return fmt.Errorf("stream: %s: no video frame in %s: the recorder is sending other channels but not this one", cfg.Name, mediaTimeout)
+			}
+		case msg, open := <-src.Messages():
 			if !open {
-				if cErr := conn.Err(); cErr != nil {
+				if cErr := src.Err(); cErr != nil {
 					return fmt.Errorf("stream: %s: camera closed the connection: %w", cfg.Name, cErr)
 				}
 				return fmt.Errorf("stream: %s: camera closed the connection", cfg.Name)
@@ -281,7 +340,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			if privacyOn(msg) {
 				return fmt.Errorf("stream: %s: %w", cfg.Name, ErrPrivacy)
 			}
-			if zoom && msg.Header.MsgID == baichuan.MsgIDVideo && byte(msg.Header.EncOffset) != zoomChannel {
+			if zoom && sub == nil && msg.Header.MsgID == baichuan.MsgIDVideo && byte(msg.Header.EncOffset) != zoomChannel {
 				// The channel 0 sub stream that unlocks the zoom: wanted
 				// only for that, so its media goes nowhere.
 				continue
@@ -359,13 +418,28 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						// Only a stream that really is taller than wide
 						// is turned when the camera asked: its other
 						// resolutions and the sub stream come out upright.
-						// A rotate setting applies as written.
-						if rotate != 0 && f.Kind == baichuan.FrameIFrame && isHEVC(f.Codec) &&
-							(!rotateFromCamera || infoH > infoW) {
-							f.Data = withOrientation(f.Data, rotate)
-							if !rotateLogged {
-								log.Printf("stream: %s/%s: marking the picture to be shown turned %d degrees anticlockwise", cfg.Name, cfg.Stream, rotate)
-								rotateLogged = true
+						// A rotate setting applies as written. The hub
+						// records it for reostream's own player, which
+						// turns the picture itself because browsers ignore
+						// the mark inside the video; that part works for
+						// H.264 too, the mark only exists in H.265.
+						if f.Kind == baichuan.FrameIFrame {
+							tall := infoH > infoW
+							if w, h, ok := pictureSize(f.Codec, f.Data); ok {
+								tall = h > w
+							}
+							turned := rotate != 0 && (!rotateFromCamera || tall)
+							if turned {
+								h.SetRotate(rotate)
+							} else {
+								h.SetRotate(0)
+							}
+							if turned && isHEVC(f.Codec) {
+								f.Data = withOrientation(f.Data, rotate)
+								if !rotateLogged {
+									log.Printf("stream: %s/%s: marking the picture to be shown turned %d degrees anticlockwise", cfg.Name, cfg.Stream, rotate)
+									rotateLogged = true
+								}
 							}
 						}
 						// Before muxing, so an RTSP output receives the
@@ -428,7 +502,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			now := time.Now()
 			if shouldPing(lastPing, now, pingInterval) {
 				lastPing = now
-				if err := conn.Ping(); err != nil {
+				if err := src.Ping(); err != nil {
 					return fmt.Errorf("stream: %s: ping: %w", cfg.Name, err)
 				}
 			}

@@ -3,12 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{{/* Where this page is mounted: "" at the root, or a reverse proxy's or
+  Home Assistant ingress's prefix. The scripts under assets/ read it here
+  to build the URLs they fetch; see basepath.go. */}}
+<meta name="reostream-base" content="{{base}}">
 <title>{{.Title}} - reostream</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/style.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='2' width='12' height='12' rx='3' fill='%2360a5fa'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{base}}/assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='22' height='22' rx='6' fill='%2360a5fa'/%3E%3Ccircle cx='12' cy='12' r='6.2' fill='none' stroke='%230b1220' stroke-width='2.2'/%3E%3Ccircle cx='12' cy='12' r='2.4' fill='%230b1220'/%3E%3Ccircle cx='18.3' cy='5.7' r='1.3' fill='%230b1220'/%3E%3C/svg%3E">
 </head>
 <body>
 <div class="sidebar">
@@ -18,15 +22,15 @@
 <button type="button" class="find" id="find-open"><span>Find a setting&hellip;</span><kbd>&#8984;K</kbd></button>
 <nav>
 <ul>
-<li><a href="/">Fleet</a></li>
-<li><a href="/wall">Wall <span class="tag">beta</span></a></li>
-<li><a href="/logs">Logs</a></li>
-<li><a href="/settings" data-also="/password /config /settings/ /cameras$">Settings</a></li>
+<li><a href="{{base}}/">Fleet</a></li>
+<li><a href="{{base}}/wall">Wall <span class="tag">beta</span></a></li>
+<li><a href="{{base}}/logs">Logs</a></li>
+<li><a href="{{base}}/settings" data-also="/password /config /settings/ /cameras$">Settings</a></li>
 </ul>
 <h2>Cameras</h2>
 <ul class="cameras">
 {{range fleet}}
-<li><a href="/cameras/{{.Name}}"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{.Name}}</a></li>
+<li><a href="{{base}}/cameras/{{.Name}}"><span class="dot state-{{.State}}" style="background:currentColor"></span>{{.Name}}</a></li>
 {{end}}
 </ul>
 </nav>
@@ -39,11 +43,16 @@
 // The rail is the same markup on every page; which entry is current is
 // worked out from the URL rather than passed down by every handler.
 (function () {
+  // Compared without the page's prefix, the same as the data-also
+  // patterns are written.
+  var base = {{base}};
   var path = location.pathname;
+  if (base && path.indexOf(base + '/') === 0) path = path.slice(base.length);
   var links = document.querySelectorAll('.sidebar nav a');
   var best = null;
   for (var i = 0; i < links.length; i++) {
     var href = links[i].getAttribute('href');
+    if (base && href.indexOf(base + '/') === 0) href = href.slice(base.length);
     var also = (links[i].dataset.also || '').split(' ').some(function (p) {
       if (!p) return false;
       if (p.slice(-1) === '$') return path === p.slice(0, -1);
@@ -66,7 +75,7 @@
 // "Find a setting": Cmd/Ctrl+K or the box in the rail. Every page, every
 // camera's sections and every setting, matched on all typed words.
 (function () {
-  var items = {{paletteIndex}};
+  var items = {{paletteIndex}}, base = {{base}};
   var pal = document.getElementById('palette'), q = document.getElementById('palette-q'),
       list = document.getElementById('palette-list'), sel = 0, shown = [];
   function render() {
@@ -84,7 +93,7 @@
       var a = document.createElement('span'); a.className = 'pl'; a.textContent = it.l;
       var b = document.createElement('span'); b.className = 'pw'; b.textContent = it.w;
       li.appendChild(a); li.appendChild(b);
-      li.addEventListener('click', function () { location.href = it.h; });
+      li.addEventListener('click', function () { location.href = base + it.h; });
       list.appendChild(li);
     });
     if (!shown.length) { var li = document.createElement('li'); li.className = 'none'; li.textContent = 'Nothing matches'; list.appendChild(li); }
@@ -99,7 +108,7 @@
     if (e.key === 'Escape') close();
     else if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, shown.length - 1); render(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); render(); e.preventDefault(); }
-    else if (e.key === 'Enter' && shown[sel]) location.href = shown[sel].h;
+    else if (e.key === 'Enter' && shown[sel]) location.href = base + shown[sel].h;
   });
   q.addEventListener('input', function () { sel = 0; render(); });
   pal.addEventListener('click', function (e) { if (e.target === pal) close(); });

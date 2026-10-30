@@ -7,14 +7,14 @@
 {{define "camhead"}}
 <header class="camhead">
 <div class="camhead-row">
-{{if .Prev}}<a class="camhead-step camhead-prev" href="{{.SwitchHref .Prev}}" data-key="[" aria-label="Previous camera: {{.Prev}}">&#8249;</a>{{end}}
+{{if .Prev}}<a class="camhead-step camhead-prev" href="{{at (.SwitchHref .Prev)}}" data-key="[" aria-label="Previous camera: {{.Prev}}">&#8249;</a>{{end}}
 <label class="camhead-pick">
 <span class="visually-hidden">Camera</span>
 <select onchange="location.href=this.value">
-{{$h := .}}{{range .Cameras}}<option value="{{$h.SwitchHref .Name}}"{{if eq .Name $h.Name}} selected{{end}}>{{.Name}}</option>{{end}}
+{{$h := .}}{{range .Cameras}}<option value="{{at ($h.SwitchHref .Name)}}"{{if eq .Name $h.Name}} selected{{end}}>{{.Name}}</option>{{end}}
 </select>
 </label>
-{{if .Next}}<a class="camhead-step camhead-next" href="{{.SwitchHref .Next}}" data-key="]" aria-label="Next camera: {{.Next}}">&#8250;</a>{{end}}
+{{if .Next}}<a class="camhead-step camhead-next" href="{{at (.SwitchHref .Next)}}" data-key="]" aria-label="Next camera: {{.Next}}">&#8250;</a>{{end}}
 <span class="camhead-facts">
 <span class="statebadge state-{{.State}}"><span class="dot" style="background:currentColor"></span>{{stateLabel .State}}</span>
 {{with .Model}}<span>{{.}}</span>{{end}}
@@ -25,7 +25,7 @@
 </span>
 <details class="camhead-rename">
 <summary title="Rename this camera">Rename</summary>
-<form method="post" action="/cameras/{{.Name}}/rename">
+<form method="post" action="{{base}}/cameras/{{.Name}}/rename">
 <label class="field"><span class="label">Name</span><input type="text" name="display" value="{{.Name}}" required></label>
 {{with .DeviceName}}<button type="button" class="quiet rename-take" data-name="{{.}}">Use the camera's name: {{.}}</button>{{end}}
 <label class="check"><input type="checkbox" name="oncamera" value="1"> Also set this name on the camera (the Reolink app and the name on the picture)</label>
@@ -35,9 +35,9 @@
 </details>
 </div>
 <nav class="tabs camtabs">
-<a href="/cameras/{{.Name}}"{{if eq .Tab "live"}} aria-current="page"{{end}}>Live</a>
-{{if .HasClips}}<a href="/cameras/{{.Name}}/recordings"{{if eq .Tab "recordings"}} aria-current="page"{{end}}>Recordings</a>{{end}}
-<a href="/cameras/{{.Name}}/settings/image"{{if eq .Tab "settings"}} aria-current="page"{{end}}>Settings</a>
+<a href="{{base}}/cameras/{{.Name}}"{{if eq .Tab "live"}} aria-current="page"{{end}}>Live</a>
+{{if .HasClips}}<a href="{{base}}/cameras/{{.Name}}/recordings"{{if eq .Tab "recordings"}} aria-current="page"{{end}}>Recordings</a>{{end}}
+<a href="{{base}}/cameras/{{.Name}}/settings/image"{{if eq .Tab "settings"}} aria-current="page"{{end}}>Settings</a>
 {{if gt (len .Cameras) 1}}<span class="camtabs-hint">press <kbd>[</kbd> <kbd>]</kbd> to switch camera</span>{{end}}
 </nav>
 </header>
@@ -67,7 +67,7 @@ document.addEventListener('keydown', function (e) {
 {{range .Nav}}
 <p class="catnav-title">{{.Title}}</p>
 <ul>
-{{range .Items}}<li><a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a></li>{{end}}
+{{range .Items}}<li><a href="{{at (.Href)}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a></li>{{end}}
 </ul>
 {{end}}
 </nav>

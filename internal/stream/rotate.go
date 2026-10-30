@@ -5,6 +5,9 @@ import (
 	"strconv"
 	"strings"
 
+	mch264 "github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
+	mch265 "github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
+
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
 
@@ -26,7 +29,7 @@ import (
 // what the camera said at login. needRotate on its own does not mean the
 // picture is sideways: an NT13 Duo 3 whose picture is upright sends "1"
 // too (seen 10-27), which is why Run only acts on it for a picture that
-// really is taller than wide. A camera that asks is assumed to mean the 90
+// really is taller than wide, judged from the keyframe itself (pictureSize). A camera that asks is assumed to mean the 90
 // degrees the NT17 boards were reported to need (picture turned clockwise,
 // left side up), unless it names 90, 180 or 270 itself.
 func rotationFor(cfg Config, deviceInfo []byte) (deg int, fromCamera bool, raw string) {
@@ -108,4 +111,41 @@ func withOrientation(data []byte, deg int) []byte {
 
 func isHEVC(codec string) bool {
 	return strings.EqualFold(codec, "h265") || strings.EqualFold(codec, "hevc")
+}
+
+// pictureSize reads the coded picture's width and height from the sequence
+// parameter set in a keyframe, which is the size the camera actually
+// encoded. The media info packet is no use for this: the NT17 firmware
+// fills it from the configured size, 7680x2160, while the frames it encodes
+// are 2160x7680 (emulated v3.2.0.5770, 2026-10-29), so a picture that is
+// sideways never looks it there.
+func pictureSize(codec string, data []byte) (w, h int, ok bool) {
+	var au mch264.AnnexB
+	if err := au.Unmarshal(data); err != nil {
+		return 0, 0, false
+	}
+	for _, nalu := range au {
+		if len(nalu) < 2 {
+			continue
+		}
+		if isHEVC(codec) {
+			if mch265.NALUType((nalu[0]>>1)&0x3F) != mch265.NALUType_SPS_NUT {
+				continue
+			}
+			var sps mch265.SPS
+			if sps.Unmarshal(nalu) != nil {
+				return 0, 0, false
+			}
+			return sps.Width(), sps.Height(), true
+		}
+		if mch264.NALUType(nalu[0]&0x1F) != mch264.NALUTypeSPS {
+			continue
+		}
+		var sps mch264.SPS
+		if sps.Unmarshal(nalu) != nil {
+			return 0, 0, false
+		}
+		return sps.Width(), sps.Height(), true
+	}
+	return 0, 0, false
 }

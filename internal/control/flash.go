@@ -178,7 +178,7 @@ func (s *Server) flashKeyFor(w http.ResponseWriter, r *http.Request) string {
 	ck := &http.Cookie{
 		Name:     flashCookie,
 		Value:    tok,
-		Path:     "/",
+		Path:     cookiePath(r),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(flashTTL.Seconds()),

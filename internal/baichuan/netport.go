@@ -15,8 +15,9 @@ const (
 )
 
 // NetPort is which network services a camera serves and on which ports. RTSP
-// is the one that matters here: a second-lens camera (TrackMix) only exposes
-// its zoom lens over RTSP, and many cameras ship with RTSP off.
+// is the one that matters here: it is the fallback for a second-lens camera
+// (TrackMix) whose zoom lens sends no video over Baichuan, and many cameras
+// ship with RTSP off.
 type NetPort struct {
 	ServerPort PortService
 	HTTP       PortService
@@ -105,8 +106,8 @@ type Services struct {
 	RTMP  bool
 }
 
-// UsefulServices is the set worth enabling for an NVR: RTSP to stream (the
-// only way to reach a TrackMix zoom lens), ONVIF for PTZ and discovery, and
+// UsefulServices is the set worth enabling for an NVR: RTSP to stream (and
+// the fallback for a TrackMix zoom lens), ONVIF for PTZ and discovery, and
 // HTTP for the camera's own settings page.
 var UsefulServices = Services{HTTP: true, RTSP: true, ONVIF: true}
 

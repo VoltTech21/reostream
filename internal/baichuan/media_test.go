@@ -217,3 +217,44 @@ func TestDepacketizerCountsACutVideoPacketAsLost(t *testing.T) {
 		t.Fatalf("filler=%d; a cut packet is not filler", d.Filler())
 	}
 }
+
+// The v3.0.0.136 firmware (RLC-410-5MP, RLC-422) packs whole packets back to
+// back in one message, each padded with zeros to 8 bytes. Every one of them
+// is a frame, not just the first.
+func TestPacketsPaddedTogetherInOneMessage(t *testing.T) {
+	var msg []byte
+	for i := 0; i < 3; i++ {
+		pkt := append([]byte{}, magicAAC...)
+		pkt = append(pkt, 3, 0, 3, 0, 0xff, 0xf1, byte(i))
+		for len(pkt)%8 != 0 {
+			pkt = append(pkt, 0)
+		}
+		msg = append(msg, pkt...)
+	}
+	d := NewDepacketizer()
+	d.Write(msg, true)
+	n := 0
+	for {
+		f, ok := d.Next()
+		if !ok {
+			break
+		}
+		if f.Kind != FrameAAC || f.Data[2] != byte(n) {
+			t.Fatalf("frame %d: kind %v data %x", n, f.Kind, f.Data)
+		}
+		n++
+	}
+	if n != 3 {
+		t.Fatalf("got %d frames, want 3", n)
+	}
+}
+
+// The TrackMix zoom lens is channel 1 and sends its audio as "15wb".
+func TestZoomLensAudioIsAudio(t *testing.T) {
+	d := NewDepacketizer()
+	d.Write([]byte{'1', '5', 'w', 'b', 3, 0, 3, 0, 0xff, 0xf1, 0x50}, true)
+	f, ok := d.Next()
+	if !ok || f.Kind != FrameAAC || len(f.Data) != 3 {
+		t.Fatalf("got %v %v % x, want a 3-byte AAC frame", ok, f.Kind, f.Data)
+	}
+}

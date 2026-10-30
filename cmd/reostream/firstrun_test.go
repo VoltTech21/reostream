@@ -36,7 +36,7 @@ func TestStartupWithAnExplicitMissingConfigStaysFatal(t *testing.T) {
 	// page on the default first-run config.
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "does-not-exist.toml")
-	if _, err := startup(missing, dir, "", "", "", ""); err == nil {
+	if _, err := startup(missing, dir, "", "", "", "", pageOptions{}); err == nil {
 		t.Fatal("expected an error for an explicit -config pointing at a missing file")
 	}
 }
@@ -47,7 +47,7 @@ func TestStartupWithNoConfigSynthesizesAndServes(t *testing.T) {
 	// come up -- an empty fleet, and a control listener that answers --
 	// not merely fail to crash.
 	dir := t.TempDir()
-	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "")
+	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "", pageOptions{})
 	if err != nil {
 		t.Fatalf("startup: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestTheClaimTokenIsNeverWrittenToDisk(t *testing.T) {
 // the only way in, since the token is shown nowhere else.
 func TestTheClaimMessageFollowsTheControlListenOverride(t *testing.T) {
 	dir := t.TempDir()
-	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "")
+	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "", pageOptions{})
 	if err != nil {
 		t.Fatalf("startup: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestRTSPListenFlagMovesRTSP(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte("listen = \"127.0.0.1:0\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d, err := startup(cfg, dir, "127.0.0.1:0", addr, "", "")
+	d, err := startup(cfg, dir, "127.0.0.1:0", addr, "", "", pageOptions{})
 	if err != nil {
 		t.Fatalf("startup: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestStartupWithABatteryCameraAndAKeptStill(t *testing.T) {
 	os.WriteFile(cfg, []byte("listen = \"127.0.0.1:0\"\n[rtsp]\nlisten = \"127.0.0.1:0\"\n[[camera]]\nname = \"porch\"\naddress = \"192.0.2.20\"\npassword = \"x\"\nuid = \"95270000TESTUID1\"\n"), 0o600)
 	done := make(chan *daemon, 1)
 	go func() {
-		d, err := startup(cfg, dir, "127.0.0.1:0", "127.0.0.1:0", "", "")
+		d, err := startup(cfg, dir, "127.0.0.1:0", "127.0.0.1:0", "", "", pageOptions{})
 		if err != nil {
 			t.Errorf("startup: %v", err)
 		}
@@ -334,7 +334,7 @@ func TestAClaimSavesTheListenFlagsTheDaemonWasStartedWith(t *testing.T) {
 	// #9, end to end: the flags main resolved must reach the claim, so the
 	// config it writes matches how the daemon is really running.
 	dir := t.TempDir()
-	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "")
+	d, err := startup("", dir, "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0", "", pageOptions{})
 	if err != nil {
 		t.Fatalf("startup: %v", err)
 	}

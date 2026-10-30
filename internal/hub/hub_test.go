@@ -373,3 +373,20 @@ func TestPublishIsGatedBehindTheSameSyncAsPublishKey(t *testing.T) {
 		t.Fatal("audio was not delivered once synced")
 	}
 }
+
+// The player reads the rotation off the hub, so a stream that stops being
+// sideways (a lower resolution chosen on the camera) must read 0 again.
+func TestRotateReportsTheLastValueSet(t *testing.T) {
+	h := New(4)
+	if got := h.Rotate(); got != 0 {
+		t.Fatalf("a new hub reports %d, want 0", got)
+	}
+	h.SetRotate(90)
+	if got := h.Rotate(); got != 90 {
+		t.Errorf("after SetRotate(90) got %d", got)
+	}
+	h.SetRotate(0)
+	if got := h.Rotate(); got != 0 {
+		t.Errorf("after SetRotate(0) got %d", got)
+	}
+}

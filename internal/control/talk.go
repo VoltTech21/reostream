@@ -13,10 +13,12 @@ import (
 	"github.com/VoltTech21/reostream/internal/talk"
 )
 
-// talkUpgrader leaves CheckOrigin at its default, which refuses a request
-// whose Origin is not this page's own host: without that, any site the
-// operator visits could open a talk session through their logged-in browser.
-var talkUpgrader = websocket.Upgrader{ReadBufferSize: 8192}
+// talkUpgrader refuses a request whose Origin is not this page's own host:
+// without that, any site the operator visits could open a talk session
+// through their logged-in browser. originMatches is the library's default
+// check plus one case, Home Assistant's ingress, where the browser's host
+// may reach this page only as X-Forwarded-Host.
+var talkUpgrader = websocket.Upgrader{ReadBufferSize: 8192, CheckOrigin: originMatches}
 
 // serveTalk is the camera page's hold-to-talk button. The browser sends 16
 // bit mono PCM at ?rate= over a WebSocket for as long as the button is held,

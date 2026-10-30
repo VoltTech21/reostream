@@ -30,7 +30,18 @@ type Client struct {
 	conn net.Conn
 	br   *bufio.Reader
 	pid  uint16
+
+	// presence, when set, is the topic every connection announces itself
+	// on; see SetPresence.
+	presence        string
+	online, offline []byte
+
+	// shut is set by Shutdown: Publish refuses from then on.
+	shut bool
 }
+
+// errShutdown is what Publish answers after Shutdown.
+var errShutdown = errors.New("mqtt: client shut down")
 
 // New returns a client for broker addr ("host:port"). clientID must be unique
 // on the broker; user and pass may be empty for an anonymous broker.
@@ -44,6 +55,17 @@ func New(addr, clientID, user, pass string) *Client {
 	}
 }
 
+// SetPresence makes every connection this client opens say whether it is
+// up: the broker is asked to publish offline to topic, retained, if the
+// connection is lost without a goodbye (MQTT's last will), and online is
+// published there, retained, as each connection comes up. That is what
+// Home Assistant reads as availability. Call it before the first Publish.
+func (c *Client) SetPresence(topic, online, offline string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.presence, c.online, c.offline = topic, []byte(online), []byte(offline)
+}
+
 // Publish sends payload to topic. qos is 0 or 1; a QoS 1 publish waits for the
 // broker's PUBACK. retain asks the broker to keep the message as the topic's
 // last known value.
@@ -53,6 +75,9 @@ func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) er
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.shut {
+		return errShutdown
+	}
 
 	// Two attempts: a connection that the broker has silently closed is only
 	// discovered when a write or PUBACK read fails, so the first attempt may
@@ -89,10 +114,31 @@ func (c *Client) send(topic string, payload []byte, qos byte, retain bool) error
 	return nil
 }
 
+// Shutdown is Close for good: a Publish afterwards fails instead of opening
+// a new connection. A client with a presence topic that is being replaced
+// needs this, because a late Publish from some goroutine that has not
+// noticed yet would reconnect it and say online again, after the
+// replacement's own online and under the same client id.
+func (c *Client) Shutdown() {
+	c.Close()
+	c.mu.Lock()
+	c.shut = true
+	c.mu.Unlock()
+}
+
 // Close drops the connection. The client may be reused afterwards.
+//
+// With a presence topic set it says offline first and then disconnects
+// properly, which tells the broker to discard the last will. Without the
+// DISCONNECT the broker would publish the will as well, at a moment of its
+// choosing -- possibly after a replacement client has already said online.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.conn != nil && c.presence != "" {
+		_ = c.send(c.presence, c.offline, 0, true)
+		_ = c.write([]byte{0xe0, 0x00})
+	}
 	c.drop()
 	return nil
 }
@@ -107,13 +153,23 @@ func (c *Client) ensure() error {
 	}
 	c.conn = conn
 	c.br = bufio.NewReader(conn)
-	if err := c.write(encodeConnect(c.clientID, c.user, c.pass)); err != nil {
+	connect := encodeConnect(c.clientID, c.user, c.pass)
+	if c.presence != "" {
+		connect = encodeConnectWill(c.clientID, c.user, c.pass, 0, c.presence, c.offline)
+	}
+	if err := c.write(connect); err != nil {
 		c.drop()
 		return err
 	}
 	if err := c.readConnack(); err != nil {
 		c.drop()
 		return err
+	}
+	if c.presence != "" {
+		if err := c.send(c.presence, c.online, 0, true); err != nil {
+			c.drop()
+			return err
+		}
 	}
 	return nil
 }
@@ -173,6 +229,13 @@ func encodeConnect(clientID, user, pass string) []byte {
 // encodeConnectKeepAlive is CONNECT with a keep-alive, which a client that
 // pings (Subscribe) can ask for; 0 disables it.
 func encodeConnectKeepAlive(clientID, user, pass string, keepAlive time.Duration) []byte {
+	return encodeConnectWill(clientID, user, pass, keepAlive, "", nil)
+}
+
+// encodeConnectWill is CONNECT with a last will, published retained at
+// QoS 0 to willTopic when the connection is lost without a DISCONNECT. An
+// empty willTopic is no will.
+func encodeConnectWill(clientID, user, pass string, keepAlive time.Duration, willTopic string, will []byte) []byte {
 	var vh []byte
 	vh = append(vh, encodeString("MQTT")...)
 	vh = append(vh, 0x04) // protocol level 4 (3.1.1)
@@ -183,11 +246,19 @@ func encodeConnectKeepAlive(clientID, user, pass string, keepAlive time.Duration
 	if pass != "" {
 		flags |= 0x40
 	}
+	if willTopic != "" {
+		flags |= 0x04 | 0x20 // will, will retain; will QoS 0
+	}
 	vh = append(vh, flags)
 	ka := uint16(keepAlive / time.Second)
 	vh = append(vh, byte(ka>>8), byte(ka))
 
 	payload := encodeString(clientID)
+	if willTopic != "" {
+		payload = append(payload, encodeString(willTopic)...)
+		payload = append(payload, byte(len(will)>>8), byte(len(will)))
+		payload = append(payload, will...)
+	}
 	if user != "" {
 		payload = append(payload, encodeString(user)...)
 	}

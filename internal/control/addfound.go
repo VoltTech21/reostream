@@ -44,7 +44,7 @@ func (s *Server) serveAddFound(w http.ResponseWriter, r *http.Request) {
 
 	addrs := r.Form["add"]
 	if len(addrs) == 0 {
-		s.renderAddFound(w, addFoundResult{Nothing: true})
+		s.renderAddFound(w, r, addFoundResult{Nothing: true})
 		return
 	}
 
@@ -113,7 +113,7 @@ func (s *Server) serveAddFound(w http.ResponseWriter, r *http.Request) {
 		out.Added = append(out.Added, fmt.Sprintf("%s as %s", where, name))
 	}
 	sort.Strings(out.Added)
-	s.renderAddFound(w, out)
+	s.renderAddFound(w, r, out)
 }
 
 // addOneFound writes one camera into the config, going through exactly the
@@ -200,12 +200,13 @@ func suggestedName(addr string) string {
 // renderDiscover does. NOT s.render: that wraps its output in the site
 // layout, which expects a "body" template, so a fragment rendered through
 // it comes back empty -- which is exactly what happened here first.
-func (s *Server) renderAddFound(w http.ResponseWriter, res addFoundResult) {
+func (s *Server) renderAddFound(w http.ResponseWriter, r *http.Request, res addFoundResult) {
 	t, err := s.tmpl.Clone()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	t.Funcs(requestFuncs(r))
 	if _, err := t.ParseFS(templateFS, "templates/addfound.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -6,12 +6,12 @@
   number boxes for when the values are already known.
 */}}
 {{define "body"}}
-<div id="align" data-url="{{.URL}}" data-post="/cameras/{{.Camera}}/stitch">
+<div id="align" data-url="{{at (.URL)}}" data-post="{{base}}/cameras/{{.Camera}}/stitch">
 <canvas id="align-canvas"></canvas>
 <video id="align-video" playsinline muted hidden></video>
 
 <div class="align-bar">
-<a class="align-back" href="/cameras/{{.Camera}}">&larr; {{.Camera}}</a>
+<a class="align-back" href="{{base}}/cameras/{{.Camera}}">&larr; {{.Camera}}</a>
 
 {{/* No controls without numbers from the camera. An unread alignment is a
      zero one as far as the page is concerned, and these controls write on
@@ -79,6 +79,6 @@ release, because each change is a round trip to the camera. Zoom in on the seam 
 change it against. Zoom and the seam guide still work.{{end}}</p>
 </div>
 
-<script src="/assets/mpegts.js"></script>
-<script src="/assets/align.js"></script>
+<script src="{{base}}/assets/mpegts.js"></script>
+<script src="{{base}}/assets/align.js"></script>
 {{end}}

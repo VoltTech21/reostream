@@ -114,7 +114,7 @@ func TestAudioTimestampIsNotZero(t *testing.T) {
 	if aac.Micros != 0 {
 		t.Skipf("this camera does stamp audio (%d); the reconstruction is not needed", aac.Micros)
 	}
-	if got := s.audioRTPTime(*aac); got == 0 {
+	if got, _ := s.audioRTPTime(*aac); got == 0 {
 		t.Error("audio RTP timestamp is 0; it was taken from the frame instead of reconstructed")
 	}
 }

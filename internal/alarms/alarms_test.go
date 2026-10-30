@@ -31,3 +31,19 @@ func TestStateAndChanges(t *testing.T) {
 		t.Fatalf("both should end: %+v", ch)
 	}
 }
+
+func TestDoorbellPressIsVisitorNotMotion(t *testing.T) {
+	doc := []byte(`<?xml version="1.0" encoding="UTF-8" ?><body><AlarmEventList version="1.1"><AlarmEvent version="1.1"><channelId>0</channelId><status>visitor</status><AItype>none</AItype><recording>0</recording><timeStamp>0</timeStamp></AlarmEvent></AlarmEventList></body>`)
+	ev, err := baichuan.ParseAlarmEvents(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := stateOf(ev)
+	if s.Motion || len(s.Objects) != 1 || s.Objects[0] != "visitor" {
+		t.Fatalf("got %+v", s)
+	}
+	ev[0].Status = "MD,visitor"
+	if s := stateOf(ev); !s.Motion || len(s.Objects) != 1 {
+		t.Fatalf("MD,visitor: got %+v", s)
+	}
+}

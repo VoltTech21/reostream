@@ -4,13 +4,14 @@
 <section>
 <div class="sec-head"><h2>Camera alerts</h2></div>
 <p class="hint">Each camera's own motion, person, vehicle and animal detections, sent the moment they happen.</p>
-<form method="post" action="/settings/events" class="events-form">
+<form method="post" action="{{base}}/settings/events" class="events-form">
 <label class="field"><span class="label">MQTT broker{{template "info" "host:port. Topics: prefix/camera/motion, /person, /vehicle, /animal (ON or OFF, retained) and prefix/camera/event (JSON)."}}</span><input type="text" name="mqtt" value="{{.Events.MQTT}}" placeholder="192.168.1.10:1883"></label>
 <div class="events-row">
 <label class="field"><span class="label">MQTT user</span><input type="text" name="mqtt_user" value="{{.Events.MQTTUser}}" autocomplete="off"></label>
 <label class="field"><span class="label">MQTT password</span><input type="password" name="mqtt_password" value="" placeholder="{{if .Events.MQTTPassword}}unchanged{{end}}" autocomplete="new-password"></label>
 <label class="field"><span class="label">Topic prefix</span><input type="text" name="prefix" value="{{.Events.Prefix}}" placeholder="reostream"></label>
 </div>
+<label class="every"><input type="checkbox" name="ha_discovery" value="1"{{if .Events.HADiscovery}} checked{{end}}> Add the cameras to Home Assistant{{template "info" "MQTT discovery: each camera becomes a Home Assistant device with its motion, person, vehicle and animal sensors, or a battery camera's motion and battery level. Needs the MQTT broker above to be the one Home Assistant uses."}}</label>
 <label class="field"><span class="label">Frigate{{template "info" "An object the camera sees becomes a Frigate event, with its recording, on the camera of the same name."}}</span><input type="text" name="frigate" value="{{.Events.Frigate}}" placeholder="http://192.168.1.10:5000"></label>
 <label class="every"><input type="checkbox" name="frigate_motion" value="1"{{if .Events.FrigateMotion}} checked{{end}}> Also send plain motion to Frigate</label>
 <div class="buttonrow"><button type="submit">Save</button></div>
@@ -41,7 +42,7 @@
     });
   }
   function poll() {
-    fetch('/settings/events/recent', {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(draw).catch(function () {});
+    fetch('{{base}}/settings/events/recent', {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(draw).catch(function () {});
   }
   poll();
   setInterval(poll, 3000);

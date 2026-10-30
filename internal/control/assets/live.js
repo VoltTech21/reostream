@@ -3,6 +3,9 @@
 // settings section. Every player is reostreamPlayer (snapshot.js).
 (function () {
   'use strict';
+  // The prefix the page is served under: "" at the root, or a proxy's or
+  // Home Assistant ingress's path. layout.html puts it in a meta tag.
+  var pageBase = (document.querySelector('meta[name="reostream-base"]') || {}).content || '';
 
   function copy(text, done) {
     if (navigator.clipboard && window.isSecureContext) {
@@ -36,7 +39,7 @@
     var moving = null;
     // One at a time, in order: each command is its own request, and a stop
     // that overtook its move would leave the camera moving.
-    var base = '/cameras/' + encodeURIComponent(ptz.dataset.camera) + '/ptz';
+    var base = pageBase + '/cameras/' + encodeURIComponent(ptz.dataset.camera) + '/ptz';
     var speed = document.getElementById('ptz-speed');
     var speedOut = ptz.querySelector('.ptz-speed output');
     try {
@@ -194,6 +197,17 @@
     player = null;
   }
 
+  // The stream's rotate mark, in degrees anticlockwise, applied to the
+  // element: a CSS rotation turns clockwise, so it is negated. See the
+  // turn-quarter rule in style.css for why a quarter turn swaps the size.
+  var turned = 0;
+  function turn(deg) {
+    turned = ((deg % 360) + 360) % 360;
+    box.classList.toggle('turn-quarter', turned === 90 || turned === 270);
+    box.classList.toggle('turn-half', turned === 180);
+    box.style.setProperty('--turn', (-turned) + 'deg');
+  }
+
   function pick(opt) {
     current = opt;
     if (battery) noteEl.textContent = '';
@@ -201,6 +215,7 @@
     stats.textContent = [opt.dataset.codec, opt.dataset.fps + ' fps', opt.dataset.mb + ' Mb'].filter(Boolean).join(' · ');
     try { localStorage.setItem(key, opt.dataset.stream); } catch (e) {}
     stop();
+    turn(+opt.dataset.rotate || 0);
     if (!opt.dataset.url || opt.disabled || !window.mpegts || !mpegts.isSupported()) return;
     player = reostreamPlayer(opt.dataset.url, video);
     player.attachMediaElement(video);
@@ -237,9 +252,15 @@
   // Snapshot: the frame on screen, saved as a PNG. Nothing goes to the camera.
   snapBtn.addEventListener('click', function () {
     if (!video.videoWidth) return;
+    // Saved the way it is shown: turned like the player when the stream
+    // is marked to be.
     var c = document.createElement('canvas');
-    c.width = video.videoWidth; c.height = video.videoHeight;
-    c.getContext('2d').drawImage(video, 0, 0);
+    var w = video.videoWidth, h = video.videoHeight, quarter = turned === 90 || turned === 270;
+    c.width = quarter ? h : w; c.height = quarter ? w : h;
+    var g = c.getContext('2d');
+    g.translate(c.width / 2, c.height / 2);
+    g.rotate(-turned * Math.PI / 180);
+    g.drawImage(video, -w / 2, -h / 2);
     var a = document.createElement('a');
     var d = new Date(), pad = function (n) { return (n < 10 ? '0' : '') + n; };
     a.download = box.dataset.camera + '-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' +
@@ -272,7 +293,7 @@
       var to = on ? (flood.dataset.was || 'off') : 'on';
       if (!askFirst(on ? 'Turn the floodlight ' + (to === 'off' ? 'off' : 'back to ' + to) + '?' : 'Turn the floodlight on?')) return;
       flood.disabled = true;
-      fetch('/cameras/' + encodeURIComponent(flood.dataset.camera) + '/floodlight', {method: 'POST', body: new URLSearchParams({option: to}), credentials: 'same-origin'})
+      fetch(pageBase + '/cameras/' + encodeURIComponent(flood.dataset.camera) + '/floodlight', {method: 'POST', body: new URLSearchParams({option: to}), credentials: 'same-origin'})
         .then(function (r) { return r.text().then(function (html) { return {ok: r.ok, html: html}; }); })
         .then(function (res) {
           var f = new DOMParser().parseFromString(res.html, 'text/html').querySelector('.flash');

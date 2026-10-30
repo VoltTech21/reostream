@@ -104,6 +104,13 @@ func (s *Server) serveTrackLimit(w http.ResponseWriter, r *http.Request) {
 			refuse("could not read where the camera points")
 			return
 		}
+		// -1 is the camera not knowing, and writing it as an edge means no
+		// limit, which would clear the setting while the page says saved.
+		if p < 0 {
+			conn.Close()
+			refuse("the camera does not know where it points; calibrate it first")
+			return
+		}
 		pan = p
 	}
 	conn.Close()

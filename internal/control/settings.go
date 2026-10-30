@@ -208,6 +208,10 @@ type Group struct {
 	// it has no light. Answering the block is no proof: an RLC-810A, which
 	// has no spotlight, answers floodlight task get with a full document.
 	NeedsFloodlight bool
+	// NeedsFTP hides the group on a camera whose Support block says it
+	// has no FTP (Support.LacksFTP). Those builds answer every FTP request
+	// with 400, which the page would otherwise show as a refused read.
+	NeedsFTP bool
 	// Untested marks a group whose fields were read off a real camera but
 	// whose writes nobody has yet watched take effect on one. It shows as
 	// the hollow dot, the redesign's fourth tier.
@@ -446,6 +450,7 @@ func curatedGroups() []Group {
 		// put on screen.
 		{
 			Title:    "FTP upload",
+			NeedsFTP: true,
 			Blocks:   []string{"ftp task get"},
 			Blurb:    "Sends clips and pictures on detection.",
 			Untested: true,
@@ -455,6 +460,7 @@ func curatedGroups() []Group {
 		},
 		{
 			Title:    "FTP server",
+			NeedsFTP: true,
 			Blocks:   []string{"ftp cfg get"},
 			Blurb:    "Set the password in the Reolink app.",
 			Untested: true,

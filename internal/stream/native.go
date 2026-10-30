@@ -11,8 +11,10 @@ import (
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
+	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	mch264 "github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
+	mch265 "github.com/bluenviron/mediacommon/v2/pkg/codecs/h265"
 	"github.com/pion/rtp"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -21,8 +23,8 @@ import (
 )
 
 // nativePaths are the streams a camera also serves over its own RTSP
-// server. The TrackMix's zoom lens is the one, as Preview_02_main (1920x1080
-// H.264). Run fetches it over Baichuan (see zoomChannel in stream.go); this
+// server. The TrackMix's zoom lens is the one, as Preview_02_main (1920x1080,
+// H.264 or H.265 as its encoder is set). Run fetches it over Baichuan (see zoomChannel in stream.go); this
 // path is the fallback for a camera whose zoom never sends video that way.
 var nativePaths = map[string]string{
 	"zoom":     "Preview_02_main",
@@ -66,53 +68,15 @@ func runNative(ctx context.Context, cfg Config, h *hub.Hub, path string) (err er
 	if err != nil {
 		return fmt.Errorf("stream: %s: rtsp describe: %w (is RTSP on for this camera?)", cfg.Name, err)
 	}
-	var h264 *format.H264
-	medi := desc.FindFormat(&h264)
-	if medi == nil {
-		return fmt.Errorf("stream: %s: the camera's RTSP stream has no H.264 video", cfg.Name)
-	}
-	dec, err := h264.CreateDecoder()
+	frames := make(chan baichuan.Frame, 64)
+	medi, onPacket, err := nativeVideo(c, desc, frames)
 	if err != nil {
 		return fmt.Errorf("stream: %s: %w", cfg.Name, err)
 	}
 	if _, err := c.Setup(desc.BaseURL, medi, 0, 0); err != nil {
 		return fmt.Errorf("stream: %s: rtsp setup: %w", cfg.Name, err)
 	}
-
-	frames := make(chan baichuan.Frame, 64)
-	sps, pps := h264.SPS, h264.PPS
-	c.OnPacketRTP(medi, h264, func(pkt *rtp.Packet) {
-		pts, ok := c.PacketPTS(medi, pkt)
-		if !ok {
-			return
-		}
-		au, err := dec.Decode(pkt)
-		if err != nil || len(au) == 0 {
-			return
-		}
-		key := false
-		for _, n := range au {
-			switch n[0] & 0x1f {
-			case 5:
-				key = true
-			case 7:
-				sps = n
-			case 8:
-				pps = n
-			}
-		}
-		if key && sps != nil && pps != nil {
-			au = append([][]byte{sps, pps}, au...)
-		}
-		f := baichuan.Frame{Kind: baichuan.FramePFrame, Codec: "H264", Data: annexB(au), Micros: uint32(pts * 1_000_000 / 90_000)}
-		if key {
-			f.Kind = baichuan.FrameIFrame
-		}
-		select {
-		case frames <- f:
-		default: // a stalled reader drops frames rather than the session
-		}
-	})
+	onPacket()
 	if _, err := c.Play(nil); err != nil {
 		return fmt.Errorf("stream: %s: rtsp play: %w", cfg.Name, err)
 	}
@@ -181,6 +145,104 @@ func annexB(nalus [][]byte) []byte {
 	return out
 }
 
+// nativeVideo finds the video in a native stream's description and returns
+// it with a function that starts turning its RTP into frames on out. The
+// zoom lens follows its own encoder setting, so it may be H.264 or H.265:
+// firmware v3.0.0.5428 defaults the TrackMix zoom to H.265 (emulated
+// 2026-10-29). Each keyframe gets the parameter sets in front, as a
+// Baichuan keyframe has them.
+func nativeVideo(c *gortsplib.Client, desc *description.Session, out chan<- baichuan.Frame) (*description.Media, func(), error) {
+	send := func(pts int64, codec string, au [][]byte, key bool) {
+		f := baichuan.Frame{Kind: baichuan.FramePFrame, Codec: codec, Data: annexB(au), Micros: uint32(pts * 1_000_000 / 90_000)}
+		if key {
+			f.Kind = baichuan.FrameIFrame
+		}
+		select {
+		case out <- f:
+		default: // a stalled reader drops frames rather than the session
+		}
+	}
+
+	var h264 *format.H264
+	if medi := desc.FindFormat(&h264); medi != nil {
+		dec, err := h264.CreateDecoder()
+		if err != nil {
+			return nil, nil, err
+		}
+		sps, pps := h264.SPS, h264.PPS
+		return medi, func() {
+			c.OnPacketRTP(medi, h264, func(pkt *rtp.Packet) {
+				// Every packet, not just the ones that finish a frame:
+				// the clock is unwrapped packet by packet.
+				pts, ok := c.PacketPTS(medi, pkt)
+				if !ok {
+					return
+				}
+				au, err := dec.Decode(pkt)
+				if err != nil || len(au) == 0 {
+					return
+				}
+				key := false
+				for _, n := range au {
+					switch n[0] & 0x1f {
+					case 5:
+						key = true
+					case 7:
+						sps = n
+					case 8:
+						pps = n
+					}
+				}
+				if key && sps != nil && pps != nil {
+					au = append([][]byte{sps, pps}, au...)
+				}
+				send(pts, "H264", au, key)
+			})
+		}, nil
+	}
+
+	var h265 *format.H265
+	if medi := desc.FindFormat(&h265); medi != nil {
+		dec, err := h265.CreateDecoder()
+		if err != nil {
+			return nil, nil, err
+		}
+		vps, sps, pps := h265.VPS, h265.SPS, h265.PPS
+		return medi, func() {
+			c.OnPacketRTP(medi, h265, func(pkt *rtp.Packet) {
+				// Every packet, not just the ones that finish a frame:
+				// the clock is unwrapped packet by packet.
+				pts, ok := c.PacketPTS(medi, pkt)
+				if !ok {
+					return
+				}
+				au, err := dec.Decode(pkt)
+				if err != nil || len(au) == 0 {
+					return
+				}
+				key := false
+				for _, n := range au {
+					switch typ := (n[0] >> 1) & 0x3f; {
+					case typ >= 16 && typ <= 21: // IRAP: BLA, IDR, CRA
+						key = true
+					case typ == 32:
+						vps = n
+					case typ == 33:
+						sps = n
+					case typ == 34:
+						pps = n
+					}
+				}
+				if key && vps != nil && sps != nil && pps != nil {
+					au = append([][]byte{vps, sps, pps}, au...)
+				}
+				send(pts, "H265", au, key)
+			})
+		}, nil
+	}
+	return nil, nil, fmt.Errorf("the camera's RTSP stream has no H.264 or H.265 video")
+}
+
 // NativeInfo asks the camera's own RTSP server what one native stream is,
 // without playing it: its codec and picture size from the DESCRIBE answer.
 // An error means the camera does not serve it (or RTSP is off).
@@ -212,12 +274,20 @@ func NativeInfo(ctx context.Context, address, username, password, stream string)
 		return "", 0, 0, err
 	}
 	var h264 *format.H264
-	if desc.FindFormat(&h264) == nil {
-		return "", 0, 0, fmt.Errorf("no H.264 video in the camera's %s", path)
+	if desc.FindFormat(&h264) != nil {
+		var sps mch264.SPS
+		if len(h264.SPS) > 0 && sps.Unmarshal(h264.SPS) == nil {
+			width, height = sps.Width(), sps.Height()
+		}
+		return "H264", width, height, nil
 	}
-	var sps mch264.SPS
-	if len(h264.SPS) > 0 && sps.Unmarshal(h264.SPS) == nil {
-		width, height = sps.Width(), sps.Height()
+	var h265 *format.H265
+	if desc.FindFormat(&h265) != nil {
+		var sps mch265.SPS
+		if len(h265.SPS) > 0 && sps.Unmarshal(h265.SPS) == nil {
+			width, height = sps.Width(), sps.Height()
+		}
+		return "H265", width, height, nil
 	}
-	return "H264", width, height, nil
+	return "", 0, 0, fmt.Errorf("no H.264 or H.265 video in the camera's %s", path)
 }

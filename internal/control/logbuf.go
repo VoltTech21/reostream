@@ -90,7 +90,7 @@ func (b *LogBuffer) Subscribe() (<-chan string, func()) {
 }
 
 func (s *Server) serveLogsPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "logs.html", struct{ Title string }{Title: "Logs"})
+	s.render(w, r, "logs.html", struct{ Title string }{Title: "Logs"})
 }
 
 func (s *Server) serveLogHistory(w http.ResponseWriter, r *http.Request) {

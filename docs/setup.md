@@ -11,6 +11,7 @@ The README's Quickstart is enough for most installs. This page covers everything
 | Static binary | No Docker. linux/amd64 and linux/arm64 on every release. |
 | systemd | Plain Linux host, with `contrib/reostream.service`. |
 | Unraid | Template in `contrib/unraid/`, see below. |
+| Home Assistant OS | Add-on in `contrib/homeassistant/`, see below. |
 | Build from source | Go 1.26, `go build ./cmd/reostream`. |
 
 ### Static binary
@@ -77,6 +78,21 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-reostream.xml \
 Then Docker > Add Container, pick `reostream` from the template list, and Apply.
 The claim token is in the container's log (Docker tab, click the icon, Logs).
 
+### Home Assistant
+
+Home Assistant OS and Supervised installs run reostream as an add-on, and its page opens
+in Home Assistant's sidebar. In **Settings > Add-ons > Add-on Store**, open the menu at the
+top right, choose **Repositories**, and add
+`https://github.com/VoltTech21/reostream-homeassistant`. Then install **reostream** from the
+store and start it.
+
+There is no claim token to copy: the first visit through Home Assistant claims the
+install, because Home Assistant has already signed you in. The add-on uses host
+networking, so streams are on the Home Assistant host's address, ports 8560 and 8561, and
+the page is also on its port 8562, where it asks for a password; set one under
+Settings > Password to use it there. `contrib/homeassistant/reostream/DOCS.md` has the
+details.
+
 ## Claiming
 
 On first start there is no config. The log prints a one-time token
@@ -131,7 +147,7 @@ streams = ["main", "sub"]
 rtsp = ["main", "sub"]
 ```
 
-- A camera's `address`, `username` or `password`, or the control `password`, starting with `$` is read from that environment variable. A variable that is not set stops startup with an error.
+- A camera's `address`, `username` or `password`, the control `password`, or the `[rtsp]` `username` or `password`, starting with `$` is read from that environment variable. A variable that is not set stops startup with an error.
 - Unknown keys are an error at startup, so a typo fails at boot instead of serving 404s.
 - Saving from the page validates first and reloads only the cameras that changed.
 
@@ -182,6 +198,28 @@ an RLN8-410 with a TrackMix PoE.
 A camera can be on an NVR and reostream at the same time. Each camera serves two main
 stream connections, so an NVR recording main plus reostream fits.
 
+#### Connections to the recorder
+
+A recorder limits connections, not streams: one user's RLN8-410 held about ten and reset
+the rest during login. reostream therefore runs a recorder's streams over a few shared
+connections, four streams to a connection by default, the way the Reolink app runs every
+channel it shows over one. Two streams that are the same channel and stream type are
+fetched once. reostream finds out that an address is a recorder from its login reply;
+a camera on its own still gets one connection per stream.
+
+`-recorder-streams-per-connection N` changes the four; `0` goes back to one connection
+per stream. Eight cameras with main and sub take four connections at the default.
+
+Other things that log in to the recorder, each with a connection of its own:
+
+- the camera's settings page, for each read or save, closed when it is done;
+- two-way audio, for as long as someone is talking;
+- the Setup page's probe, for a few seconds per stream it checks;
+- alerts, one held connection per camera on channel 0 (cameras on other channels of a
+  recorder are not watched for alerts yet).
+
+Leave room for those, and for the Reolink app, under the recorder's limit.
+
 #### NVR and Home Hub auto-add changes camera passwords
 
 With "Automatically add devices in LAN" on, a Reolink NVR or Home Hub adopts every camera
@@ -197,8 +235,9 @@ the NVR and use the NVR's own camera settings to set a password you choose.
 
 ## Control page
 
-The control port (8562) is the only part with a password. The streaming port (8560) is
-open, which is what a recorder needs, so you can firewall the two separately.
+The control port (8562) always has a password. The streaming ports (8560 and 8561) are
+open unless you give them a login (see [A login for the streams](#a-login-for-the-streams)),
+so you can also firewall them separately.
 
 It shows each stream's state, plays it live, edits the config, tails the log, and has a
 page per camera with Live, Recordings and Settings tabs. Settings > Connect to NVR writes
@@ -210,6 +249,19 @@ camera is shown as "accepted", not "confirmed", unless it was read back. See
 
 `listen` without a password refuses to start unless `allow_no_password = true` is set.
 
+### Behind a reverse proxy
+
+To serve the page under a path rather than at the root of its own host, set
+`base_path = "/reostream"` under `[control]` (or start with `-base-path /reostream`).
+Links, redirects and cookies then carry that prefix. The proxy may forward requests with
+the prefix or strip it; both work.
+
+Behind Home Assistant's ingress the add-on starts reostream with `-ha-ingress`, which
+takes the prefix from the `X-Ingress-Path` header and treats the request as signed in.
+It does so only for a request whose connection comes from the Supervisor's ingress
+proxy, 172.30.32.2; the header from anywhere else is ignored. Nothing but the add-on
+should set that flag.
+
 ## RTSP
 
 On by default at port 8561 (not 8554, which go2rtc uses). A camera's `rtsp` list names
@@ -220,6 +272,30 @@ Serves `rtsp://host:8561/<cam>`, `<cam>_sub` and `<cam>_extern`, plus `<cam>_zoo
 `<cam>_zoom_sub` for a TrackMix's zoom lens (add `"zoom_sub"` to the camera's `streams`
 for the lighter one, 896x512, e.g. for Frigate's detect role). TCP interleaved is the default; UDP is offered, but a lost packet is
 a corrupt frame.
+
+### A login for the streams
+
+By default anyone who can reach ports 8560 and 8561 can watch. To ask for a login, add one
+to `[rtsp]`; it covers both, RTSP (Basic or Digest) and the HTTP streams (Basic):
+
+```toml
+[rtsp]
+listen = "0.0.0.0:8561"
+username = "frigate"
+password = "$REOSTREAM_STREAM_PASSWORD"
+```
+
+Restart after changing it. Set both or neither; `$NAME` is read from the environment like
+the other passwords. Recorders then need it in the URL:
+`rtsp://frigate:password@host:8561/driveway` or `http://frigate:password@host:8560/driveway.ts`.
+Settings > Connect to NVR and each camera's Copy URL list put it in for you, and the
+Frigate config updater writes it into the config you paste. A password of letters and
+digits saves escaping it in URLs.
+
+`/api/status` and `/metrics` stay open, so a health check or Prometheus scrape does not need
+it. The control page's live view is not affected: it plays through the page itself, behind
+the control password. If you set `-stream-base` to point live view at port 8560 instead,
+the browser will ask for the login there.
 
 ### Holding the last picture
 
@@ -303,8 +379,27 @@ mqtt = "192.0.2.5:1883"           # reostream/<camera>/<motion|person|vehicle|an
 frigate = "http://192.0.2.5:5000" # each detection becomes a Frigate event on the camera of the same name
 ```
 
+For Frigate, use its API port 5000 over plain http, not the `https://...:8971` address
+you open in a browser: that one needs a login, and its certificate fails the check. Frigate's
+Docker setup has to publish 5000 (`-p 5000:5000`, or `5000:5000` under `ports:`).
+
 Wired cameras report their detections live. A battery camera reports motion through the
 clips it uploads; see Battery cameras below.
+
+### Home Assistant devices
+
+With `ha_discovery = true` under `[events]` (or **Add the cameras to Home Assistant** under
+Settings > Events), each camera appears in Home Assistant as a device by itself, through
+MQTT discovery, on the broker Home Assistant uses:
+
+- a wired camera: Motion, Person, Vehicle and Animal binary sensors;
+- a battery camera: Motion, and its Battery level as a diagnostic sensor;
+- a camera behind an NVR or Home Hub: Motion, only when it has a `motion_topic`.
+
+The configs are retained under `homeassistant/`, and every entity is available while
+reostream's MQTT connection is up (`<prefix>/status`, online or offline, with a last will).
+Removing a camera, or turning discovery off, removes its entities, as long as the broker
+is still set.
 
 ## Battery cameras
 

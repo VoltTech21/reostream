@@ -30,7 +30,7 @@ func (s *Server) serveAbout(w http.ResponseWriter, r *http.Request) {
 		}
 		page.Cameras = len(cfg.Cameras)
 	}
-	s.render(w, "about.html", page)
+	s.render(w, r, "about.html", page)
 }
 
 func (s *Server) serveSettingsIndex(w http.ResponseWriter, r *http.Request) {

@@ -10,8 +10,10 @@ import "github.com/VoltTech21/reostream/internal/baichuan"
 // confirmation step, because a confirmation is not a safeguard against a
 // mistake nobody can undo.
 var refusals = map[uint32]string{
-	// A firmware write is unrecoverable from a web page if it goes wrong.
-	baichuan.MsgIDSetAutoUpdate: "firmware updates are not sent from this page",
+	// Message 196, "set auto update", is not here: it is the switch for the
+	// camera updating itself (AutoUpdate/enable), not a firmware upload, and
+	// the Firmware updates group writes it. Refusing it made that switch a
+	// control that could never change (found 2026-10-29).
 
 	// A reboot takes the camera off the fleet for a minute, and this
 	// daemon's whole discipline is about not disturbing cameras that are

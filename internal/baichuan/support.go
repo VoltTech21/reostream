@@ -44,6 +44,12 @@ type Support struct {
 		StorageMode     int    `xml:"storagemode"`
 		Reboot          int    `xml:"reboot"`
 		Upgrade         int    `xml:"upgrade"`
+		// FTP is the camera's FTP feature bitmask: nonzero on a camera with
+		// FTP upload, 0 on builds that ship with it switched off (the
+		// compact E1/E320/E330 and NVC-D12M firmware, support_ftp="0" in
+		// their dvr.xml), which refuse every FTP request with 400. A pointer
+		// so a camera that leaves the element out is not read as a no.
+		FTP *int `xml:"ftp"`
 
 		// Item carries the per channel capabilities, and it is where most of
 		// what distinguishes one model from another actually lives. The same
@@ -144,6 +150,13 @@ func (s Support) HasPTZ() bool { return s.Support.PTZMode != "" && s.Support.PTZ
 func (s Support) HasFloodlight(id int) bool {
 	ch, ok := s.Channel(id)
 	return ok && ch.LEDCtrl&0x6 != 0
+}
+
+// LacksFTP reports whether the camera says outright that it has no FTP
+// upload. Only a positive no counts: a Support block without the element
+// says nothing either way.
+func (s Support) LacksFTP() bool {
+	return s.Support.FTP != nil && *s.Support.FTP == 0
 }
 
 // HasFishEye reports whether channel id has the dewarping view modes that

@@ -232,7 +232,7 @@ func (s *Server) serveBlocks(w http.ResponseWriter, r *http.Request) {
 	}
 	page.Pairs = buildPairRows(blocks)
 
-	s.render(w, "blocks.html", page)
+	s.render(w, r, "blocks.html", page)
 }
 
 // pairTitles names the documents a person is likely to look for. A pair

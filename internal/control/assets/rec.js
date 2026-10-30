@@ -3,13 +3,16 @@
 // it arrives.
 (function () {
   'use strict';
+  // The prefix the page is served under: "" at the root, or a proxy's or
+  // Home Assistant ingress's path. layout.html puts it in a meta tag.
+  var pageBase = (document.querySelector('meta[name="reostream-base"]') || {}).content || '';
   var box = document.getElementById('rec-player');
   if (!box) return;
   var video = box.querySelector('video'), empty = document.getElementById('rec-empty');
   var now = document.getElementById('rec-now'), dl = document.getElementById('rec-dl');
   var clips = Array.prototype.slice.call(document.querySelectorAll('.rec-clip'));
   var spans = document.querySelectorAll('.rec-span');
-  var base = '/cameras/' + encodeURIComponent(box.dataset.camera) + '/recordings/clip';
+  var base = pageBase + '/cameras/' + encodeURIComponent(box.dataset.camera) + '/recordings/clip';
   var stream = 'sub', cur = -1, player = null;
   try { stream = localStorage.getItem('reostream.recStream') || 'sub'; } catch (e) {}
 

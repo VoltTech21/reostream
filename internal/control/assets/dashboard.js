@@ -9,6 +9,9 @@
 // running, so at most one stream is ever decoded in this tab.
 
 (function () {
+  // The prefix the page is served under: "" at the root, or a proxy's or
+  // Home Assistant ingress's path. layout.html puts it in a meta tag.
+  var pageBase = (document.querySelector('meta[name="reostream-base"]') || {}).content || '';
   // The one live player, when someone has pressed a tile. Null the rest of
   // the time: the rotation below owns the decoder otherwise.
   var live = null;
@@ -292,7 +295,7 @@
   function loadOSD(card) {
     var camera = card.dataset.camera;
     var forms = card.querySelectorAll('.osd-toggle');
-    fetch('/cameras/' + encodeURIComponent(camera) + '/osd', {headers: {'Accept': 'application/json'}})
+    fetch(pageBase + '/cameras/' + encodeURIComponent(camera) + '/osd', {headers: {'Accept': 'application/json'}})
       .then(function (r) {
         // A non-2xx here is not a camera that failed -- osd.go answers
         // those 200 with a reason -- it is this browser's session having

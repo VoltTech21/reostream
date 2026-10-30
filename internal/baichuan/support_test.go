@@ -146,3 +146,25 @@ func TestSupportReplyErrorDescribesTheReply(t *testing.T) {
 		}
 	}
 }
+
+// The compact E1/E320/E330 builds report <ftp>0</ftp> and refuse every FTP
+// request; an FTP-capable camera reports a bitmask; a camera that leaves
+// the element out has said nothing, and must not be read as having no FTP.
+func TestLacksFTPOnlyOnAPositiveNo(t *testing.T) {
+	for _, tc := range []struct {
+		doc  string
+		want bool
+	}{
+		{`<body><Support version="1.1"><ftp>0</ftp></Support></body>`, true},
+		{`<body><Support version="1.1"><ftp>14311</ftp></Support></body>`, false},
+		{`<body><Support version="1.1"><rtsp>1</rtsp></Support></body>`, false},
+	} {
+		s, err := ParseSupport([]byte(tc.doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.LacksFTP(); got != tc.want {
+			t.Errorf("%s: LacksFTP = %v, want %v", tc.doc, got, tc.want)
+		}
+	}
+}

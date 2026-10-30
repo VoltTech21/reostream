@@ -58,7 +58,8 @@ COPY --from=build /out/reostream /usr/local/bin/reostream
 COPY --from=build --chown=nonroot:nonroot /out/data /data
 
 USER nonroot:nonroot
-# 8560 is the streaming port, unauthenticated, what a recorder points at.
+# 8560 is the streaming port, what a recorder points at; open unless [rtsp]
+# sets a login, which covers 8560 and 8561 both.
 # 8561 is RTSP, on by default, what go2rtc points at.
 # 8562 is the control page, behind the claimed password.
 # 2121-2131 receive clips cameras upload over FTP, when that is set up.

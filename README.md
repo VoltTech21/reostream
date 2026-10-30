@@ -85,6 +85,10 @@ The `#audio=opus` line is optional; it gives browsers and apps audio in live vie
 
 Without go2rtc, Frigate can read `http://reostream:8560/driveway.ts` directly.
 
+The streams are open to your network by default. To ask for a login, set `username` and
+`password` under `[rtsp]` (it covers ports 8560 and 8561) and use
+`rtsp://user:password@reostream:8561/driveway`; see `docs/setup.md`.
+
 ## Endpoints
 
 | RTSP, port 8561 | HTTP, port 8560 | |
@@ -124,6 +128,8 @@ No ffmpeg, GStreamer or RTSP server in the serving path.
 
 ## Tested on
 
+On my own cameras:
+
 | Model | Count | Firmware |
 |---|---|---|
 | RLC-810A (8 MP bullet) | 6 | v3.1.0.956_24022103 |
@@ -136,7 +142,26 @@ reostream has been the only video path for this fleet's Frigate since September:
 streams, 69 Mbps, about 60% of one CPU core, 29-59 MB of memory. Numbers in
 `docs/measurements.md`.
 
-Not yet tested: other models and firmware. Reports welcome.
+Reported working by users (thank you!):
+
+| Model | What works | Reported in |
+|---|---|---|
+| RLC-833A (v3.1.0.3016) | video, two-way talk | GitHub #18 |
+| E1 Pro (v3.1.0.1414) | video, two-way talk | GitHub #18 |
+| E1 | video, privacy mode | GitHub #13 |
+| E1 Zoom 8 MP | video, two-way talk, pan/tilt | Reddit |
+| RLC-822A (6 cameras) | video | GitHub #1 |
+| Video Doorbell PoE (D340P) | video | GitHub #1 |
+| Video Doorbell (wired 2K) | video | Reddit |
+| Video Doorbell Wi-Fi | video | Reddit |
+| CX820 | video | Reddit |
+| Duo Floodlight Wi-Fi v2 | video | Reddit |
+| Duo 4K Wi-Fi (3 cameras) | video | Reddit |
+| RLC-811A (v3.1.0.3485) | video (sub and extern) | Reddit |
+| Lumus Pro | video (Frigate with hardware decoding off for it) | GitHub #17 |
+
+Your camera not here? Open an issue with the model, firmware and what worked,
+and it goes on the list.
 
 ## Camera control
 

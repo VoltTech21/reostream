@@ -21,7 +21,7 @@
 {{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{end}}
 {{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
 
-<form class="setting" method="post" action="/cameras/{{.Camera.Name}}/time/sync" data-nav>
+<form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/time/sync" data-nav>
 <p><span class="tier tier-instant"></span>Camera clock{{template "info" "Sync now sets the camera's clock from reostream's (this machine's own, kept right by the system)."}}</p>
 <div class="control">
 <span class="mono{{if ne .ClockDrift "in sync"}} warn{{end}}">{{if .ClockDrift}}{{.ClockDrift}}{{else}}not read{{end}}</span>
@@ -31,7 +31,7 @@
 </form>
 
 {{if .HourFmtRead}}
-<form class="setting" method="post" action="/cameras/{{.Camera.Name}}/time/hourfmt" data-nav>
+<form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/time/hourfmt" data-nav>
 <p><span class="tier tier-instant"></span>Clock format{{template "info" "How the camera writes the time in its timestamp: 12 hour with am/pm, or 24 hour."}}</p>
 <div class="control">
 <div class="segmented" role="radiogroup" aria-label="Clock format" style="min-width:0">
@@ -43,7 +43,7 @@
 </form>
 {{end}}
 {{if .DateFormat}}
-<form class="setting" method="post" action="/cameras/{{.Camera.Name}}/time/datefmt" data-nav>
+<form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/time/datefmt" data-nav>
 <p><span class="tier tier-instant"></span>Date format{{template "info" "How the camera writes the date in its timestamp."}}</p>
 <div class="control">
 <select name="value" onchange="this.form.submit()">
@@ -54,7 +54,7 @@
 </form>
 {{end}}
 
-<form class="setting" method="post" action="/cameras/{{.Camera.Name}}/time/daily" data-nav>
+<form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/time/daily" data-nav>
 <p><span class="tier tier-instant"></span>Daily sync{{template "info" "Every wired camera's clock is set from reostream's once a day at this time. Battery cameras are left out so they are not woken each day. Leave empty for off."}}</p>
 <div class="control">
 <input type="time" name="daily_sync" value="{{.DailySync}}" style="width:8rem">
@@ -63,7 +63,7 @@
 </div>
 </form>
 
-<form class="setting autosave" method="post" action="/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('Set this time zone on every camera?')">
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/timezone" onsubmit="return !this.every.checked || confirm('Set this time zone on every camera?')">
 <p><span class="tier tier-instant"></span>Time zone{{template "info" "The camera adds daylight saving itself."}}</p>
 <div class="control tz">
 <select name="timezone" id="tz-select" hidden>
@@ -80,7 +80,7 @@
 </div>
 </form>
 
-<form class="autosave" method="post" action="/cameras/{{.Camera.Name}}/time" onsubmit="return !this.every.checked || confirm('Set this time server on every camera?')">
+<form class="autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/time" onsubmit="return !this.every.checked || confirm('Set this time server on every camera?')">
 <div class="setting">
 <p><span class="tier tier-instant"></span>Sync with a time server</p>
 <div class="control">
@@ -108,7 +108,7 @@
 </section>
 {{end}}
 {{template "camsettings-close"}}
-<script src="/assets/settings.js"></script>
+<script src="{{base}}/assets/settings.js"></script>
 <script>
 // Time zone picker: every city the browser knows, at its standard (winter)
 // offset, since the camera adds daylight saving itself. Offsets are stored

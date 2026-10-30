@@ -1,0 +1,30 @@
+# Copyright (c) 2026 Riley Poe. AGPL v3, see COPYRIGHT.
+name: reostream
+# The image this add-on is built from is the reostream release of the same
+# version; see Dockerfile. Bump them together.
+version: "0.2.5"
+slug: reostream
+description: Reolink cameras, battery ones included, as RTSP and HTTP streams for Frigate and Home Assistant
+url: https://github.com/VoltTech21/reostream
+# The two architectures the release image is built for.
+arch:
+  - amd64
+  - aarch64
+# The image's entrypoint is reostream itself; there is no s6 or shell in it.
+init: false
+startup: services
+boot: auto
+# Host networking, not mapped ports: battery cameras are found and woken by
+# a UDP broadcast on the local network, which a container's own network
+# never sees, and cameras upload clips to the FTP receiver by the host's
+# address. It also means the ports below are the host's own: 8560 (HTTP
+# MPEG-TS), 8561 (RTSP), 8562 (the page), 2121-2131 (FTP).
+host_network: true
+# The page opens in Home Assistant's sidebar through ingress. reostream is
+# started with -ha-ingress, which trusts the Supervisor to have signed the
+# user in; see DOCS.md.
+ingress: true
+ingress_port: 8562
+panel_icon: mdi:cctv
+panel_title: Cameras
+watchdog: tcp://[HOST]:8562

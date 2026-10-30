@@ -121,7 +121,7 @@ func (s *Server) serveRawValues(w http.ResponseWriter, r *http.Request) {
 			page.Docs = append(page.Docs, d)
 		}
 	}
-	s.render(w, "raw.html", page)
+	s.render(w, r, "raw.html", page)
 }
 
 // serveApplyRawValue writes one raw value: the document is read fresh,

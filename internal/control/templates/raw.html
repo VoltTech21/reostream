@@ -6,7 +6,7 @@
 <details class="card raw-doc">
 <summary class="sec-head"><h2>{{.Title}}</h2><span class="sec-where">{{len .Values}} values{{if .Unsafe}} &middot; interrupts the stream{{end}}</span></summary>
 {{range .Values}}
-<form class="setting autosave raw-row" method="post" action="/cameras/{{$.Cam}}/raw"{{if $d.Unsafe}} onsubmit="return confirm('This restarts the stream for a moment. Save?')"{{end}}>
+<form class="setting autosave raw-row" method="post" action="{{base}}/cameras/{{$.Cam}}/raw"{{if $d.Unsafe}} onsubmit="return confirm('This restarts the stream for a moment. Save?')"{{end}}>
 <p class="mono"><span class="tier tier-{{if $d.Unsafe}}interruption{{else}}untested{{end}}"></span>{{.Path}}{{with .Curated}} <span class="dim raw-cur">{{.}}</span>{{end}}</p>
 <div class="control">
 <input type="hidden" name="get" value="{{$d.Get}}"><input type="hidden" name="xpath" value="{{.Path}}">
@@ -17,7 +17,7 @@
 </details>
 {{end}}
 {{template "camsettings-close"}}
-<script src="/assets/settings.js"></script>
+<script src="{{base}}/assets/settings.js"></script>
 <script>
 (function () {
   var q = document.getElementById('raw-q');
