@@ -3,6 +3,7 @@ package ts
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
 )
@@ -58,6 +59,12 @@ type Muxer struct {
 	sentPCR       bool
 	lastPCRPTS    uint64
 	droppedAudio  int
+	// pmtVersion counts codec changes (Recodec), so the program map
+	// that announces one is read as new.
+	pmtVersion byte
+	// discontinuity marks the PIDs whose next packet carries the
+	// discontinuity_indicator, after Recodec.
+	discontinuity map[PID]bool
 }
 
 // continuity tracks the 4 bit continuity counter per PID. Each PID counts
@@ -121,6 +128,53 @@ func NewMuxerWithAudio(videoCodec, audioCodec string) (*Muxer, error) {
 	return m, nil
 }
 
+// Resume continues this muxer on a new camera connection: the timeline
+// carries on from the last frame plus gap, the wall time the camera was
+// away (see Clock.Resume), and the continuity counters carry on as they
+// were. A reader that stayed attached through the reconnect, go2rtc
+// reading the .ts for Frigate for one, then sees a pause, not timestamps
+// that start over at zero: those made its recordings unusable for as long
+// as the previous connection had lasted. Nothing goes out again until the
+// new connection's first keyframe, which brings the tables and a PCR.
+func (m *Muxer) Resume(gap time.Duration) {
+	m.clock.Resume(gap)
+	m.audioClock.resume()
+	m.sawKeyframe = false
+	m.sentTables = false
+	m.sentPCR = false
+}
+
+// Recodec is a muxer for a camera that came back with another video codec
+// (its encoder was changed between connections), or with or without an
+// AAC track where this one had the other. It continues this one's timeline
+// and continuity counters, with Resume's gap, announces the change with a
+// new program map version, and sets the discontinuity indicator on the
+// first packet of each elementary stream.
+func (m *Muxer) Recodec(codec string, audio bool, gap time.Duration) (*Muxer, error) {
+	n, err := NewMuxer(codec)
+	if err != nil {
+		return nil, err
+	}
+	if audio {
+		n.audioType = StreamTypeAAC
+	}
+	n.clock, n.audioClock, n.cc = m.clock, m.audioClock, m.cc
+	n.pmtVersion = (m.pmtVersion + 1) & 0x1F
+	n.discontinuity = map[PID]bool{PIDVideo: true, PIDAudio: true}
+	n.Resume(gap)
+	return n, nil
+}
+
+// Carries reports whether this muxer is the one for codec, with or without
+// an AAC track as audio says.
+func (m *Muxer) Carries(codec string, audio bool) bool {
+	st := StreamTypeH264
+	if strings.EqualFold(codec, "h265") {
+		st = StreamTypeHEVC
+	}
+	return m.streamType == st && (m.audioType != 0) == audio
+}
+
 // DroppedAudio reports how many audio frames were dropped for lack of a
 // supported codec, such as ADPCM. It should stay zero on a healthy stream
 // configured with an audio role; a climbing count means the camera is
@@ -135,7 +189,7 @@ func (m *Muxer) DroppedAudio() int { return m.droppedAudio }
 func (m *Muxer) Header() []byte {
 	out := make([]byte, 0, 2*PacketSize)
 	out = append(out, writePAT(nil, m.cc.next(PIDPAT))...)
-	out = append(out, writePMT(nil, m.cc.next(PIDPMT), m.streamType, m.audioType)...)
+	out = append(out, writePMTVersion(nil, m.cc.next(PIDPMT), m.pmtVersion, m.streamType, m.audioType)...)
 	return out
 }
 
@@ -355,9 +409,12 @@ func (m *Muxer) packetizePES(pid PID, pes []byte, pcr *uint64) []byte {
 	first := true
 	for len(pes) > 0 {
 		withPCR := first && pcr != nil
+		disc := first && m.discontinuity[pid]
 		afHeaderLen := 0
 		if withPCR {
 			afHeaderLen = 8 // length byte, flags byte, 6 byte PCR
+		} else if disc {
+			afHeaderLen = 2 // length byte, flags byte
 		}
 		avail := PacketSize - 4 - afHeaderLen
 		n := len(pes)
@@ -383,6 +440,10 @@ func (m *Muxer) packetizePES(pid PID, pes []byte, pcr *uint64) []byte {
 				v = *pcr
 			}
 			writeAdaptation(pkt[4:], afTotal, withPCR, v)
+			if disc {
+				pkt[5] |= 0x80 // discontinuity_indicator
+				delete(m.discontinuity, pid)
+			}
 		}
 		copy(pkt[4+afTotal:], pes[:n])
 		pes = pes[n:]

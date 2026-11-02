@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"strconv"
 	"strings"
 	"sync"
@@ -214,6 +215,15 @@ func (s *Server) identFor(ctx context.Context, cam Camera) camIdent {
 		}
 	}
 	id.HasSD = id.Support != nil && (id.Support.Support.DiskNum > 0 || id.Support.Support.Record > 0)
+	// A TrackMix PoE (v3.0.0.5428) with a card in it says diskNum 0 and
+	// record 0 in its support block, and lists the card when asked for it
+	// (message 102), so a camera that says none is asked.
+	if !id.HasSD && cam.Channel == 0 && !isRecorderConn(conn) {
+		rctx, rcancel := context.WithTimeout(ctx, readTimeout)
+		doc, status, err := baichuan.ReadConfig(rctx, conn, baichuan.ConfigMessages["sdcard"])
+		rcancel()
+		id.HasSD = err == nil && status == 200 && hasCard(doc)
+	}
 	// Behind an NVR or Home Hub the recordings are on the recorder's own
 	// disks, searched on this camera's channel; the support block the
 	// recorder answers for a channel does not count them, so ask the
@@ -333,4 +343,25 @@ func (h camHead) SwitchHref(name string) string {
 		return "/cameras/" + name + "/recordings"
 	}
 	return catHref(name, h.Cat)
+}
+
+// hasCard reports whether an HddInfoList (message 102) lists a mounted
+// card with some capacity. A camera with no card sends the list empty.
+func hasCard(doc []byte) bool {
+	var v struct {
+		Disks []struct {
+			Mount    int   `xml:"mount"`
+			Capacity int64 `xml:"capacityV2"`
+			CapGB    int64 `xml:"capacity"`
+		} `xml:"HddInfoList>HddInfo"`
+	}
+	if xml.Unmarshal(doc, &v) != nil {
+		return false
+	}
+	for _, d := range v.Disks {
+		if d.Mount == 1 && (d.Capacity > 0 || d.CapGB > 0) {
+			return true
+		}
+	}
+	return false
 }

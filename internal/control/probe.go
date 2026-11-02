@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
+	"github.com/VoltTech21/reostream/internal/bcudp"
 	"github.com/VoltTech21/reostream/internal/cgi"
 	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/stream"
@@ -24,7 +25,11 @@ func (s *Server) serveProbe(w http.ResponseWriter, r *http.Request) {
 	if probe == nil {
 		probe = s.probeGuarded
 	}
-	rep := probe(r.Context(), r.FormValue("address"), r.FormValue("username"), r.FormValue("password"))
+	ctx := r.Context()
+	if !serviceSwitchAsked(r) {
+		ctx = withoutServiceSwitch(ctx)
+	}
+	rep := probe(ctx, r.FormValue("address"), r.FormValue("username"), r.FormValue("password"))
 
 	// The setup page asks for JSON and draws the stream checkboxes itself.
 	if strings.Contains(r.Header.Get("Accept"), "application/json") {
@@ -46,6 +51,39 @@ func (s *Server) serveProbe(w http.ResponseWriter, r *http.Request) {
 	if err := t.ExecuteTemplate(w, "probe", rep); err != nil {
 		log.Printf("reostream: control: render probe: %v", err)
 	}
+}
+
+// The add-camera form's "Turn on RTSP, ONVIF and the web page" box. A
+// tester objected to the probe changing camera settings unasked, so it can
+// be left unticked; it is ticked by default because a second lens and some
+// settings need those services. The form sends services=0 from a hidden
+// field and services=1 from the box, so an unticked box is told apart from
+// a caller that never heard of it (which keeps the old behavior: on).
+type noServiceSwitchKey struct{}
+
+func serviceSwitchAsked(r *http.Request) bool {
+	_ = r.ParseForm()
+	v := r.Form["services"]
+	if len(v) == 0 {
+		return true
+	}
+	for _, x := range v {
+		if x == "1" {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutServiceSwitch marks a probe that must leave the camera's services
+// as they are.
+func withoutServiceSwitch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noServiceSwitchKey{}, true)
+}
+
+func serviceSwitchAllowed(ctx context.Context) bool {
+	off, _ := ctx.Value(noServiceSwitchKey{}).(bool)
+	return !off
 }
 
 // StreamReport is one stream this page asked a camera about, and what
@@ -344,7 +382,11 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 	opts := baichuan.Options{Username: user, Password: pass}
 	conn, err := baichuan.Dial(ctx, addr, opts)
 	if err != nil {
-		return CameraReport{Err: describeDialError(err)}
+		msg := describeDialError(err)
+		if strings.Contains(err.Error(), "connection refused") {
+			msg += batteryHint(ctx, addr)
+		}
+		return CameraReport{Err: msg}
 	}
 	defer conn.Close()
 
@@ -382,13 +424,16 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 	// in a desktop app: RTSP so a recorder can pull the camera (and the
 	// fallback for a second/zoom lens), ONVIF for PTZ, and the web page.
 	// Harmless when already on, and reported so the user knows it happened.
-	svcCtx, svcCancel := context.WithTimeout(ctx, 3*time.Second)
-	if changed, err := conn.EnableServices(svcCtx, baichuan.UsefulServices); err != nil {
-		log.Printf("control: probe %s: enable services: %v", addr, err)
-	} else if changed {
-		rep.ServicesEnabled = true
+	// Skipped when the add-camera form's box was unticked.
+	if serviceSwitchAllowed(ctx) {
+		svcCtx, svcCancel := context.WithTimeout(ctx, 3*time.Second)
+		if changed, err := conn.EnableServices(svcCtx, baichuan.UsefulServices); err != nil {
+			log.Printf("control: probe %s: enable services: %v", addr, err)
+		} else if changed {
+			rep.ServicesEnabled = true
+		}
+		svcCancel()
 	}
-	svcCancel()
 
 	anyPresent := false
 	for _, name := range []string{"main", "sub", "extern"} {
@@ -477,6 +522,19 @@ func modelName(conn *baichuan.Conn, sup baichuan.Support) string {
 	default:
 		return kind
 	}
+}
+
+// batteryHint says when a refused address is a battery camera, which keeps
+// port 9000 closed and answers only over UDP (tds04, Argus Pro, 10-30).
+// The scan finds those and adds them with their UID; this form cannot.
+func batteryHint(ctx context.Context, addr string) string {
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	info, err := bcudp.Search(sctx, addr)
+	if err != nil || info.UID == "" {
+		return ""
+	}
+	return fmt.Sprintf(": it is a battery camera (UID %s), which keeps that port closed. Add it from the scan results above, which list battery cameras with their UID", info.UID)
 }
 
 // describeDialError turns a connection failure into something a first time

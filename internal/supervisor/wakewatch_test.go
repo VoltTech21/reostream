@@ -67,6 +67,8 @@ func TestBatteryWakingOnItsOwnIsMotion(t *testing.T) {
 	waitFor(t, func() bool { return flag.searched.Load() >= 2 })
 	flag.asleep.Store(false)
 	waitFor(t, func() bool { return atomic.LoadInt32(&awake) == 1 })
+	// The hook can run a moment after the stream counts as awake.
+	waitFor(t, func() bool { return len(ml.calls()) >= 1 })
 	if got := ml.calls(); len(got) != 1 || !got[0] {
 		t.Fatalf("motion hook got %v, want [true]", got)
 	}

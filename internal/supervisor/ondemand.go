@@ -76,7 +76,12 @@ func (s *Supervisor) runOnDemand(ctx context.Context, e *entry) {
 	defer e.h.Close()
 	// An always-on camera never sleeps, so its waking says nothing.
 	if e.cfg.Stream == "main" && !e.alwaysOn && e.cfg.Address != "" {
-		go s.watchWakes(ctx, e)
+		// Waited for on the way out, so nothing of this camera's is still
+		// running once its stream has stopped.
+		wctx, stop := context.WithCancel(ctx)
+		watched := make(chan struct{})
+		go func() { defer close(watched); s.watchWakes(wctx, e) }()
+		defer func() { stop(); <-watched }()
 	}
 	s.firstStill(ctx, e)
 	tick := time.NewTicker(wakePoll)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/bcudp"
@@ -62,6 +63,7 @@ type Conn struct {
 	w      *Writer
 	opts   Options
 	nonce  string
+	cipher Cipher
 	stream string
 	handle int
 
@@ -86,7 +88,7 @@ type Conn struct {
 	readMu  sync.Mutex
 	readErr error
 
-	idleTimeout time.Duration
+	idle *idleTimeoutConn
 }
 
 // idleTimeoutConn resets the underlying connection's read deadline on every
@@ -103,16 +105,33 @@ type Conn struct {
 // the timeout genuinely an idle timeout: it only fires when nothing at all
 // arrives for the whole window, regardless of how a message's bytes are
 // split across reads.
+//
+// The timeout is atomic because SetIdleTimeout changes it while readLoop
+// reads.
 type idleTimeoutConn struct {
 	net.Conn
-	timeout time.Duration
+	timeout atomic.Int64 // a time.Duration; 0 is none
 }
 
 func (c *idleTimeoutConn) Read(b []byte) (int, error) {
-	if c.timeout > 0 {
-		_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	if t := time.Duration(c.timeout.Load()); t > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(t))
 	}
 	return c.Conn.Read(b)
+}
+
+// SetIdleTimeout changes how long the camera may send nothing before the
+// connection gives up, from now on, including for a read already waiting.
+// A stream that is receiving video shortens it (see stream.Run): a camera
+// streaming sends a frame every 40 to 100 ms, so one silent for seconds has
+// dropped the session, and waiting out DefaultIdleTimeout cost about 17 s of
+// footage for a 5 s link blip (a link-drop test, 10-30).
+func (c *Conn) SetIdleTimeout(d time.Duration) {
+	if d <= 0 || time.Duration(c.idle.timeout.Load()) == d {
+		return
+	}
+	c.idle.timeout.Store(int64(d))
+	_ = c.nc.SetReadDeadline(time.Now().Add(d))
 }
 
 // Dial connects to a camera and logs in. addr may omit the port, in which
@@ -150,20 +169,17 @@ func newConn(ctx context.Context, nc net.Conn, opts Options) (*Conn, error) {
 	// field stays zero (disabled) through login so login keeps using the
 	// dial context's own deadline below rather than having that overridden
 	// by a Read call resetting the deadline to now+idle first. It is armed
-	// only once login succeeds and the dial deadline is cleared, which is
-	// safe to do without a lock: the field is written here, before
-	// readLoop's goroutine is started, and never written again, so the
-	// go statement's happens-before guarantee is all the synchronization
-	// this needs.
+	// only once login succeeds and the dial deadline is cleared, and
+	// changed after that only by SetIdleTimeout.
 	idleConn := &idleTimeoutConn{Conn: nc}
 	c := &Conn{
-		nc:          nc,
-		r:           NewReader(idleConn),
-		w:           NewWriter(nc),
-		opts:        opts,
-		idleTimeout: idle,
-		msgs:        make(chan Message, 256),
-		done:        make(chan struct{}),
+		nc:   nc,
+		r:    NewReader(idleConn),
+		w:    NewWriter(nc),
+		opts: opts,
+		idle: idleConn,
+		msgs: make(chan Message, 256),
+		done: make(chan struct{}),
 	}
 	// Login is plain blocking reads, so on its own it answers neither a
 	// canceled ctx nor a camera that accepts the connection and then says
@@ -208,7 +224,7 @@ func newConn(ctx context.Context, nc net.Conn, opts Options) (*Conn, error) {
 		return nil, err
 	}
 	_ = nc.SetDeadline(time.Time{})
-	idleConn.timeout = idle
+	idleConn.timeout.Store(int64(idle))
 	go c.readLoop()
 	return c, nil
 }
@@ -246,7 +262,8 @@ var ErrLoginRefused = errors.New("baichuan: camera refused the login (status 400
 
 // login performs the handshake observed on the wire: a zero-length
 // negotiation probe, the camera's nonce, a hashed login, then DeviceInfo.
-// Encryption switches to AES once login completes.
+// Encryption switches to the cipher the camera chose once login completes,
+// which is AES on everything but the oldest firmware (see Cipher).
 func (c *Conn) login() error {
 	probe := Header{
 		MsgID:   MsgIDLogin,
@@ -261,7 +278,19 @@ func (c *Conn) login() error {
 	if err != nil {
 		return fmt.Errorf("baichuan: read negotiation reply: %w", err)
 	}
-	nonce, err := parseNonce(m.XML)
+	// The handshake is BC sealed under both BC and AES. A camera that
+	// chose no cipher at all means it from this reply on, login included
+	// (v3.0.0.136, emulated 2026-11-02, refuses a BC sealed login with
+	// status 400 once it has said 0x00), so undo the BC the reader applied
+	// and send the rest in the clear.
+	c.cipher = negotiatedCipher(m.Header)
+	nonceXML := m.XML
+	if c.cipher == CipherNone {
+		nonceXML = BCCrypt(m.Header.EncOffset, m.XML)
+		c.r.SetCipher(CipherNone, nil)
+		c.w.SetCipher(CipherNone, nil)
+	}
+	nonce, err := parseNonce(nonceXML)
 	if err != nil {
 		return err
 	}
@@ -299,8 +328,8 @@ func (c *Conn) login() error {
 		return fmt.Errorf("%w (status %d%s)", ErrUnauthorized, reply.Header.Status(), left)
 	}
 
-	c.r.SetAESKey(key)
-	c.w.SetAESKey(key)
+	c.r.SetCipher(c.cipher, key)
+	c.w.SetCipher(c.cipher, key)
 	return nil
 }
 
@@ -327,6 +356,9 @@ func looksLikeXML(b []byte) bool {
 
 // Nonce reports the login nonce.
 func (c *Conn) Nonce() string { return c.nonce }
+
+// Cipher reports the cipher the camera chose for this session.
+func (c *Conn) Cipher() Cipher { return c.cipher }
 
 // DeviceInfo returns the raw <DeviceInfo> document the camera sent as its
 // login reply. Parse it with ParseDeviceInfo.
@@ -356,7 +388,7 @@ func (c *Conn) readLoop() {
 			// error means the connection itself broke.
 			var ne net.Error
 			if errors.As(err, &ne) && ne.Timeout() {
-				err = fmt.Errorf("baichuan: idle timeout: no data from camera in %s: %w", c.idleTimeout, err)
+				err = fmt.Errorf("baichuan: idle timeout: no data from camera in %s: %w", time.Duration(c.idle.timeout.Load()), err)
 			}
 			c.readMu.Lock()
 			c.readErr = err

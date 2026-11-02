@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/VoltTech21/reostream/internal/cgi"
 )
@@ -186,17 +187,49 @@ func setFloodlight(ctx context.Context, c *cgi.Client, channel, mode, state int)
 	return c.Set(ctx, "SetWhiteLed", map[string]any{"WhiteLed": cur})
 }
 
+// floodlightSettle is how long confirmFloodlight waits for the light to
+// report the state just written. On the fake TrackMix GetWhiteLed still
+// said state 0 0.4 s after an "on" and 1 from 0.6 s.
+var floodlightSettle = 3 * time.Second
+
+// confirmFloodlight reads the light back, each time on a fresh CGI
+// session, until it reports want or floodlightSettle has passed, and
+// returns the last state read.
+func (s *Server) confirmFloodlight(ctx context.Context, cam Camera, want string) (string, error) {
+	deadline := time.Now().Add(floodlightSettle)
+	for {
+		got, err := func() (string, error) {
+			c, err := s.cgiDial(cam)
+			if err != nil {
+				return "", err
+			}
+			defer c.Close()
+			mode, state, err := readFloodlight(ctx, c, cam.Channel)
+			if err != nil {
+				return "", err
+			}
+			return floodlightState(mode, state), nil
+		}()
+		if (err == nil && got == want) || !time.Now().Before(deadline) {
+			return got, err
+		}
+		select {
+		case <-ctx.Done():
+			return got, err
+		case <-time.After(floodlightSettle / 6):
+		}
+	}
+}
+
 // serveApplyFloodlight is the floodlight's POST: set the requested option
-// over CGI, then read GetWhiteLed back on the same session to see whether
+// over CGI, then read GetWhiteLed back on a fresh session to see whether
 // it actually took.
 //
-// The read-back this handler takes is on the write connection, not a fresh
-// one: writeBlock's fresh-connection discipline exists because a camera can
-// answer a same-session read from state it has not committed, and the
-// floodlight's CGI read-back has exactly that problem, with no fresh-session
-// equivalent available over CGI the way writeBlock has one over Baichuan.
-// So this can claim no more than "accepted": the camera reported the
-// change, but the effect is not verified from here. See docs/control.md.
+// The read-back is not the write's own session, which can answer from
+// state the camera has not committed, and it is not immediate: the light
+// changes at once, but GetWhiteLed can report the old state for most of a
+// second after the write, which read as "reads back as motion" while the
+// light was on (fake hardware, 10-30, bug 4). See confirmFloodlight.
 //
 // The confirmation dialog itself is not this handler's job. It runs
 // client-side, in the template, before the browser ever issues this
@@ -237,21 +270,22 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := WriteResult{Before: []byte(before)}
-	if err := setFloodlight(ctx, c, cam.Channel, opt.Mode, opt.State); err != nil {
+	err = setFloodlight(ctx, c, cam.Channel, opt.Mode, opt.State)
+	// The read-back takes sessions of its own; this one is done.
+	c.Close()
+	if err != nil {
 		result.Outcome = "refused"
 		result.Detail = err.Error()
-	} else if mode, state, readErr := readFloodlight(ctx, c, cam.Channel); readErr != nil {
+	} else if after, readErr := s.confirmFloodlight(ctx, cam, opt.Value); readErr != nil {
 		result.Outcome = "accepted"
 		result.Detail = fmt.Sprintf("the camera took the command, but reading it back failed: %v. This is not proof the camera changed anything.", readErr)
 	} else {
-		after := floodlightState(mode, state)
 		result.After = []byte(after)
 		if after == opt.Value {
-			result.Outcome = "accepted"
-			result.Detail = "the camera reports " + after + " on a read-back over the same session that carried the write, which can answer from state the camera has not committed. This is not confirmed: see docs/control.md."
+			result.Outcome = "confirmed"
 		} else {
 			result.Outcome = "accepted"
-			result.Detail = fmt.Sprintf("the camera answered success, but reads back as %q rather than %q. Acceptance is not effect: see message 288 in docs/control.md.", after, opt.Value)
+			result.Detail = fmt.Sprintf("the camera answered success, but still reads back as %q rather than %q after %s. Acceptance is not effect: see message 288 in docs/control.md.", after, opt.Value, floodlightSettle)
 		}
 	}
 

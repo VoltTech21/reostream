@@ -219,6 +219,11 @@ type Depacketizer struct {
 	skipped int
 	lost    int
 	gap     bool
+
+	// pad is how far the packet just consumed falls short of a multiple
+	// of 8 bytes, which is the padding a camera that packs packets
+	// together puts after it (see junkPadBeforePacket).
+	pad int
 }
 
 func NewDepacketizer() *Depacketizer { return &Depacketizer{} }
@@ -242,6 +247,7 @@ func (d *Depacketizer) Write(b []byte, startsPacket bool) {
 			d.filler += len(d.buf)
 		}
 		d.buf = d.buf[:0]
+		d.pad = 0
 	}
 	d.buf = append(d.buf, b...)
 }
@@ -503,7 +509,15 @@ func (d *Depacketizer) Next() (Frame, bool) {
 			// mark them as packet starts. Step over that padding when a packet
 			// follows it, and only then: up to 7 zero bytes, then a magic.
 			if n := padBeforePacket(d.buf); n > 0 {
-				d.buf, d.filler = d.buf[n:], d.filler+n
+				d.buf, d.filler, d.pad = d.buf[n:], d.filler+n, 0
+				continue
+			}
+			// The C1 Pro on v2.0.0.x firmware packs packets the same way,
+			// but its padding is whatever was in the buffer before, not
+			// zeros (#23). The length is still known: the packet just
+			// consumed, padded to 8 from its own start.
+			if n := junkPadBeforePacket(d.buf, d.pad); n > 0 {
+				d.buf, d.filler, d.pad = d.buf[n:], d.filler+n, 0
 				continue
 			}
 			// Not at a packet boundary. Packets always begin at the start of a
@@ -523,19 +537,37 @@ func padBeforePacket(b []byte) int {
 		if b[n-1] != 0 {
 			return 0
 		}
-		at := b[n:]
-		if isVideoMagic(at) || isAudio(at, magicAAC) || isAudio(at, magicADPCM) ||
-			match(at, magicInfoV1) || match(at, magicInfoV2) {
+		if isPacketMagic(b[n:]) {
 			return n
 		}
 	}
 	return 0
 }
 
+// junkPadBeforePacket returns pad when b starts with pad bytes of any value
+// followed by a packet magic, and 0 otherwise, including when the magic has
+// not arrived yet. The bytes are skipped only with a packet right behind
+// them, so a camera that does not pad, and leaves filler here to the end of
+// the message, is read exactly as before.
+func junkPadBeforePacket(b []byte, pad int) int {
+	if pad > 0 && isPacketMagic(b[min(pad, len(b)):]) {
+		return pad
+	}
+	return 0
+}
+
+func isPacketMagic(b []byte) bool {
+	return isVideoMagic(b) || isAudio(b, magicAAC) || isAudio(b, magicADPCM) ||
+		match(b, magicInfoV1) || match(b, magicInfoV2)
+}
+
 // consume drops a packet of length n. Any bytes left in the buffer afterwards
 // are filler to the end of the message and are dropped when the next packet
-// starts.
-func (d *Depacketizer) consume(n int) { d.buf = d.buf[n:] }
+// starts, or padding before the next packet in the same message.
+func (d *Depacketizer) consume(n int) {
+	d.buf = d.buf[n:]
+	d.pad = (8 - n%8) % 8
+}
 
 func trimNul(b []byte) []byte {
 	for i, c := range b {

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -36,7 +37,17 @@ type Session struct {
 	enc     adpcm.Encoder
 	pending []int16
 	rs      resampler
+	lim     limiter
+	gain    float64 // linear; 0 until SetGain, read as 1
 	closed  bool
+}
+
+// SetGain sets the talk gain in dB (config talk_gain_db) for what Write
+// sends from now on.
+func (s *Session) SetGain(db int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gain = math.Pow(10, float64(db)/20)
 }
 
 // Open dials the camera and negotiates a talk session.
@@ -70,6 +81,11 @@ func (s *Session) Write(inRate int, pcm []int16) error {
 	if s.closed {
 		return ErrClosed
 	}
+	gain := s.gain
+	if gain == 0 {
+		gain = 1
+	}
+	pcm = s.lim.apply(pcm, gain, inRate)
 	s.pending = s.rs.convert(s.pending, pcm, inRate, s.rate)
 	for len(s.pending) >= adpcm.SamplesPerBlock {
 		block := s.enc.EncodeBlock(s.pending[:adpcm.SamplesPerBlock])
@@ -134,6 +150,41 @@ func waitFor(msgs <-chan baichuan.Message, id uint32, d time.Duration) {
 			return
 		}
 	}
+}
+
+// limitCeiling is the limiter's ceiling, -1 dBFS.
+var limitCeiling = 32767 * math.Pow(10, -1.0/20)
+
+// limitRelease is how quickly the limiter lets go after a peak.
+const limitRelease = 50 * time.Millisecond
+
+// limiter applies a gain and holds peaks at limitCeiling: it turns down at
+// once when a sample would go over, and back up over limitRelease. Full
+// scale overdrove an E1 Zoom's speaker (a tester, 10-29), and a gain on top
+// of a loud voice would otherwise clip.
+type limiter struct {
+	env float64 // the current reduction, 1 for none; 0 before the first call
+}
+
+// apply returns pcm, at rate, times gain, limited. pcm itself is left alone.
+func (l *limiter) apply(pcm []int16, gain float64, rate int) []int16 {
+	if l.env == 0 {
+		l.env = 1
+	}
+	if rate <= 0 {
+		rate = 16000
+	}
+	release := 1 - math.Exp(-1/(limitRelease.Seconds()*float64(rate)))
+	out := make([]int16, len(pcm))
+	for i, x := range pcm {
+		v := float64(x) * gain
+		if a := math.Abs(v) * l.env; a > limitCeiling {
+			l.env = limitCeiling / math.Abs(v)
+		}
+		out[i] = int16(math.Round(v * l.env))
+		l.env += (1 - l.env) * release
+	}
+	return out
 }
 
 // resampler converts between sample rates by linear interpolation, carrying

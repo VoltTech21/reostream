@@ -17,6 +17,8 @@ networks to be found; if you know its address, add it by address below.</p>
 {{range .Found}}
 {{template "found-camera-card" .}}
 {{end}}
+<input type="hidden" name="services" value="0">
+<label class="check"><input type="checkbox" name="services" value="1" checked> Turn on RTSP, ONVIF and the web page on these cameras if they are off (needed for a second lens and some settings)</label>
 <button type="submit" id="add-found-button">Add the selected cameras</button>
 </form>
 {{end}}
@@ -103,7 +105,7 @@ networks to be found; if you know its address, add it by address below.</p>
      own, and this card is replaced with what comes back. */}}
 <p class="hint">reostream found a camera here but could not read it{{if .Report.Err}} ({{.Report.Err}}){{end}}.
 Enter this camera's login:</p>
-<div class="cam-auth" style="display:grid;grid-template-columns:8rem 1fr auto;gap:8px;max-width:440px">
+<div class="cam-auth" style="display:grid;grid-template-columns:minmax(0,8rem) minmax(0,1fr) auto;gap:8px;max-width:440px">
 <input type="text" class="cam-user" value="admin" aria-label="username for this camera" autocomplete="off">
 <input type="password" class="cam-pass" placeholder="password for this camera" autocomplete="off">
 <button type="button" class="cam-connect quiet">Connect</button>

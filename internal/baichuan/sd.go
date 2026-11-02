@@ -258,7 +258,12 @@ func (c *Conn) download(ctx context.Context, from, to time.Time, sub bool, idle 
 			}
 			started = true
 			quiet.Reset(idle)
-			dp.Write(m.Payload, m.StartsPacket)
+			// A recording arrives as one byte stream cut into messages
+			// wherever the camera's buffer filled, not at packet starts,
+			// so a message boundary must not reset the depacketizer: it
+			// threw away every keyframe split across two messages and a
+			// TrackMix recording came back with 0 frames (#21).
+			dp.Write(m.Payload, false)
 			for {
 				f, ok := dp.Next()
 				if !ok {

@@ -50,9 +50,8 @@ type haEntity struct {
 // all, and so nothing, unless another tool reports its motion on a
 // motion_topic.
 //
-// The camera's doorbell press is not here yet. The relay publishes it as
-// "visitor", but nothing here knows which cameras are doorbells, and a
-// Visitor sensor on every camera would be noise.
+// A face, an "other" object and a doorbell press are not here: see
+// haLearned.
 func haEntities(c config.Camera) []haEntity {
 	motion := haEntity{component: "binary_sensor", object: "motion", name: "Motion", deviceClass: "motion"}
 	var out []haEntity
@@ -70,6 +69,24 @@ func haEntities(c config.Camera) []haEntity {
 	}
 	return out
 }
+
+// haLearned are the entities a wired camera gets once it has reported the
+// kind: a face, an object the camera calls "other", a doorbell press
+// ("visitor"). Nothing in the config says which cameras detect faces or
+// are doorbells, and these on every camera would be noise, so each is
+// announced the first time the relay publishes its topic (fake hardware,
+// 10-30, bug 5: the topics were published and Home Assistant never showed
+// them). Home Assistant keeps the entity from then on, so a doorbell's
+// Visitor can be automated on after its first press.
+var haLearned = map[string]haEntity{
+	"face":    {component: "binary_sensor", object: "face", name: "Face", deviceClass: "occupancy"},
+	"other":   {component: "binary_sensor", object: "other", name: "Other object", deviceClass: "occupancy"},
+	"visitor": {component: "binary_sensor", object: "visitor", name: "Visitor"},
+}
+
+// haLearns reports whether a camera can learn entities: one with an alert
+// connection of its own, the only kind that reports these.
+func haLearns(c config.Camera) bool { return c.UID == "" && c.Channel == 0 && len(c.Streams) > 0 }
 
 // haNodeID makes a camera name safe as a discovery topic level and a
 // unique_id, which Home Assistant limits to letters, digits, "_" and "-".
@@ -96,46 +113,97 @@ func haStatusTopic(prefix string) string { return prefix + "/status" }
 func haDiscoveryMessages(prefix, version string, cams []config.Camera) []discoveryMessage {
 	var out []discoveryMessage
 	for _, c := range cams {
-		node := haNodeID(c.Name)
-		device := map[string]any{
-			"identifiers":  []string{node},
-			"name":         c.Name,
-			"manufacturer": "Reolink",
-		}
 		for _, e := range haEntities(c) {
-			doc := map[string]any{
-				"name":                  e.name,
-				"unique_id":             node + "_" + e.object,
-				"state_topic":           prefix + "/" + c.Name + "/" + e.object,
-				"availability_topic":    haStatusTopic(prefix),
-				"payload_available":     "online",
-				"payload_not_available": "offline",
-				"device_class":          e.deviceClass,
-				"device":                device,
-				"origin": map[string]any{
-					"name": "reostream",
-					"sw":   version,
-					"url":  "https://github.com/VoltTech21/reostream",
-				},
-			}
-			if e.component == "binary_sensor" {
-				doc["payload_on"], doc["payload_off"] = "ON", "OFF"
-			}
-			if e.unit != "" {
-				doc["unit_of_measurement"] = e.unit
-				doc["state_class"] = "measurement"
-			}
-			if e.diagnostic {
-				doc["entity_category"] = "diagnostic"
-			}
-			b, _ := json.Marshal(doc)
-			out = append(out, discoveryMessage{
-				Topic:   haDiscoveryPrefix + "/" + e.component + "/" + node + "/" + e.object + "/config",
-				Payload: b,
-			})
+			out = append(out, haEntityMessage(prefix, version, c.Name, e))
 		}
 	}
 	return out
+}
+
+// haLearnedMessages builds the documents for the learned kinds of each
+// camera still in cams that can learn them. learned is camera -> kinds.
+func haLearnedMessages(prefix, version string, cams []config.Camera, learned map[string]map[string]bool) []discoveryMessage {
+	var out []discoveryMessage
+	for _, c := range cams {
+		if !haLearns(c) {
+			continue
+		}
+		for _, kind := range []string{"face", "other", "visitor"} {
+			if learned[c.Name][kind] {
+				out = append(out, haEntityMessage(prefix, version, c.Name, haLearned[kind]))
+			}
+		}
+	}
+	return out
+}
+
+// haEntityMessage is one entity's discovery document.
+func haEntityMessage(prefix, version, camera string, e haEntity) discoveryMessage {
+	node := haNodeID(camera)
+	doc := map[string]any{
+		"name":                  e.name,
+		"unique_id":             node + "_" + e.object,
+		"state_topic":           prefix + "/" + camera + "/" + e.object,
+		"availability_topic":    haStatusTopic(prefix),
+		"payload_available":     "online",
+		"payload_not_available": "offline",
+		"device": map[string]any{
+			"identifiers":  []string{node},
+			"name":         camera,
+			"manufacturer": "Reolink",
+		},
+		"origin": map[string]any{
+			"name": "reostream",
+			"sw":   version,
+			"url":  "https://github.com/VoltTech21/reostream",
+		},
+	}
+	if e.deviceClass != "" {
+		doc["device_class"] = e.deviceClass
+	}
+	if e.component == "binary_sensor" {
+		doc["payload_on"], doc["payload_off"] = "ON", "OFF"
+	}
+	if e.unit != "" {
+		doc["unit_of_measurement"] = e.unit
+		doc["state_class"] = "measurement"
+	}
+	if e.diagnostic {
+		doc["entity_category"] = "diagnostic"
+	}
+	b, _ := json.Marshal(doc)
+	return discoveryMessage{
+		Topic:   haDiscoveryPrefix + "/" + e.component + "/" + node + "/" + e.object + "/config",
+		Payload: b,
+	}
+}
+
+// learn records that camera reported kind and, the first time for a kind
+// in haLearned, returns its discovery document to publish. The topic joins
+// the relay's discovered set, so it is retracted with the rest.
+func (r *eventRelay) learn(prefix, version, camera, kind string) (discoveryMessage, bool) {
+	e, ok := haLearned[kind]
+	if !ok {
+		return discoveryMessage{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.learned[camera][kind] {
+		return discoveryMessage{}, false
+	}
+	if r.learned == nil {
+		r.learned = map[string]map[string]bool{}
+	}
+	if r.learned[camera] == nil {
+		r.learned[camera] = map[string]bool{}
+	}
+	r.learned[camera][kind] = true
+	m := haEntityMessage(prefix, version, camera, e)
+	if r.discovered == nil {
+		r.discovered = map[string]bool{}
+	}
+	r.discovered[m.Topic] = true
+	return m, true
 }
 
 // staleDiscovery lists the topics in was that are not in now: entities of a
@@ -184,15 +252,41 @@ func announce(ctx context.Context, mq *mqtt.Client, msgs []discoveryMessage, ret
 
 // startDiscovery announces the cameras, then keeps them announced: again
 // whenever Home Assistant says it has started (it publishes "online" to
-// homeassistant/status), and the battery cameras' levels as they change.
+// homeassistant/status), with the entities learned since, and the battery
+// cameras' levels as they change.
 func (s *Server) startDiscovery(ctx context.Context, mq *mqtt.Client, ev config.EventsConfig, prefix string, cams []config.Camera, msgs []discoveryMessage) {
 	go announce(ctx, mq, msgs, 30*time.Second)
+	// A learned entity's config is retained by the broker. Reading it back
+	// is how a restarted relay knows the entity is there, to retract it
+	// when the camera is removed or discovery is turned off.
+	topics := []string{haDiscoveryPrefix + "/status"}
+	learnedTopic := map[string][2]string{}
+	for _, c := range cams {
+		if !haLearns(c) {
+			continue
+		}
+		for kind, e := range haLearned {
+			m := haEntityMessage(prefix, "", c.Name, e)
+			topics = append(topics, m.Topic)
+			learnedTopic[m.Topic] = [2]string{c.Name, kind}
+		}
+	}
+	version := buildVersion()
 	go mqtt.Subscribe(ctx, mqtt.SubscribeOptions{
 		Addr: ev.MQTT, ClientID: motionClientID(), User: ev.MQTTUser, Pass: ev.MQTTPassword,
 		OnError: func(err error) { log.Printf("control: home assistant status: %v", err) },
-	}, []string{haDiscoveryPrefix + "/status"}, func(_ string, payload []byte) {
+	}, topics, func(topic string, payload []byte) {
+		if ck, ok := learnedTopic[topic]; ok {
+			if len(payload) > 0 && ctx.Err() == nil {
+				relay.learn(prefix, version, ck[0], ck[1])
+			}
+			return
+		}
 		if strings.EqualFold(strings.TrimSpace(string(payload)), "online") {
-			go announce(ctx, mq, msgs, 30*time.Second)
+			relay.mu.Lock()
+			all := append(haDiscoveryMessages(prefix, version, cams), haLearnedMessages(prefix, version, cams, relay.learned)...)
+			relay.mu.Unlock()
+			go announce(ctx, mq, all, 30*time.Second)
 		}
 	})
 	var battery []config.Camera

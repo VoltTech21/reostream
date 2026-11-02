@@ -136,6 +136,8 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		cam.HoldPicture = existing.HoldPicture
 		cam.MotionTopic = existing.MotionTopic
 		cam.AlwaysOn = existing.AlwaysOn
+		cam.Rotate = existing.Rotate
+		cam.TalkGainDB = existing.TalkGainDB
 		if cam.UID == "" {
 			cam.UID = existing.UID
 		}
@@ -318,6 +320,12 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	if cam.AlwaysOn {
 		b.WriteString("always_on = true\n")
+	}
+	if cam.Rotate != nil {
+		fmt.Fprintf(&b, "rotate = %d\n", *cam.Rotate)
+	}
+	if cam.TalkGainDB != 0 {
+		fmt.Fprintf(&b, "talk_gain_db = %d\n", cam.TalkGainDB)
 	}
 	return b.String()
 }

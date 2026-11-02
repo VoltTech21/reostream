@@ -59,6 +59,10 @@ type eventRelay struct {
 	// can remove what it no longer announces. See hadiscovery.go.
 	mq         *mqtt.Client
 	discovered map[string]bool
+	// learned is the haLearned kinds each camera has reported, camera ->
+	// kinds. It outlives the relay being replaced, so a config change
+	// keeps them announced. See learn.
+	learned map[string]map[string]bool
 }
 
 // motionReported takes one message from a camera's motion_topic: "ON" or
@@ -240,6 +244,9 @@ func (s *Server) syncRelay() {
 	if key == relay.key {
 		return
 	}
+	if len(discovery) > 0 {
+		discovery = append(discovery, haLearnedMessages(prefix, buildVersion(), cfg.Cameras, relay.learned)...)
+	}
 	if relay.cancel != nil {
 		relay.cancel()
 		relay.cancel = nil
@@ -281,6 +288,7 @@ func (s *Server) syncRelay() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	relay.cancel = cancel
+	version := buildVersion()
 	fr := &frigateEvents{base: strings.TrimRight(ev.Frigate, "/"), motion: ev.FrigateMotion, open: map[string]string{}}
 	var pubMu sync.Mutex
 	handle := func(c alarms.Change) {
@@ -294,6 +302,13 @@ func (s *Server) syncRelay() {
 			return
 		}
 		if mq != nil {
+			if c.On && len(discovery) > 0 {
+				if m, ok := relay.learn(prefix, version, c.Camera, c.Kind); ok {
+					if err := mq.Publish(m.Topic, m.Payload, 0, true); err != nil {
+						notes = append(notes, "home assistant: "+err.Error())
+					}
+				}
+			}
 			state := "OFF"
 			if c.On {
 				state = "ON"
@@ -355,11 +370,14 @@ func (s *Server) syncRelay() {
 }
 
 // frigateEvents opens a Frigate event when the camera starts seeing an
-// object and ends it when it stops.
+// object and ends it when it stops. Events are kept by Frigate label, not
+// by the camera's kind: a person whose face the camera also detects is one
+// person event, open while either is seen (fake hardware, 10-30, bug 6).
 type frigateEvents struct {
-	base   string
-	motion bool
-	open   map[string]string // camera/kind -> Frigate event id
+	base    string
+	motion  bool
+	open    map[string]string          // camera/label -> Frigate event id
+	holders map[string]map[string]bool // camera/label -> the kinds seen now
 }
 
 var frigateClient = &http.Client{Timeout: 8 * time.Second}
@@ -385,8 +403,15 @@ func (f *frigateEvents) change(ctx context.Context, c alarms.Change) string {
 	if c.Kind == "motion" && !f.motion {
 		return ""
 	}
-	key := c.Camera + "/" + c.Kind
+	key := c.Camera + "/" + frigateLabel(c.Kind)
 	if c.On {
+		if f.holders == nil {
+			f.holders = map[string]map[string]bool{}
+		}
+		if f.holders[key] == nil {
+			f.holders[key] = map[string]bool{}
+		}
+		f.holders[key][c.Kind] = true
 		if _, ok := f.open[key]; ok {
 			return ""
 		}
@@ -415,24 +440,46 @@ func (f *frigateEvents) change(ctx context.Context, c alarms.Change) string {
 		f.open[key] = out.EventID
 		return ""
 	}
+	delete(f.holders[key], c.Kind)
+	if len(f.holders[key]) > 0 {
+		return ""
+	}
+	delete(f.holders, key)
 	id, ok := f.open[key]
 	if !ok {
 		return ""
 	}
 	delete(f.open, key)
 	body, _ := json.Marshal(map[string]any{"end_time": float64(c.Time.UnixMilli()) / 1000})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, f.base+"/api/events/"+id+"/end", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := frigateClient.Do(req)
-	if err != nil {
-		return frigateFailed(err)
+	for i := 0; ; i++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPut, f.base+"/api/events/"+id+"/end", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := frigateClient.Do(req)
+		if err != nil {
+			return frigateFailed(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return ""
+		}
+		// Frigate saves a new event a moment after answering its create,
+		// and until then ends it with 404 "Event not found", so a short
+		// detection's end can arrive first and leave the event open for
+		// good (#26). Ask again.
+		if resp.StatusCode != http.StatusNotFound || i == len(frigateEndRetries) {
+			return fmt.Sprintf("frigate end: %d", resp.StatusCode)
+		}
+		select {
+		case <-ctx.Done():
+			return "frigate end: " + ctx.Err().Error()
+		case <-time.After(frigateEndRetries[i]):
+		}
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Sprintf("frigate end: %d", resp.StatusCode)
-	}
-	return ""
 }
+
+// frigateEndRetries are the waits before asking Frigate again to end an
+// event it does not have yet. #26's Frigate had it after 3 seconds.
+var frigateEndRetries = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
 
 // eventsPage is Settings > Events.
 type eventsPage struct {

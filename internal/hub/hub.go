@@ -126,6 +126,7 @@ type Hub struct {
 	keyframeAt    time.Time
 	onDemand      bool
 	rotate        int
+	kept          any
 
 	statsMu     sync.Mutex
 	stats       FrameStats
@@ -315,6 +316,20 @@ func (h *Hub) SetHeader(b []byte) {
 	h.mu.Lock()
 	h.header = b
 	h.mu.Unlock()
+}
+
+// Keep returns what the stream feeding this hub kept here, making it with
+// make the first time. The hub outlives each camera connection, so this is
+// where state that must survive a reconnect lives: the MPEG-TS muxer, whose
+// timeline a reader that stays attached has to see continue. Opaque to the
+// hub.
+func (h *Hub) Keep(newKept func() any) any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.kept == nil {
+		h.kept = newKept()
+	}
+	return h.kept
 }
 
 // Header returns the current cached header, or nil if none has been set yet.

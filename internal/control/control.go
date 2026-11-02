@@ -508,6 +508,7 @@ var routePatterns = []string{
 	"GET /settings/events/recent",
 	"POST /settings/nvr",
 	"POST /cameras/{name}/netport",
+	"POST /cameras/{name}/talkgain",
 	"POST /cameras/{name}/ptz",
 	"POST /cameras/{name}/copy",
 	"GET /cameras/{name}/raw",
@@ -607,6 +608,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /cameras/{name}/settings", s.wrap(http.HandlerFunc(s.serveCameraSettingsIndex)))
 	mux.Handle("GET /cameras/{name}/settings/{cat}", s.wrap(http.HandlerFunc(s.serveCameraSettings)))
 	mux.Handle("POST /cameras/{name}/netport", s.wrap(http.HandlerFunc(s.serveApplyNetPort)))
+	mux.Handle("POST /cameras/{name}/talkgain", s.wrap(http.HandlerFunc(s.serveTalkGain)))
 	mux.Handle("POST /cameras/{name}/ptz", s.wrap(http.HandlerFunc(s.serveApplyPtz)))
 	mux.Handle("POST /cameras/{name}/copy", s.wrap(http.HandlerFunc(s.serveCopySection)))
 	mux.Handle("GET /cameras/{name}/raw", s.wrap(http.HandlerFunc(s.serveRawValues)))

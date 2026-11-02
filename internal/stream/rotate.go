@@ -19,10 +19,9 @@ import (
 // Reolink app at login (DeviceInfo needRotate) to turn it back. Re-encoding
 // 16 MP to fix that is out of the question here; instead each keyframe gets
 // an H.265 display orientation SEI (payload type 47), the standard's own way
-// of saying "show this turned". ffmpeg honors it on decode (6.1 and the 7.0
-// Frigate ships both checked), so Frigate's detector, its snapshots and VLC
-// see the picture upright. A stream copied into an MP4 does not carry it as
-// a container rotation, so recordings may still need the recorder told.
+// of saying "show this turned", but only when the user set rotate (see
+// orientation). ffmpeg honors it on decode (6.1 and the 7.0 Frigate ships
+// both checked), browsers and a stream copied into an MP4 do not.
 
 // rotationFor is how many degrees anticlockwise this stream's picture should
 // be shown turned: the camera's rotate setting when there is one, otherwise
@@ -49,6 +48,23 @@ func rotationFor(cfg Config, deviceInfo []byte) (deg int, fromCamera bool, raw s
 		return n, true, raw
 	}
 	return 90, true, raw
+}
+
+// orientation is how a keyframe's picture is turned: deg, degrees
+// anticlockwise, for reostream's own player and snapshots (hub.SetRotate),
+// and mark, whether the outputs also carry the orientation SEI.
+//
+// Only a rotate the user set marks the outputs. Turned on the camera's word
+// alone (needRotate), the mark reached Frigate: its live view and
+// recordings ignore it, but its detect decode honors it and then squeezed
+// the upright picture into the tall detect frame it had sized from the
+// stream (#15). A user who sets rotate also sets a landscape detect size
+// (docs/setup.md).
+func orientation(rotate int, fromCamera, tall bool) (deg int, mark bool) {
+	if rotate == 0 || (fromCamera && !tall) {
+		return 0, false
+	}
+	return rotate, !fromCamera
 }
 
 // orientationSEI is a prefix SEI NAL carrying one display orientation

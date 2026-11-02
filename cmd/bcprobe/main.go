@@ -68,7 +68,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "bcprobe: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "bcprobe: logged in, nonce %s\n", conn.Nonce())
+	fmt.Fprintf(os.Stderr, "bcprobe: logged in, nonce %s, cipher %v\n", conn.Nonce(), conn.Cipher())
 
 	// Always close cleanly: closing is what releases the camera's session.
 	sigs := make(chan os.Signal, 1)

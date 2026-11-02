@@ -100,4 +100,12 @@ document.addEventListener('keydown', function (e) {
 
 {{/* The small "i" after a label: one line of explanation, on hover or tap.
      The page script (layout.html) opens and closes it. */}}
+{{/* playerctl: play/pause and sound for a player whose picture is turned
+     (#15). The turn is a CSS rotation of the <video>, which turns its own
+     controls with it, so those are hidden and these sit on the player box,
+     outside the turned element. snapshot.js (reostreamTurn) shows them. */}}
+{{define "playerctl"}}<div class="live-ctl" hidden>
+<button type="button" class="live-ctl-btn" data-ctl="play" aria-label="Pause" title="Pause"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path class="ic-pause" d="M7 5h3v14H7zM14 5h3v14h-3z"/><path class="ic-play" d="M8 5v14l11-7z" hidden/></svg></button>
+<button type="button" class="live-ctl-btn" data-ctl="sound" aria-label="Sound on" title="Sound on"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="ic-on" d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" hidden/><path class="ic-off" d="M16 9l5 6M21 9l-5 6"/></svg></button>
+</div>{{end}}
 {{define "info"}}<span class="info-wrap"><button type="button" class="info" aria-label="About this setting" aria-expanded="false">i</button><span class="info-pop" role="tooltip">{{.}}</span></span>{{end}}

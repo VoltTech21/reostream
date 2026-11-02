@@ -133,11 +133,9 @@ func (f *fakeCGICamera) addr() string { return strings.TrimPrefix(f.srv.URL, "ht
 // TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera is the
 // end-to-end proof for the floodlight's POST handler: choosing "on" must
 // result in the fake camera's SetWhiteLed actually receiving mode 1, state
-// 1, the pair docs/control.md's table maps to "on". The outcome tops out
-// at accepted, never confirmed: the floodlight's read-back runs on the
-// same session the write went out on, which can answer from state the
-// camera has not committed, so this codebase has no right to claim more
-// than the camera accepted the command. See serveApplyFloodlight.
+// 1, the pair docs/control.md's table maps to "on", and a read-back on a
+// fresh session that reports it is what confirms it. See
+// serveApplyFloodlight.
 func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	cam := newFakeCGICamera(t, 0, 0)
 	cgiDial := func(c Camera) (*cgi.Client, error) {
@@ -148,9 +146,7 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	// The floodlight redirects back to the camera page with a one-line
-	// banner rather than rendering a before/after page. The banner's own
-	// wording still has to stop short of "confirmed": a same-session
-	// read-back is not proof.
+	// banner rather than rendering a before/after page.
 	c := flashBrowser(t)
 	resp := postForm(t, c, ts.URL+"/cameras/cam1/floodlight", url.Values{"option": {"on"}})
 	if resp.StatusCode != http.StatusSeeOther {
@@ -161,8 +157,8 @@ func TestServeApplyFloodlightWritesThroughCGIAndReachesTheCamera(t *testing.T) {
 		t.Fatalf("redirected to %q, want the camera page the floodlight control lives on", got)
 	}
 	banner := takenFlash(t, s, resp)
-	if banner.Outcome != "accepted" {
-		t.Fatalf("banner reports %q, want accepted: %+v", banner.Outcome, banner)
+	if banner.Outcome != "confirmed" {
+		t.Fatalf("banner reports %q, want confirmed: %+v", banner.Outcome, banner)
 	}
 
 	// The actual proof: what the fake camera now holds, not what the

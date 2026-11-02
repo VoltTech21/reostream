@@ -143,3 +143,50 @@ window.reostreamAudio = {
     }
   }
 };
+
+// A stream marked to be shown turned (the Duo 3 and Elite Pro 16 MP main
+// streams arrive sideways, #15): the player box turns its <video> with CSS
+// (the turn-quarter rule in style.css), degrees anticlockwise, so negated
+// for CSS. The element's native controls would turn with it, so a turned
+// player hides them and shows its own play/pause and sound buttons
+// (playerctl in camshell.html), which sit outside the turned element.
+// Returns the turn, 0 to 359.
+window.reostreamTurn = function (box, video, deg) {
+  var turned = (((+deg || 0) % 360) + 360) % 360;
+  box.classList.toggle('turn-quarter', turned === 90 || turned === 270);
+  box.classList.toggle('turn-half', turned === 180);
+  box.style.setProperty('--turn', (-turned) + 'deg');
+  if (turned) video.removeAttribute('controls'); else video.setAttribute('controls', '');
+  var ctl = box.querySelector('.live-ctl');
+  if (!ctl) return turned;
+  ctl.hidden = !turned;
+  if (!ctl.dataset.wired) {
+    ctl.dataset.wired = '1';
+    var play = ctl.querySelector('[data-ctl="play"]'), sound = ctl.querySelector('[data-ctl="sound"]');
+    // The icons are SVG paths, which have no hidden property: the
+    // attribute is what style.css reads.
+    var show = function (el, on) { if (on) el.removeAttribute('hidden'); else el.setAttribute('hidden', ''); };
+    var sync = function () {
+      var paused = video.paused;
+      show(play.querySelector('.ic-pause'), !paused);
+      show(play.querySelector('.ic-play'), paused);
+      play.setAttribute('aria-label', paused ? 'Play' : 'Pause');
+      play.title = play.getAttribute('aria-label');
+      var off = video.muted || video.volume === 0;
+      show(sound.querySelector('.ic-on'), !off);
+      show(sound.querySelector('.ic-off'), off);
+      sound.setAttribute('aria-label', off ? 'Sound on' : 'Sound off');
+      sound.title = sound.getAttribute('aria-label');
+    };
+    play.addEventListener('click', function () {
+      if (video.paused) { var p = video.play(); if (p && p.catch) p.catch(function () {}); } else video.pause();
+    });
+    sound.addEventListener('click', function () {
+      video.muted = !video.muted;
+      if (!video.muted && video.volume === 0) video.volume = 1;
+    });
+    ['play', 'pause', 'playing', 'volumechange', 'emptied'].forEach(function (e) { video.addEventListener(e, sync); });
+    sync();
+  }
+  return turned;
+};

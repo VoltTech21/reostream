@@ -20,6 +20,10 @@ type Camera struct {
 	Channel  int
 	// UID marks a battery camera, reached over UDP.
 	UID string
+	// TalkGainDB is the camera's talk_gain_db.
+	TalkGainDB int
+	// Rotate is the camera's rotate setting; nil leaves it to the camera.
+	Rotate *int
 }
 
 // fleet reads the camera list from reostream's config.
@@ -59,6 +63,7 @@ func loadFleet(configPath string) ([]Camera, error) {
 			Name: c.Name, Address: c.Address,
 			Username: c.Username, Password: c.Password,
 			Channel: c.Channel, UID: c.UID,
+			TalkGainDB: c.TalkGainDB, Rotate: c.Rotate,
 		})
 	}
 	return out, nil

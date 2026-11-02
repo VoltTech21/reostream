@@ -51,6 +51,11 @@ type recPage struct {
 	// waking it to read its card; Card asks for the card too.
 	CardSkipped bool
 	Card        bool
+	// Rotate turns playback like the live player, degrees anticlockwise:
+	// the camera's rotate setting (RotateSet, every clip), or else how its
+	// main stream is turned now, for a clip whose picture is tall (rec.js).
+	Rotate    int
+	RotateSet bool
 }
 
 // clipKind picks one type for a clip from the camera's list ("people,other").
@@ -174,6 +179,7 @@ func (s *Server) serveRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	page := recPage{Title: cam.Name + " recordings", Cam: cam.Name}
 	page.Head = s.camHeadFor(r.Context(), cam, "recordings", "")
+	page.Rotate, page.RotateSet = s.recRotate(cam)
 
 	q := r.URL.Query()
 	page.Card = q.Get("card") == "1"
@@ -358,4 +364,18 @@ func (s *Server) serveRecordingClip(w http.ResponseWriter, r *http.Request) {
 	if frames == 0 && err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	}
+}
+
+// recRotate is how recordings play turned: see recPage.Rotate. A camera
+// that encodes its full resolution sideways (#15) records it that way too.
+func (s *Server) recRotate(cam Camera) (deg int, set bool) {
+	if cam.Rotate != nil {
+		return *cam.Rotate, true
+	}
+	if s.opts.Hubs != nil {
+		if h, ok := s.opts.Hubs.Hub(cam.Name + "/main"); ok {
+			return h.Rotate(), false
+		}
+	}
+	return 0, false
 }

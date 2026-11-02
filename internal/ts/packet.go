@@ -58,7 +58,7 @@ func writePAT(dst []byte, cc byte) []byte {
 		0x00, 0x01, // program_number 1
 		0xE0 | byte(PIDPMT>>8&0x1F), byte(PIDPMT & 0xFF),
 	}
-	return writeSection(dst, PIDPAT, cc, psiSection(0x00, 0x0001, body))
+	return writeSection(dst, PIDPAT, cc, psiSection(0x00, 0x0001, 0, body))
 }
 
 // writePMT builds the program map, declaring the video stream and, when
@@ -66,6 +66,13 @@ func writePAT(dst []byte, cc byte) []byte {
 // The PCR PID is always PIDVideo: there is never a case here with audio and
 // no video, so a second clock reference is never needed.
 func writePMT(dst []byte, cc byte, streamType byte, audioType byte) []byte {
+	return writePMTVersion(dst, cc, 0, streamType, audioType)
+}
+
+// writePMTVersion is writePMT with a version_number: a program map whose
+// content changed (a camera switched codec) has to say so with a new
+// version, or a demuxer keeps the one it has.
+func writePMTVersion(dst []byte, cc, version byte, streamType byte, audioType byte) []byte {
 	body := []byte{
 		0xE0 | byte(PIDVideo>>8&0x1F), byte(PIDVideo & 0xFF), // PCR PID
 		0xF0, 0x00, // program_info_length 0
@@ -80,12 +87,12 @@ func writePMT(dst []byte, cc byte, streamType byte, audioType byte) []byte {
 			0xF0, 0x00, // ES_info_length 0
 		)
 	}
-	return writeSection(dst, PIDPMT, cc, psiSection(0x02, 0x0001, body))
+	return writeSection(dst, PIDPMT, cc, psiSection(0x02, 0x0001, version, body))
 }
 
 // psiSection builds a PSI section: table header, body, and the CRC the format
 // requires over everything preceding it.
-func psiSection(tableID byte, extension uint16, body []byte) []byte {
+func psiSection(tableID byte, extension uint16, version byte, body []byte) []byte {
 	// 5 bytes of section header after the length field, then body, then CRC.
 	sectionLen := 5 + len(body) + 4
 	s := make([]byte, 0, 3+sectionLen)
@@ -93,7 +100,7 @@ func psiSection(tableID byte, extension uint16, body []byte) []byte {
 	// section_syntax_indicator set, reserved bits set, then a 12 bit length.
 	s = append(s, 0xB0|byte(sectionLen>>8&0x0F), byte(sectionLen&0xFF))
 	s = binary.BigEndian.AppendUint16(s, extension)
-	s = append(s, 0xC1) // version 0, current, section 0 of 0
+	s = append(s, 0xC1|(version&0x1F)<<1) // version, current, section 0 of 0
 	s = append(s, 0x00, 0x00)
 	s = append(s, body...)
 	return binary.BigEndian.AppendUint32(s, crc32MPEG(s))

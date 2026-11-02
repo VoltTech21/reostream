@@ -405,6 +405,8 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), readTimeout*2)
 		page.PTZ = s.readPresets(ctx, cam)
 		cancel()
+		ch, _ := page.Support.Channel(cam.Channel)
+		page.PTZ.HasPatrol = page.PTZ.PresetErr == "" && (ch.PTZPatrol != 0 || len(page.PTZ.Presets) >= 2)
 	}
 
 	codecs := s.codecsByCamera()[cam.Name]

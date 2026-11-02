@@ -58,6 +58,16 @@ const pingInterval = 10 * time.Second
 // risking a reconnect storm on a healthy fleet.
 const DefaultMediaTimeout = 30 * time.Second
 
+// streamingIdleTimeout is the idle timeout of a connection once it carries
+// video (baichuan.Conn.SetIdleTimeout). A streaming camera sends a frame
+// every 40 to 100 ms, and a few seconds more covers a slow frame rate at
+// night and a 16 MP keyframe arriving on a busy link (the timeout restarts
+// with every read, not every frame). baichuan.DefaultIdleTimeout, 15 s,
+// stays for a connection that has not started video yet and for control
+// connections; waiting it out after a 5 s link blip cost about 17 s of
+// footage (a link-drop test, 10-30).
+var streamingIdleTimeout = 4 * time.Second
+
 // Config names one camera stream to run.
 // FrameSink receives every frame a stream decodes, before it is muxed.
 //
@@ -79,8 +89,8 @@ type FrameSink interface {
 // camera reconnects, and after a camera reboot the camera's microsecond
 // counter has started over. A clock that is not told treats that as either
 // a stall or a wrap, and a reader sees timestamps that freeze for up to 35
-// minutes or jump forward by up to 71. The HTTP output has no such need
-// because it builds a new muxer per connection.
+// minutes or jump forward by up to 71. The HTTP output keeps its muxer, and
+// so its clock, across connections too, and resumes it itself (tsOutput).
 type ConnectionSink interface {
 	FrameSink
 	Connected()
@@ -212,6 +222,11 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	if err != nil {
 		return fmt.Errorf("stream: %s: dial: %w", cfg.Name, err)
 	}
+	// Only the oldest firmware keeps a cipher other than AES after login,
+	// so say so: it is the first thing to know if such a camera misbehaves.
+	if conn != nil && conn.Cipher() != baichuan.CipherAES {
+		log.Printf("stream: %s: camera negotiated the %v cipher, not AES", cfg.Name, conn.Cipher())
+	}
 	if sub != nil {
 		src = sub
 		// Close leaves the connection to the streams still on it, and
@@ -299,7 +314,16 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	if cs, ok := cfg.Sink.(ConnectionSink); ok {
 		cs.Connected()
 	}
+	out := tsOutputFor(h)
+	out.connected()
 	lastMedia := time.Now()
+
+	// Once video flows on a connection of its own, silence of
+	// streamingIdleTimeout is a dropped session. Not on a recorder's
+	// shared connection, where the other cameras keep it busy and the
+	// ticker below watches this one, and not on a battery camera, whose
+	// UDP session has its own pace (see Config.IdleTimeout).
+	streaming := sub == nil && cfg.UID == ""
 
 	d := baichuan.NewDepacketizer()
 	// waitKey drops P frames after a lost video packet until a keyframe
@@ -378,6 +402,9 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						// behind a watchdog that looks satisfied while
 						// still delivering an unusable stream.
 						lastMedia = time.Now()
+						if !gotVideo && streaming {
+							conn.SetIdleTimeout(streamingIdleTimeout)
+						}
 						gotVideo = true
 						if mux == nil {
 							// The video codec is not known until the first
@@ -399,16 +426,24 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 							// carried; anything else, ADPCM in particular,
 							// is dropped and counted (see DroppedAudio
 							// below), never relabeled.
-							nm, err := ts.NewMuxerWithAudio(f.Codec, "aac")
+							//
+							// The muxer is the hub's, carried over from the
+							// previous connection so its timeline continues
+							// (see tsOutput).
+							nm, changed, err := out.muxer(f.Codec, true, lastMedia)
 							if err != nil {
 								return fmt.Errorf("stream: %s: %w", cfg.Name, err)
 							}
 							mux = nm
+							reportedDroppedAudio = mux.DroppedAudio()
 							// Set the header before the first Publish. A client
 							// that subscribes between Publish and SetHeader gets
 							// no PAT/PMT and stalls until the next table repeat.
-							h.SetHeader(mux.Header())
+							if changed {
+								h.SetHeader(mux.Header())
+							}
 						}
+						out.lastVideo = lastMedia
 						// FrameWithKey returns a fresh slice per call, so it
 						// is safe to hand straight to PublishKey, which does
 						// not copy it. The keyframe flag is what lets a
@@ -418,28 +453,25 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						// Only a stream that really is taller than wide
 						// is turned when the camera asked: its other
 						// resolutions and the sub stream come out upright.
-						// A rotate setting applies as written. The hub
-						// records it for reostream's own player, which
-						// turns the picture itself because browsers ignore
-						// the mark inside the video; that part works for
-						// H.264 too, the mark only exists in H.265.
+						// A rotate setting applies as written. See
+						// orientation for who turns it.
 						if f.Kind == baichuan.FrameIFrame {
 							tall := infoH > infoW
 							if w, h, ok := pictureSize(f.Codec, f.Data); ok {
 								tall = h > w
 							}
-							turned := rotate != 0 && (!rotateFromCamera || tall)
-							if turned {
-								h.SetRotate(rotate)
-							} else {
-								h.SetRotate(0)
-							}
-							if turned && isHEVC(f.Codec) {
-								f.Data = withOrientation(f.Data, rotate)
-								if !rotateLogged {
-									log.Printf("stream: %s/%s: marking the picture to be shown turned %d degrees anticlockwise", cfg.Name, cfg.Stream, rotate)
-									rotateLogged = true
+							deg, mark := orientation(rotate, rotateFromCamera, tall)
+							h.SetRotate(deg)
+							if deg != 0 && !rotateLogged {
+								if mark && isHEVC(f.Codec) {
+									log.Printf("stream: %s/%s: marking the picture to be shown turned %d degrees anticlockwise", cfg.Name, cfg.Stream, deg)
+								} else if !mark {
+									log.Printf("stream: %s/%s: the camera sends this picture sideways; reostream's player shows it turned %d degrees anticlockwise, and recorders get it as the camera sends it (see rotate in docs/setup.md)", cfg.Name, cfg.Stream, deg)
 								}
+								rotateLogged = true
+							}
+							if mark && isHEVC(f.Codec) {
+								f.Data = withOrientation(f.Data, deg)
 							}
 						}
 						// Before muxing, so an RTSP output receives the
@@ -515,7 +547,8 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			// happens anyway. Checking only here, with no separate ticker,
 			// is safe because a connection that stops producing messages
 			// entirely is already bounded by baichuan's own idle-read
-			// timeout (DefaultIdleTimeout, 15s), well under mediaTimeout:
+			// timeout (DefaultIdleTimeout, 15s, or streamingIdleTimeout
+			// once video flows), well under mediaTimeout:
 			// this loop either sees another message within mediaTimeout, or
 			// sees conn.Messages() close first because the idle timeout got
 			// there sooner. See DefaultMediaTimeout for why the two do not

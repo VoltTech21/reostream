@@ -59,6 +59,7 @@ func (s *Server) serveTalk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sess.Close()
+	sess.SetGain(cam.TalkGainDB)
 	say("talking, release to stop")
 
 	for {

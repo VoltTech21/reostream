@@ -1,7 +1,8 @@
 // Package mp4read reads the video track of the MP4 files Reolink cameras
-// write (to their SD card, and over FTP): one plain, non-fragmented moov
-// with an avc1 or hvc1 track. Just enough to hand the samples back as
-// Annex-B access units, parameter sets in front of each keyframe.
+// write (to their SD card, and over FTP): a plain moov with an avc1 or
+// hvc1 track, or a fragmented file (battery doorbells) whose moov is empty
+// and whose samples sit in moof+mdat pairs. Just enough to hand the samples
+// back as Annex-B access units, parameter sets in front of each keyframe.
 package mp4read
 
 import (
@@ -29,6 +30,10 @@ type Track struct {
 	Samples   []Sample
 	nalLen    int
 	f         *os.File
+	// A fragmented file's track_ID and its trex defaults.
+	frag                     bool
+	id                       uint32
+	defDur, defSize, defFlag uint32
 }
 
 // Open reads path's video track. Close the track when done.
@@ -51,6 +56,12 @@ func Open(path string) (*Track, error) {
 	if err := t.parseMoov(moov); err != nil {
 		f.Close()
 		return nil, err
+	}
+	if t.frag {
+		if err := t.readFragments(f, st.Size()); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	return t, nil
 }
@@ -105,36 +116,53 @@ type box struct {
 }
 
 func findTop(r io.ReaderAt, size int64, want string) ([]byte, error) {
+	var found []byte
+	err := eachTop(r, size, func(typ string, off, h, n int64) (bool, error) {
+		if typ != want {
+			return true, nil
+		}
+		found = make([]byte, n-h)
+		_, err := r.ReadAt(found, off+h)
+		return false, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if found == nil {
+		return nil, fmt.Errorf("mp4read: no %s box", want)
+	}
+	return found, nil
+}
+
+// eachTop walks the top-level boxes, handing fn each one's type, offset,
+// header length and total length, until fn says stop.
+func eachTop(r io.ReaderAt, size int64, fn func(typ string, off, h, n int64) (bool, error)) error {
 	var off int64
 	hdr := make([]byte, 16)
 	for off+8 <= size {
 		if _, err := r.ReadAt(hdr[:8], off); err != nil {
-			return nil, err
+			return err
 		}
 		n := int64(binary.BigEndian.Uint32(hdr))
 		typ := string(hdr[4:8])
 		h := int64(8)
 		if n == 1 {
 			if _, err := r.ReadAt(hdr[8:16], off+8); err != nil {
-				return nil, err
+				return err
 			}
 			n, h = int64(binary.BigEndian.Uint64(hdr[8:16])), 16
 		} else if n == 0 {
 			n = size - off
 		}
 		if n < h {
-			return nil, fmt.Errorf("mp4read: bad box %q", typ)
+			return fmt.Errorf("mp4read: bad box %q", typ)
 		}
-		if typ == want {
-			b := make([]byte, n-h)
-			if _, err := r.ReadAt(b, off+h); err != nil {
-				return nil, err
-			}
-			return b, nil
+		if more, err := fn(typ, off, h, n); err != nil || !more {
+			return err
 		}
 		off += n
 	}
-	return nil, fmt.Errorf("mp4read: no %s box", want)
+	return nil
 }
 
 func children(b []byte) []box {
@@ -211,6 +239,28 @@ func (t *Track) parseMoov(moov []byte) error {
 		}
 		if err != nil {
 			return err
+		}
+		if mvex := child(moov, "mvex"); mvex != nil {
+			// Fragmented: the samples are in the moofs, unless the moov
+			// holds some of its own first.
+			t.frag = true
+			if tkhd := child(c.body, "tkhd"); len(tkhd) >= 24 {
+				if tkhd[0] == 1 && len(tkhd) >= 32 {
+					t.id = binary.BigEndian.Uint32(tkhd[20:])
+				} else {
+					t.id = binary.BigEndian.Uint32(tkhd[12:])
+				}
+			}
+			for _, x := range children(mvex) {
+				if x.typ == "trex" && len(x.body) >= 24 && binary.BigEndian.Uint32(x.body[4:]) == t.id {
+					t.defDur = binary.BigEndian.Uint32(x.body[12:])
+					t.defSize = binary.BigEndian.Uint32(x.body[16:])
+					t.defFlag = binary.BigEndian.Uint32(x.body[20:])
+				}
+			}
+			if stsz := child(stbl, "stsz"); len(stsz) < 12 || binary.BigEndian.Uint32(stsz[8:]) == 0 {
+				return nil
+			}
 		}
 		return t.parseTables(stbl)
 	}
@@ -355,4 +405,137 @@ func (t *Track) parseTables(stbl []byte) error {
 		}
 	}
 	return nil
+}
+
+// readFragments appends the video track's samples from each moof, in file
+// order. Each traf names its track; the others (audio) are skipped.
+func (t *Track) readFragments(r io.ReaderAt, size int64) error {
+	u32 := binary.BigEndian.Uint32
+	// Where the next sample starts, in Timescale units, to stretch the last
+	// sample of a fragment over any gap before the next one's tfdt.
+	var next uint64
+	for _, s := range t.Samples {
+		next += uint64(s.Dur)
+	}
+	return eachTop(r, size, func(typ string, off, h, n int64) (bool, error) {
+		if typ != "moof" {
+			return true, nil
+		}
+		moof := make([]byte, n-h)
+		if _, err := r.ReadAt(moof, off+h); err != nil {
+			return false, err
+		}
+		// Without a base offset or default-base-is-moof, a traf's data
+		// follows the previous traf's.
+		dataEnd := off
+		for _, tf := range children(moof) {
+			if tf.typ != "traf" {
+				continue
+			}
+			tfhd := child(tf.body, "tfhd")
+			if len(tfhd) < 8 {
+				return false, errors.New("mp4read: short tfhd")
+			}
+			flags := u32(tfhd) & 0xffffff
+			id := u32(tfhd[4:])
+			p := tfhd[8:]
+			base := dataEnd
+			if flags&0x20000 != 0 {
+				base = off
+			}
+			dur, sz, fl := t.defDur, t.defSize, t.defFlag
+			for _, f := range []struct {
+				bit uint32
+				n   int
+				v   *uint32
+			}{{0x1, 8, nil}, {0x2, 4, nil}, {0x8, 4, &dur}, {0x10, 4, &sz}, {0x20, 4, &fl}} {
+				if flags&f.bit == 0 {
+					continue
+				}
+				if len(p) < f.n {
+					return false, errors.New("mp4read: short tfhd")
+				}
+				if f.bit == 0x1 {
+					base = int64(binary.BigEndian.Uint64(p))
+				} else if f.v != nil {
+					*f.v = u32(p)
+				}
+				p = p[f.n:]
+			}
+			if tfdt := child(tf.body, "tfdt"); id == t.id && len(tfdt) >= 8 {
+				var dt uint64
+				if tfdt[0] == 1 && len(tfdt) >= 12 {
+					dt = binary.BigEndian.Uint64(tfdt[4:])
+				} else {
+					dt = uint64(u32(tfdt[4:]))
+				}
+				if k := len(t.Samples) - 1; k >= 0 && dt > next && dt-next < 1<<31 {
+					t.Samples[k].Dur += uint32(dt - next)
+				}
+				next = dt
+			}
+			cont := base
+			for _, tr := range children(tf.body) {
+				if tr.typ != "trun" {
+					continue
+				}
+				b := tr.body
+				if len(b) < 8 {
+					return false, errors.New("mp4read: short trun")
+				}
+				tflags := u32(b) & 0xffffff
+				count := int(u32(b[4:]))
+				b = b[8:]
+				at := cont
+				if tflags&0x1 != 0 {
+					if len(b) < 4 {
+						return false, errors.New("mp4read: short trun")
+					}
+					at = base + int64(int32(u32(b)))
+					b = b[4:]
+				}
+				first, hasFirst := uint32(0), tflags&0x4 != 0
+				if hasFirst {
+					if len(b) < 4 {
+						return false, errors.New("mp4read: short trun")
+					}
+					first = u32(b)
+					b = b[4:]
+				}
+				for i := 0; i < count; i++ {
+					s := Sample{Offset: at, Size: sz, Dur: dur}
+					sf := fl
+					if i == 0 && hasFirst {
+						sf = first
+					}
+					for _, f := range []struct {
+						bit uint32
+						v   *uint32
+					}{{0x100, &s.Dur}, {0x200, &s.Size}, {0x400, &sf}, {0x800, nil}} {
+						if tflags&f.bit == 0 {
+							continue
+						}
+						if len(b) < 4 {
+							return false, errors.New("mp4read: short trun")
+						}
+						if f.v != nil {
+							*f.v = u32(b)
+						}
+						b = b[4:]
+					}
+					at += int64(s.Size)
+					if id != t.id {
+						continue
+					}
+					// sample_is_non_sync_sample
+					s.Key = sf&0x10000 == 0
+					t.Samples = append(t.Samples, s)
+					next += uint64(s.Dur)
+				}
+				// A later trun without its own offset carries on from here.
+				cont, dataEnd = at, at
+			}
+		}
+		return true, nil
+	})
 }

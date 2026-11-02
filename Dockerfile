@@ -39,7 +39,8 @@ ENV CGO_ENABLED=0
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath \
     -ldflags="-s -w -X github.com/VoltTech21/reostream/internal/control.version=${VERSION}" \
-    -o /out/reostream ./cmd/reostream
+    -o /out/reostream ./cmd/reostream \
+ && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/bcpcap ./cmd/bcpcap
 
 # An empty directory, built here and copied with --chown below, because the
 # distroless run stage has no shell and so no mkdir or chown of its own.
@@ -49,6 +50,9 @@ RUN mkdir -p /out/data
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/reostream /usr/local/bin/reostream
+# Decodes a capture of the Reolink app for a bug report, on the reporter's
+# own machine, so their password never leaves it.
+COPY --from=build /out/bcpcap /usr/local/bin/bcpcap
 
 # /data is created owned by nonroot so the first save (writing config.toml
 # during claim) does not fail. This matters for a bind mount only if the

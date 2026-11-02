@@ -110,7 +110,14 @@ func (s *Server) serveAddFound(w http.ResponseWriter, r *http.Request) {
 		if channel != "" {
 			where = fmt.Sprintf("%s channel %s", addr, channel)
 		}
-		out.Added = append(out.Added, fmt.Sprintf("%s as %s", where, name))
+		added := fmt.Sprintf("%s as %s", where, name)
+		// The scan only looks; the services are switched here, once the
+		// operator has chosen the camera, and only with the box ticked.
+		// A recorder's channel is left alone: the switch is the camera's.
+		if channel == "" && serviceSwitchAsked(r) && s.enableServices(r.Context(), addr, user, pass) {
+			added += " (turned on RTSP, ONVIF and the web page)"
+		}
+		out.Added = append(out.Added, added)
 	}
 	sort.Strings(out.Added)
 	s.renderAddFound(w, r, out)
@@ -159,6 +166,27 @@ func (s *Server) addOneFound(addr, name, user, pass string, streams []string, ui
 	return nil
 }
 
+// enableServices turns on the services the add form's box names, on a
+// camera the operator has just added from the scan, and reports whether
+// any was off. A failure only means they stay as they were, so it is
+// logged, not reported as a failed add.
+func (s *Server) enableServices(ctx context.Context, addr, user, pass string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := baichuan.Dial(ctx, addr, baichuan.Options{Username: user, Password: pass})
+	if err != nil {
+		log.Printf("control: add %s: enable services: %v", addr, err)
+		return false
+	}
+	defer conn.Close()
+	changed, err := conn.EnableServices(ctx, baichuan.UsefulServices)
+	if err != nil {
+		log.Printf("control: add %s: enable services: %v", addr, err)
+		return false
+	}
+	return changed
+}
+
 // checkBatteryLogin logs in to a battery camera over UDP, which wakes it
 // for a moment, so a wrong password is caught here rather than later.
 func (s *Server) checkBatteryLogin(ctx context.Context, addr, uid, user, pass string) error {
@@ -176,7 +204,9 @@ func (s *Server) checkBatteryLogin(ctx context.Context, addr, uid, user, pass st
 		return fmt.Errorf("the camera did not answer: %v", err)
 	}
 	if status != 200 {
-		return fmt.Errorf("wrong password for this camera")
+		// A Home Hub or NVR the camera is paired with sets its own
+		// password on it, so the app's password stops working here.
+		return fmt.Errorf("wrong password for this camera (it answered %d). If it is paired with a Reolink Home Hub or NVR, that keeps its own password for it: add the camera through the hub instead (the hub's address and the camera's channel)", status)
 	}
 	return nil
 }

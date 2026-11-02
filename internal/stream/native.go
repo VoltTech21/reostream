@@ -93,6 +93,8 @@ func runNative(ctx context.Context, cfg Config, h *hub.Hub, path string) (err er
 	go func() { done <- c.Wait() }()
 	timer := time.NewTimer(mediaTimeout)
 	defer timer.Stop()
+	out := tsOutputFor(h)
+	out.connected()
 	var mux *ts.Muxer
 	for {
 		select {
@@ -111,12 +113,17 @@ func runNative(ctx context.Context, cfg Config, h *hub.Hub, path string) (err er
 				// Video only: no audio is carried from the camera's RTSP,
 				// and a declared audio track that never gets any data
 				// leaves a browser's player waiting for it, never playing.
-				nm, err := ts.NewMuxer(f.Codec)
+				nm, changed, err := out.muxer(f.Codec, false, time.Now())
 				if err != nil {
 					return fmt.Errorf("stream: %s: %w", cfg.Name, err)
 				}
 				mux = nm
-				h.SetHeader(mux.Header())
+				if changed {
+					h.SetHeader(mux.Header())
+				}
+			}
+			if f.Kind == baichuan.FrameIFrame || f.Kind == baichuan.FramePFrame {
+				out.lastVideo = time.Now()
 			}
 			if cfg.Sink != nil {
 				cfg.Sink.Frame(f)

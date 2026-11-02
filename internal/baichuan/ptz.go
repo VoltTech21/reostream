@@ -3,33 +3,88 @@ package baichuan
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
-// PtzControl moves the camera: command is left, right, up, down or stop.
+// PtzRefused is a PTZ command the camera answered with a status other than
+// 200: the connection is fine, the camera said no. A TrackMix says 400 to
+// every move while its pan/tilt self check runs, about a minute after it
+// starts and during a calibrate.
+type PtzRefused struct {
+	What   string
+	Status int
+}
+
+func (e *PtzRefused) Error() string {
+	return fmt.Sprintf("baichuan: %s: camera answered status %d", e.What, e.Status)
+}
+
+// PtzControl moves the camera: command is left, right, up, down, a
+// diagonal (leftUp, leftDown, rightUp, rightDown), zoomInc, zoomDec or stop.
 // The document is the one the Reolink desktop client sends (captured
-// 2026-10-22: speed 34 for a move, speed 0 with stop). A move continues
-// until a stop arrives, so a caller that starts one must send the stop.
+// 2026-10-22: speed 34 for a move, speed 0 with stop). A move or a zoom
+// continues until a stop arrives, so a caller that starts one must send the
+// stop. The diagonals and zoom are the firmware's own command words
+// (libnetpublic's _get_ptz_cmd); the fake TrackMix moved both motors for
+// leftUp and zoomed for zoomInc (10-30).
 func (c *Conn) PtzControl(ctx context.Context, command string, speed int) error {
 	switch command {
-	case "left", "right", "up", "down":
+	case "left", "right", "up", "down", "leftUp", "leftDown", "rightUp", "rightDown", "zoomInc", "zoomDec":
 	case "stop":
 		speed = 0
 	default:
 		return fmt.Errorf("baichuan: ptz: unknown command %q", command)
 	}
-	body := fmt.Sprintf("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<body>\n<PtzControl version=\"1.1\">\n<channelId>%d</channelId>\n<speed>%d</speed>\n<command>%s</command>\n</PtzControl>\n</body>\n",
-		c.opts.Channel, speed, command)
+	return c.ptzCommand(ctx, command, speed, "")
+}
+
+// PtzPatrol starts or stops the camera touring its patrol (cruise) id, the
+// presets it was given in the Reolink app. Same message as PtzControl; the
+// fake TrackMix toured its cruise on startPatrol with patrolId 0 (10-30).
+func (c *Conn) PtzPatrol(ctx context.Context, start bool, id int) error {
+	command, speed := "stopPatrol", 0
+	if start {
+		command, speed = "startPatrol", 64
+	}
+	return c.ptzCommand(ctx, command, speed, fmt.Sprintf("<patrolId>%d</patrolId>\n", id))
+}
+
+func (c *Conn) ptzCommand(ctx context.Context, command string, speed int, extra string) error {
+	body := fmt.Sprintf("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<body>\n<PtzControl version=\"1.1\">\n<channelId>%d</channelId>\n<speed>%d</speed>\n<command>%s</command>\n%s</PtzControl>\n</body>\n",
+		c.opts.Channel, speed, command, extra)
 	if err := c.SetConfig(MsgIDPtzControl, []byte(body)); err != nil {
 		return fmt.Errorf("baichuan: ptz %s: %w", command, err)
 	}
 	if _, status, err := awaitReply(ctx, c, MsgIDPtzControl); err != nil {
 		return fmt.Errorf("baichuan: ptz %s: awaiting ack: %w", command, err)
 	} else if status != 0 && status != 200 {
-		return fmt.Errorf("baichuan: ptz %s: camera answered status %d", command, status)
+		return &PtzRefused{What: "ptz " + command, Status: int(status)}
 	}
 	return nil
+}
+
+// PtzZoomRange reads the zoom lens's range and position (message 294). A
+// camera with no zoom answers otherwise, or with an empty range.
+func (c *Conn) PtzZoomRange(ctx context.Context) (lo, hi, cur int, err error) {
+	doc, status, err := ReadConfig(ctx, c, MsgIDZoomFocusGet)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("baichuan: zoom: %w", err)
+	}
+	if status != 200 && status != 0 {
+		return 0, 0, 0, fmt.Errorf("baichuan: zoom: camera answered status %d", status)
+	}
+	var d struct {
+		Min int `xml:"PtzZoomFocus>zoom>minPos"`
+		Max int `xml:"PtzZoomFocus>zoom>maxPos"`
+		Cur int `xml:"PtzZoomFocus>zoom>curPos"`
+	}
+	if err := xml.Unmarshal(doc, &d); err != nil {
+		return 0, 0, 0, fmt.Errorf("baichuan: zoom: %w", err)
+	}
+	return d.Min, d.Max, d.Cur, nil
 }
 
 // Preset is one saved camera position.
@@ -75,7 +130,7 @@ func (c *Conn) PtzPreset(ctx context.Context, command string, id int, name strin
 		return fmt.Errorf("baichuan: preset %s: %w", command, err)
 	}
 	if status != 0 && status != 200 {
-		return fmt.Errorf("baichuan: preset %s: camera answered status %d", command, status)
+		return &PtzRefused{What: "preset " + command, Status: int(status)}
 	}
 	return nil
 }
@@ -145,7 +200,7 @@ func (c *Conn) PtzCalibrateState(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if status != 200 {
-		return 0, fmt.Errorf("baichuan: calibrate state: camera answered status %d", status)
+		return 0, &PtzRefused{What: "calibrate state", Status: int(status)}
 	}
 	var v struct {
 		TestStat int `xml:"PtzAutoTest>testStat"`
@@ -156,21 +211,40 @@ func (c *Conn) PtzCalibrateState(ctx context.Context) (int, error) {
 	return v.TestStat, nil
 }
 
+// calibrateAnswerWait is how long PtzCalibrate waits for an answer to 341
+// before taking silence as a start. A var so a test can shorten it.
+var calibrateAnswerWait = 2 * time.Second
+
 // PtzCalibrate starts the self test, reading its state first as the client
-// does (the camera refuses a cold start).
-func (c *Conn) PtzCalibrate(ctx context.Context) error {
+// does (the camera refuses a cold start). It reports whether the camera
+// answered 341 at all.
+//
+// A TrackMix answers 341 only when the sweep has finished, a minute or so
+// later, and until then answers nothing else on this connection either (fake
+// hardware, 10-30: a 340 on the same session went unanswered while one on a
+// fresh session read testStat 1). Waiting for the answer under the 15 s idle
+// timeout reported every calibrate as refused while the camera calibrated.
+// So a refusal within calibrateAnswerWait is still a refusal, and silence
+// means it started; the caller confirms with PtzCalibrateState on a new
+// connection, and closes this one.
+func (c *Conn) PtzCalibrate(ctx context.Context) (answered bool, err error) {
 	if _, err := c.PtzCalibrateState(ctx); err != nil {
-		return err
+		return false, err
 	}
 	if err := c.RawChannelRequest(MsgIDPtzAutoTest2); err != nil {
-		return err
+		return false, err
 	}
-	_, status, err := awaitReply(ctx, c, MsgIDPtzAutoTest2)
+	wctx, cancel := context.WithTimeout(ctx, calibrateAnswerWait)
+	defer cancel()
+	_, status, err := awaitReply(wctx, c, MsgIDPtzAutoTest2)
 	if err != nil {
-		return err
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return false, nil
+		}
+		return false, err
 	}
 	if status != 200 {
-		return fmt.Errorf("baichuan: calibrate: camera answered status %d", status)
+		return true, &PtzRefused{What: "calibrate", Status: int(status)}
 	}
-	return nil
+	return true, nil
 }

@@ -10,8 +10,9 @@
 
 <div class="rec-grid">
 <div class="rec-main">
-<div class="live-player rec-player" id="rec-player" data-camera="{{.Cam}}">
+<div class="live-player rec-player" id="rec-player" data-camera="{{.Cam}}" data-rotate="{{.Rotate}}"{{if .RotateSet}} data-rotate-set="1"{{end}}>
 <video controls playsinline hidden></video>
+{{template "playerctl"}}
 <p class="live-empty" id="rec-empty">{{if .Clips}}Pick a clip.{{else}}No clips this day.{{end}}</p>
 </div>
 <div class="rec-bar">

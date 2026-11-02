@@ -88,3 +88,27 @@ func TestPictureSizeReadsTheSPS(t *testing.T) {
 		t.Error("found a size in a unit with no SPS")
 	}
 }
+
+// The camera's own word (needRotate, a tall picture) turns the picture in
+// reostream's player only; only a rotate the user set also marks the
+// outputs, because Frigate's detect honors the mark and squeezed the
+// picture into its tall detect frame (#15).
+func TestOnlyASetRotateMarksTheOutputs(t *testing.T) {
+	for _, tc := range []struct {
+		rotate           int
+		fromCamera, tall bool
+		deg              int
+		mark             bool
+	}{
+		{90, true, true, 90, false},  // NT17 Duo 3 at full resolution
+		{90, true, false, 0, false},  // its upright resolutions and sub
+		{90, false, false, 90, true}, // rotate = 90 in the config
+		{270, false, true, 270, true},
+		{0, false, true, 0, false}, // rotate = 0
+	} {
+		deg, mark := orientation(tc.rotate, tc.fromCamera, tc.tall)
+		if deg != tc.deg || mark != tc.mark {
+			t.Errorf("orientation(%d, fromCamera %v, tall %v) = %d, %v; want %d, %v", tc.rotate, tc.fromCamera, tc.tall, deg, mark, tc.deg, tc.mark)
+		}
+	}
+}

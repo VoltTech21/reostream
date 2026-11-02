@@ -15,8 +15,9 @@ var xmlKey = [8]byte{0x1f, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0xff}
 // decrypts. The key is rotated by the header's encryption offset and every
 // byte is additionally XORed with the low byte of that offset.
 //
-// This cipher covers the handshake only: the negotiation reply, the login
-// request and the DeviceInfo reply. Everything after login is AES.
+// This cipher covers the handshake: the negotiation reply, the login
+// request and the DeviceInfo reply. Everything after login is AES, except on
+// firmware that negotiated BC for the whole session (see Cipher).
 func BCCrypt(offset uint32, buf []byte) []byte {
 	out := make([]byte, len(buf))
 	off := int(offset % 8)

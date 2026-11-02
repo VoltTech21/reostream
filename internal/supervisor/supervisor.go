@@ -165,6 +165,11 @@ type Supervisor struct {
 	mu      sync.Mutex
 	entries map[string]*entry
 
+	// talkGain is each camera's talk_gain_db, under mu. Kept apart from
+	// the entries because changing it restarts nothing: a talk session
+	// reads it when it opens (TalkGainDB).
+	talkGain map[string]int
+
 	// reloadMu serializes whole Reload calls, separately from mu. mu guards
 	// the maps for short critical sections, including HTTP status reads, and
 	// must never be held across the blocking stop phase; reloadMu is held
@@ -196,8 +201,10 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 		backoffReset: defaultBackoffReset,
 		hubs:         make(map[string]*hub.Hub),
 		entries:      make(map[string]*entry),
+		talkGain:     make(map[string]int),
 	}
 	for _, cam := range cams {
+		s.talkGain[cam.Name] = cam.TalkGainDB
 		streams, _ := cameraStreams(cam)
 		for _, st := range streams {
 			// One hub per camera+stream name so subscribers pick a specific
@@ -245,6 +252,13 @@ func newEntry(cam config.Camera, st string) *entry {
 		onDemand: onDemand,
 		alwaysOn: onDemand && cam.AlwaysOn,
 	}
+}
+
+// TalkGainDB is the camera's talk_gain_db as the config has it now.
+func (s *Supervisor) TalkGainDB(name string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.talkGain[name]
 }
 
 // CameraConfig returns the connection details the supervisor currently
@@ -482,6 +496,11 @@ func (s *Supervisor) Reload(cams []config.Camera) (ReloadResult, error) {
 	if s.runCtx.Err() != nil {
 		s.mu.Unlock()
 		return ReloadResult{}, ErrShuttingDown
+	}
+
+	s.talkGain = make(map[string]int, len(cams))
+	for _, cam := range cams {
+		s.talkGain[cam.Name] = cam.TalkGainDB
 	}
 
 	var res ReloadResult

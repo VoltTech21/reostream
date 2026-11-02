@@ -18,7 +18,7 @@ Could not read the config: {{.Error}}. Fix it on the
 {{if .URLs.RTSP}}
 <h2>RTSP</h2>
 <p>For Blue Iris, Synology, or anything that takes an RTSP URL.</p>
-<ul>{{range .URLs.RTSP}}<li><code>{{.}}</code></li>{{end}}</ul>
+<ul class="url-list">{{range .URLs.RTSP}}<li><code>{{.}}</code></li>{{end}}</ul>
 {{else}}
 <h2>RTSP</h2>
 <p>No RTSP output is configured. Add an <code>[rtsp]</code> section on the
@@ -29,7 +29,7 @@ Could not read the config: {{.Error}}. Fix it on the
 <div class="card">
 <h2>Anything else</h2>
 <p>These play in VLC and mpv directly.</p>
-<ul>{{range .URLs.HTTP}}<li><code>{{.}}</code></li>{{end}}</ul>
+<ul class="url-list">{{range .URLs.HTTP}}<li><code>{{.}}</code></li>{{end}}</ul>
 </div>
 
 <p><a href="{{base}}/">Watch it work</a></p>

@@ -685,7 +685,7 @@ func (s *Server) serveDiscover(w http.ResponseWriter, r *http.Request) {
 
 	// r.Context(), so closing the page stops the sweep: a person who
 	// clicks and navigates away must not leave 254 dials in flight.
-	ctx, cancel := context.WithTimeout(r.Context(), sweepTimeout)
+	ctx, cancel := context.WithTimeout(withoutServiceSwitch(r.Context()), sweepTimeout)
 	defer cancel()
 
 	// The credentials go straight into the probe and nowhere else. They
@@ -724,7 +724,7 @@ func (s *Server) serveIdentify(w http.ResponseWriter, r *http.Request) {
 	if probe == nil {
 		probe = s.probeGuarded
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout+2*time.Second)
+	ctx, cancel := context.WithTimeout(withoutServiceSwitch(r.Context()), probeTimeout+2*time.Second)
 	defer cancel()
 	rep := probe(ctx, addr, user, r.FormValue("password"))
 	cam := DiscoveredCamera{

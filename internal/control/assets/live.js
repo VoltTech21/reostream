@@ -31,7 +31,7 @@
     });
   });
 
-  // Pan and tilt: hold an arrow to move, let go to stop. A stop is sent on
+  // Pan and tilt: hold an arrow (or a zoom button) to move, let go to stop. A stop is sent on
   // every way a hold can end, because a move runs until the camera hears one.
   var ptz = document.querySelector('.ptz-card');
   if (ptz) {
@@ -82,7 +82,10 @@
       moving = null;
       send('stop');
     };
-    ptz.querySelectorAll('.ptz-btn').forEach(function (b) {
+    ptz.querySelectorAll('.ptz-patrol').forEach(function (b) {
+      b.addEventListener('click', function () { post(base, {command: b.dataset.cmd, patrol: 0}); });
+    });
+    ptz.querySelectorAll('.ptz-btn, .ptz-hold').forEach(function (b) {
       b.addEventListener('pointerdown', function (e) {
         e.preventDefault();
         if (moving) stop();
@@ -197,15 +200,14 @@
     player = null;
   }
 
-  // The stream's rotate mark, in degrees anticlockwise, applied to the
-  // element: a CSS rotation turns clockwise, so it is negated. See the
-  // turn-quarter rule in style.css for why a quarter turn swaps the size.
+  // The stream's rotate mark, in degrees anticlockwise: see reostreamTurn
+  // (snapshot.js). iPhone Safari can only put the video element itself
+  // full screen, where the CSS turn does not apply, so a turned stream
+  // there has no fullscreen button.
   var turned = 0;
   function turn(deg) {
-    turned = ((deg % 360) + 360) % 360;
-    box.classList.toggle('turn-quarter', turned === 90 || turned === 270);
-    box.classList.toggle('turn-half', turned === 180);
-    box.style.setProperty('--turn', (-turned) + 'deg');
+    turned = reostreamTurn(box, video, deg);
+    fullBtn.hidden = !!turned && !box.requestFullscreen && !box.webkitRequestFullscreen;
   }
 
   function pick(opt) {
@@ -246,7 +248,7 @@
   fullBtn.addEventListener('click', function () {
     if (box.requestFullscreen) box.requestFullscreen().catch(function () {});
     else if (box.webkitRequestFullscreen) box.webkitRequestFullscreen();
-    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    else if (video.webkitEnterFullscreen && !turned) video.webkitEnterFullscreen();
   });
 
   // Snapshot: the frame on screen, saved as a PNG. Nothing goes to the camera.

@@ -43,6 +43,8 @@ reach. reostream connects and tells you what it is before anything is saved.</p>
 <label class="field"><span class="label">Username</span><input name="username" value="admin"></label>
 <label class="field"><span class="label">Password</span><input type="password" name="password"></label>
 </div>
+<input type="hidden" name="services" value="0">
+<label class="check"><input type="checkbox" name="services" value="1" checked> Turn on RTSP, ONVIF and the web page on the camera if they are off (needed for a second lens and some settings)</label>
 <button type="submit" class="quiet">Look up this address</button>
 </form>
 <div id="result"></div>

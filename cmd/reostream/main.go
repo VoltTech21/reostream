@@ -665,6 +665,7 @@ func (c cameraTalker) Open(ctx context.Context) (rtsp.TalkSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	sess.SetGain(c.sup.TalkGainDB(c.name))
 	return sess, nil
 }
 

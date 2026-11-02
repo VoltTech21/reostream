@@ -2,7 +2,7 @@
 name: reostream
 # The image this add-on is built from is the reostream release of the same
 # version; see Dockerfile. Bump them together.
-version: "0.2.5"
+version: "0.2.6"
 slug: reostream
 description: Reolink cameras, battery ones included, as RTSP and HTTP streams for Frigate and Home Assistant
 url: https://github.com/VoltTech21/reostream

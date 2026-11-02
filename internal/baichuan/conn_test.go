@@ -378,3 +378,30 @@ func TestLoginFailureIsReportedNotRetried(t *testing.T) {
 		t.Fatalf("camera accepted %d connections, want exactly 1: Dial retried after a login failure", got)
 	}
 }
+
+// SetIdleTimeout takes effect at once, for the read already waiting: a
+// stream shortens it once video flows, and a camera that then goes silent
+// is let go in seconds, not after DefaultIdleTimeout.
+func TestSetIdleTimeoutShortensAReadAlreadyWaiting(t *testing.T) {
+	loginOnly := fixturePrefixLen(t, "h265_s2c.bin", 2)
+	cam := fakecam.NewPartial(t, loadFixture(t, "h265_s2c.bin"), loginOnly)
+	conn, err := Dial(context.Background(), cam.Addr(), Options{Password: ""})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	time.Sleep(100 * time.Millisecond) // readLoop is waiting under the 15 s default
+	start := time.Now()
+	conn.SetIdleTimeout(200 * time.Millisecond)
+	select {
+	case <-conn.Messages():
+	case <-time.After(3 * time.Second):
+		t.Fatal("still waiting after the timeout was shortened")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %s to notice", d)
+	}
+	if err := conn.Err(); err == nil || !strings.Contains(err.Error(), "200ms") {
+		t.Errorf("Err() = %v, want the idle timeout naming 200ms", err)
+	}
+}

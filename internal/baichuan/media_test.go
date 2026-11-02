@@ -249,6 +249,54 @@ func TestPacketsPaddedTogetherInOneMessage(t *testing.T) {
 	}
 }
 
+// The C1 Pro on v2.0.0.x firmware packs packets together the same way,
+// but pads them with leftover bytes instead of zeros: after one I frame the
+// padding was e6 03 e6 6a 15 (#23). Each packet is padded to 8 from its own
+// start, and the padding can be the last thing in a message, with the next
+// packet opening a message that has no extension.
+func TestPacketsPaddedWithJunkTogetherInOneMessage(t *testing.T) {
+	junk := []byte{0xe6, 0x03, 0xe6, 0x6a, 0x15, 0xe6, 0x03}
+	padded := func(pkt []byte) []byte {
+		return append(pkt, junk[:(8-len(pkt)%8)%8]...)
+	}
+	aac := append(append([]byte{}, magicAAC...), 3, 0, 3, 0, 0xff, 0xf1, 0x50)
+	first := padded(buildFrame(magicIFrame, 32, "H264", 1, []byte("keyframe!")))
+	first = append(first, padded(buildFrame(magicPFrame, 24, "H264", 2, []byte("delta")))...)
+	second := padded(aac)
+	second = append(second, padded(buildFrame(magicPFrame, 24, "H264", 3, []byte("delta2")))...)
+
+	d := NewDepacketizer()
+	d.Write(first, true)
+	d.Write(second, false)
+	want := []struct {
+		kind FrameKind
+		data string
+	}{{FrameIFrame, "keyframe!"}, {FramePFrame, "delta"}, {FrameAAC, "\xff\xf1\x50"}, {FramePFrame, "delta2"}}
+	for i, w := range want {
+		f, ok := d.Next()
+		if !ok {
+			t.Fatalf("frame %d: none, want %v (old firmware's junk padding not skipped)", i, w.kind)
+		}
+		if f.Kind != w.kind || string(f.Data) != w.data {
+			t.Fatalf("frame %d: %v %q, want %v %q", i, f.Kind, f.Data, w.kind, w.data)
+		}
+	}
+	if d.Skipped() != 0 {
+		t.Errorf("skipped %d bytes, want 0", d.Skipped())
+	}
+
+	// Bytes that are not followed by a packet are filler, as before: they
+	// wait for the next packet start rather than being skipped into.
+	d.Write([]byte{0xe6, 0x03, 0xe6, 0x6a, 0x15, 0xe6, 0x03, 0x11, 0x22, 0x33, 0x44}, false)
+	if f, ok := d.Next(); ok {
+		t.Fatalf("got %v from filler", f.Kind)
+	}
+	d.Write(buildFrame(magicPFrame, 24, "H264", 4, []byte("after")), true)
+	if f, ok := d.Next(); !ok || string(f.Data) != "after" {
+		t.Fatalf("after filler: %v %q", ok, f.Data)
+	}
+}
+
 // The TrackMix zoom lens is channel 1 and sends its audio as "15wb".
 func TestZoomLensAudioIsAudio(t *testing.T) {
 	d := NewDepacketizer()

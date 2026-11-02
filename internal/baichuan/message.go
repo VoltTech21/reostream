@@ -56,6 +56,53 @@ type Message struct {
 	WholeXML   []byte
 }
 
+// Cipher is how message bodies are sealed once login completes.
+//
+// The camera picks it: the negotiation probe asks for full AES, and the
+// reply names what the camera will actually use in byte 16, with DirReply in
+// byte 17. Current firmware answers 0x12 and the v3.0.0.136 MIPS builds
+// answer 0x02, both AES. Firmware from 2017-2019 (C1 Pro, RLC-410 on
+// v2.0.0.x) answers 0x01 and keeps the BC cipher for the whole session, and
+// a Preview sealed with AES is something it cannot read, so it never answers
+// and the stream looks like a held session (#23).
+type Cipher int
+
+const (
+	// CipherBC is the XOR cipher every session starts with, and the zero
+	// value, so a fresh Reader or Writer can read and write the handshake.
+	CipherBC Cipher = iota
+	CipherAES
+	CipherNone
+)
+
+func (c Cipher) String() string {
+	switch c {
+	case CipherAES:
+		return "aes"
+	case CipherNone:
+		return "none"
+	}
+	return "bc"
+}
+
+// negotiatedCipher reads the cipher a camera chose from its negotiation
+// reply. Anything it does not recognize, including a reply that does not
+// mark byte 17 as DirReply, means AES, which is what every session used
+// before the byte was read, so a camera that says something unexpected keeps
+// working exactly as it did.
+func negotiatedCipher(h Header) Cipher {
+	if h.DirByte != DirReply {
+		return CipherAES
+	}
+	switch h.EncByte {
+	case 0x00:
+		return CipherNone
+	case 0x01:
+		return CipherBC
+	}
+	return CipherAES
+}
+
 // Reader reads framed messages from a stream.
 //
 // The camera sends messages back to back on one TCP connection and a message
@@ -63,6 +110,7 @@ type Message struct {
 // exactly MsgLen bytes.
 type Reader struct {
 	br     *bufio.Reader
+	cipher Cipher
 	aesKey []byte
 }
 
@@ -72,7 +120,11 @@ func NewReader(r io.Reader) *Reader {
 
 // SetAESKey switches body decryption to AES. Call it once login completes:
 // the handshake uses the BC cipher, everything after it uses AES.
-func (r *Reader) SetAESKey(k []byte) { r.aesKey = k }
+func (r *Reader) SetAESKey(k []byte) { r.SetCipher(CipherAES, k) }
+
+// SetCipher switches body decryption to the cipher the camera chose during
+// login. k is the session's AES key and only matters for CipherAES.
+func (r *Reader) SetCipher(c Cipher, k []byte) { r.cipher, r.aesKey = c, k }
 
 // Next reads one complete message, blocking until all of it has arrived.
 func (r *Reader) Next() (Message, error) {
@@ -186,7 +238,7 @@ func parseExtension(x []byte) (extensionHeader, bool) {
 // continuations of a packet an earlier message began. Handling it here keeps
 // Payload always-plaintext for everything above.
 func (r *Reader) decryptPayload(m *Message, ext extensionHeader, ok bool) {
-	if r.aesKey == nil || !ok {
+	if r.cipher != CipherAES || !ok {
 		return
 	}
 	n := ext.EncryptLen
@@ -207,7 +259,10 @@ func (r *Reader) decrypt(h Header, body []byte) []byte {
 	if h.Class == ClassLegacy {
 		return body // legacy bodies are fixed-width binary, not XML
 	}
-	if r.aesKey != nil {
+	switch r.cipher {
+	case CipherNone:
+		return body
+	case CipherAES:
 		if out, err := AESDecrypt(r.aesKey, body); err == nil {
 			return out
 		}
@@ -219,13 +274,17 @@ func (r *Reader) decrypt(h Header, body []byte) []byte {
 // expects at each stage of the session.
 type Writer struct {
 	w      io.Writer
+	cipher Cipher
 	aesKey []byte
 }
 
 func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
 
 // SetAESKey switches body encryption to AES, mirroring Reader.SetAESKey.
-func (w *Writer) SetAESKey(k []byte) { w.aesKey = k }
+func (w *Writer) SetAESKey(k []byte) { w.SetCipher(CipherAES, k) }
+
+// SetCipher switches body encryption to c, mirroring Reader.SetCipher.
+func (w *Writer) SetCipher(c Cipher, k []byte) { w.cipher, w.aesKey = c, k }
 
 // Write frames and sends one message. MsgLen is set from the encrypted body.
 // WriteParts writes a message that has an XML header and a binary section,
@@ -288,24 +347,19 @@ func (w *Writer) seal(h Header, b []byte) ([]byte, error) {
 	if len(b) == 0 || h.Class == ClassLegacy {
 		return b, nil
 	}
-	if w.aesKey != nil {
+	switch w.cipher {
+	case CipherNone:
+		return b, nil
+	case CipherAES:
 		return AESEncrypt(w.aesKey, b)
 	}
 	return BCCrypt(h.EncOffset, b), nil
 }
 
 func (w *Writer) Write(h Header, body []byte) error {
-	out := body
-	if len(body) > 0 && h.Class != ClassLegacy {
-		if w.aesKey != nil {
-			enc, err := AESEncrypt(w.aesKey, body)
-			if err != nil {
-				return err
-			}
-			out = enc
-		} else {
-			out = BCCrypt(h.EncOffset, body)
-		}
+	out, err := w.seal(h, body)
+	if err != nil {
+		return err
 	}
 	h.MsgLen = uint32(len(out))
 	return w.send(h, out)

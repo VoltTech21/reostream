@@ -96,9 +96,9 @@ func (c *Clock) PTS(micros uint32) uint64 {
 // the new counter passes the old one (up to 35 minutes), or a step large
 // enough to count as one, which throws the PTS forward by up to 71 minutes.
 // Both were reproduced against the RTSP output after the fleet's weekly
-// scheduled reboot. The MPEG-TS output never suffered because it builds a
-// new muxer, and so a new Clock, per connection; an RTSP session outlives
-// the camera connection and so its clock must be told.
+// scheduled reboot. Both outputs outlive the camera connection, the RTSP
+// session and the MPEG-TS muxer alike (see Muxer.Resume), so each tells
+// its clock.
 //
 // gap is how long the camera was away, measured by the caller on the wall
 // clock. The timeline continues from the last PTS plus that gap, so a reader
@@ -158,7 +158,12 @@ type AudioClock struct {
 	rate         int    // sample rate those samples are counted at
 	frameSamples uint64 // samples in the most recent frame
 	lastPTS      uint64
+	resync       bool // re-anchor on the next frame; see resume
 }
+
+// resume re-anchors audio to the video timeline at its next frame, after
+// a reconnect (Muxer.Resume), still never stepping backwards.
+func (a *AudioClock) resume() { a.resync = true }
 
 func NewAudioClock() *AudioClock { return &AudioClock{} }
 
@@ -190,10 +195,11 @@ func (a *AudioClock) PTS(videoPTS uint64, adts []byte) uint64 {
 			rate = defaultAudioRate
 		}
 	}
-	if !a.started || rate != a.rate {
+	if !a.started || rate != a.rate || a.resync {
 		a.rate = rate
 		a.reanchor(videoPTS)
 		a.started = true
+		a.resync = false
 	}
 
 	// Computed from the accumulated sample count rather than by adding a

@@ -83,6 +83,13 @@ cameras:
 
 The `#audio=opus` line is optional; it gives browsers and apps audio in live view.
 
+Read RTSP over TCP, which go2rtc and Frigate's presets do. Over UDP a big keyframe is
+hundreds of packets and losing any one damages the frame: a 16 MP Duo 3 main stream read
+over UDP had 101 of 394 frames damaged even on loopback. When recordings show green or gray
+smears, look at go2rtc's `/api/streams`: a reader's `senders` show a `drops` count (left out
+while it is zero), which is where frames dropped on the way to Frigate show up, since
+neither reostream nor Frigate logs them.
+
 Without go2rtc, Frigate can read `http://reostream:8560/driveway.ts` directly.
 
 The streams are open to your network by default. To ask for a login, set `username` and

@@ -9,6 +9,7 @@ The README's Quickstart is enough for most installs. This page covers everything
 | `docker run` (README Quickstart) | Default. amd64 and arm64 images. |
 | `docker compose up` | Same image, using `docker-compose.yml` from this repo. |
 | Static binary | No Docker. linux/amd64 and linux/arm64 on every release. |
+| Mac | Native binary, darwin/arm64 and darwin/amd64 on every release, see below. |
 | systemd | Plain Linux host, with `contrib/reostream.service`. |
 | Unraid | Template in `contrib/unraid/`, see below. |
 | Home Assistant OS | Add-on in `contrib/homeassistant/`, see below. |
@@ -24,6 +25,25 @@ chmod +x reostream
 ```
 
 It prints the same claim token the container does. No runtime dependencies.
+
+### Mac
+
+Run reostream natively on a Mac, not in Docker Desktop. Docker on a Mac runs in a virtual
+machine, and a battery camera's UDP replies never reach a container there, even with host
+networking on (tested 2026-11-02, Docker Desktop 29.3 on macOS 26.4). Wired cameras are
+not affected.
+
+```
+curl -fsSL -o reostream \
+  https://github.com/VoltTech21/reostream/releases/latest/download/reostream-darwin-arm64
+chmod +x reostream
+./reostream -data ./reostream-data
+```
+
+Use `reostream-darwin-amd64` on an Intel Mac. Run it from Terminal: macOS keeps a
+background process that no app vouches for off the local network (Privacy & Security >
+Local Network), so started detached it finds nothing. A file downloaded with a browser
+instead of curl may need `xattr -d com.apple.quarantine reostream` before it runs.
 
 ### systemd
 
@@ -147,7 +167,7 @@ streams = ["main", "sub"]
 rtsp = ["main", "sub"]
 ```
 
-- A camera's `address`, `username` or `password`, the control `password`, or the `[rtsp]` `username` or `password`, starting with `$` is read from that environment variable. A variable that is not set stops startup with an error.
+- A camera's `address`, `username` or `password`, the control `password`, the `[rtsp]` `username` or `password`, or the `[events]` `mqtt_user` or `mqtt_password`, starting with `$` is read from that environment variable. A variable that is not set stops startup with an error.
 - Unknown keys are an error at startup, so a typo fails at boot instead of serving 404s.
 - Saving from the page validates first and reloads only the cameras that changed.
 
@@ -156,13 +176,31 @@ rtsp = ["main", "sub"]
 The 16 MP dual-lens cameras on Reolink's newer board (Duo 3 hardware IPC_NT17NA616MP, Elite
 Pro Floodlight PoE, and the same board sold under other names) send their full 7680x2160
 resolution turned 90 degrees, and tell the app to turn it back. reostream reads that at login
-and marks the stream to be shown turned (an H.265 display orientation note, not a re-encode),
-only while the picture really is taller than it is wide: their lower resolutions and the sub
-stream are untouched. ffmpeg honors the note, so Frigate's detection and snapshots see the
-picture upright.
+and, only while the picture really is taller than it is wide, turns it in its own player, its
+snapshots and its recordings page: their lower resolutions and the sub stream are untouched.
+What reostream serves (RTSP and the `.ts`) is left exactly as the camera sends it, so Frigate,
+go2rtc and VLC see the full resolution sideways, 2160x7680.
 
-`rotate` overrides it for one camera: `rotate = 90`, `180` or `270` (degrees anticlockwise)
-to turn any H.265 camera, or `rotate = 0` to leave a camera alone whatever it says.
+For Frigate, the simplest is to drop the camera's main stream one setting to 4096x1152, which
+these cameras send the right way up, or to keep the full resolution for recording and run
+detect on the sub or extern stream, which are upright.
+
+`rotate` turns a camera on purpose: `rotate = 90`, `180` or `270` (degrees anticlockwise). It
+turns the picture in reostream's player and also writes an H.265 display orientation note
+into the stream (not a re-encode), which ffmpeg, and so Frigate's detect, honors; browsers
+and Frigate's recordings ignore it. Frigate sizes detect from the stream, which is tall, and
+then squeezes the turned picture into it, so with `rotate` set also give detect a landscape
+size in Frigate's config:
+
+```yaml
+cameras:
+  duo3:
+    detect:
+      width: 1280
+      height: 360
+```
+
+`rotate = 0` leaves a camera alone whatever it says.
 
 ### Home Hub and NVR cameras
 
@@ -249,6 +287,15 @@ camera is shown as "accepted", not "confirmed", unless it was read back. See
 
 `listen` without a password refuses to start unless `allow_no_password = true` is set.
 
+### What adding a camera changes on it
+
+When you add a camera by its address, reostream turns on the camera's RTSP, ONVIF and web
+page (HTTP) if they are off: a second lens (the TrackMix zoom) falls back to the camera's
+own RTSP, and some settings (auto tracking, the floodlight, auto return) only exist over
+its web API. It never turns anything off. If you would rather it left the camera alone,
+untick "Turn on RTSP, ONVIF and the web page on the camera" on the add form; you can turn
+them on later under the camera's Settings > Network.
+
 ### Behind a reverse proxy
 
 To serve the page under a path rather than at the root of its own host, set
@@ -271,7 +318,11 @@ the `[rtsp]` section to turn it off.
 Serves `rtsp://host:8561/<cam>`, `<cam>_sub` and `<cam>_extern`, plus `<cam>_zoom` and
 `<cam>_zoom_sub` for a TrackMix's zoom lens (add `"zoom_sub"` to the camera's `streams`
 for the lighter one, 896x512, e.g. for Frigate's detect role). TCP interleaved is the default; UDP is offered, but a lost packet is
-a corrupt frame.
+a corrupt frame. Read over TCP (`-rtsp_transport tcp` for ffmpeg; go2rtc and Frigate's
+presets already do): a 16 MP keyframe is hundreds of UDP packets, and a Duo 3 main stream
+read over UDP had 101 of 394 frames damaged even on loopback. Frames dropped further on,
+between go2rtc and Frigate, show only in go2rtc's `/api/streams`, as a `drops` count on a
+reader's `senders`.
 
 ### A login for the streams
 
@@ -327,6 +378,19 @@ reostream checks the camera's own hardware report before offering it. A camera w
 a speaker never gets a back channel, because one that is sent a talk session anyway
 breaks talk until it reboots. Speech is sent to the camera over its own connection,
 opened when audio starts and closed a few seconds after it stops.
+
+Talk gain turns speech up or down before it reaches the speaker, for the page's hold to
+talk and the back channel alike: -12 to +12 dB in steps of 3, set on the camera's Settings >
+Audio page or as `talk_gain_db` in its block. A limiter holds peaks at -1 dBFS whatever it
+is set to. If talk sounds distorted, turn it down: a tester found full scale overdrove an
+E1 Zoom's speaker, and -12 dB was clear and plenty loud.
+
+```toml
+[[camera]]
+name = "porch"
+# ...
+talk_gain_db = -12
+```
 
 ## Frames feed
 
@@ -392,7 +456,8 @@ With `ha_discovery = true` under `[events]` (or **Add the cameras to Home Assist
 Settings > Events), each camera appears in Home Assistant as a device by itself, through
 MQTT discovery, on the broker Home Assistant uses:
 
-- a wired camera: Motion, Person, Vehicle and Animal binary sensors;
+- a wired camera: Motion, Person, Vehicle and Animal binary sensors, and Face, Other object
+  and Visitor (a doorbell press) from the first time the camera reports one;
 - a battery camera: Motion, and its Battery level as a diagnostic sensor;
 - a camera behind an NVR or Home Hub: Motion, only when it has a `motion_topic`.
 

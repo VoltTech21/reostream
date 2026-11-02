@@ -54,13 +54,22 @@ type Camera struct {
 	// it drains in days. Off by default.
 	AlwaysOn bool `toml:"always_on"`
 
-	// Rotate turns this camera's picture for anything that decodes it:
-	// 90, 180 or 270 degrees anticlockwise, written into the H.265 stream
-	// as a display orientation note rather than re-encoded. Unset, the
-	// camera's own word decides: the 16 MP dual-lens boards encode their
-	// full resolution sideways and say so at login (needRotate). Set it to
-	// 0 to leave a camera's picture alone whatever it says.
+	// Rotate turns this camera's picture: 90, 180 or 270 degrees
+	// anticlockwise, in reostream's own player and written into the H.265
+	// stream as a display orientation note rather than re-encoded, which
+	// ffmpeg (and so Frigate's detect) honors. Unset, the camera's own word
+	// turns it in reostream's player only: the 16 MP dual-lens boards
+	// encode their full resolution sideways and say so at login
+	// (needRotate). Set it to 0 to leave a camera's picture alone whatever
+	// it says.
 	Rotate *int `toml:"rotate"`
+
+	// TalkGainDB turns talk (the page's hold-to-talk and the RTSP back
+	// channel) up or down before it reaches the camera's speaker: -12 to
+	// +12 dB in steps of 3, 0 by default. A limiter holds peaks at -1 dBFS
+	// whatever it is set to. A tester found full scale overdrove an E1
+	// Zoom's speaker and -12 dB was clear and plenty loud.
+	TalkGainDB int `toml:"talk_gain_db"`
 }
 
 // RTSPConfig configures the RTSP listener. Its absence turns RTSP off
@@ -264,6 +273,26 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	if cfg.Events != nil {
+		for _, f := range []struct {
+			key string
+			v   *string
+		}{
+			{"mqtt_user", &cfg.Events.MQTTUser},
+			{"mqtt_password", &cfg.Events.MQTTPassword},
+		} {
+			if !strings.HasPrefix(*f.v, "$") {
+				continue
+			}
+			name := strings.TrimPrefix(*f.v, "$")
+			val, ok := os.LookupEnv(name)
+			if !ok {
+				return nil, fmt.Errorf("config: %s: events: %s: environment variable %s is not set", path, f.key, name)
+			}
+			*f.v = val
+		}
+	}
+
 	if cfg.Control != nil && strings.HasPrefix(cfg.Control.Password, "$") {
 		name := strings.TrimPrefix(cfg.Control.Password, "$")
 		val, ok := os.LookupEnv(name)
@@ -369,6 +398,9 @@ func (c *Config) Validate() error {
 		}
 		if r := cam.Rotate; r != nil && *r != 0 && *r != 90 && *r != 180 && *r != 270 {
 			return fmt.Errorf("camera %q: rotate is %d; use 0, 90, 180 or 270", cam.Name, *r)
+		}
+		if g := cam.TalkGainDB; g < -12 || g > 12 || g%3 != 0 {
+			return fmt.Errorf("camera %q: talk_gain_db is %d; use -12 to 12 in steps of 3", cam.Name, g)
 		}
 		if cam.AlwaysOn && cam.UID == "" {
 			return fmt.Errorf("camera %q: always_on is for a battery camera, one with a uid", cam.Name)

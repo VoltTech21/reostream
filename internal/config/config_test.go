@@ -443,3 +443,36 @@ func TestRTSPLoginNeedsBothHalves(t *testing.T) {
 		t.Fatalf("a whole login was refused: %v", err)
 	}
 }
+
+// A tester kept the broker password out of the file the way the camera
+// passwords are, and the broker answered "not authorised" with nothing to
+// say why.
+func TestMQTTLoginCanComeFromTheEnvironment(t *testing.T) {
+	t.Setenv("TEST_CAM_PASSWORD", "s3cret")
+	t.Setenv("TEST_MQTT_PASSWORD", "brokerpw")
+	p := filepath.Join(t.TempDir(), "c.toml")
+	raw, err := os.ReadFile("testdata/valid.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte("\n[events]\nmqtt = \"127.0.0.1:1883\"\nmqtt_user = \"reostream\"\nmqtt_password = \"$TEST_MQTT_PASSWORD\"\n")...)
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Events.MQTTPassword; got != "brokerpw" {
+		t.Fatalf("mqtt_password = %q, want it resolved from the environment", got)
+	}
+}
+
+func TestTalkGainIsMinusTwelveToTwelveInStepsOfThree(t *testing.T) {
+	for g, ok := range map[int]bool{0: true, -12: true, 12: true, 9: true, -3: true, 5: false, 15: false, -15: false} {
+		c := Config{Cameras: []Camera{{Name: "a", Address: "192.0.2.1", Streams: []string{"main"}, TalkGainDB: g}}}
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("talk_gain_db %d: %v", g, err)
+		}
+	}
+}

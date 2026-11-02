@@ -21,6 +21,7 @@
 <div class="live-player" data-camera="{{.Camera.Name}}"{{if .Battery}} data-battery="1"{{end}}>
 <video muted playsinline controls hidden></video>
 <span class="live-tag" hidden><span class="dot"></span>LIVE</span>
+{{template "playerctl"}}
 <button type="button" class="live-full" id="live-full" aria-label="Fullscreen" title="Fullscreen"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 <p class="live-empty"{{if .Streams}} hidden{{end}}>No video from this camera yet.</p>
 {{if .Battery}}<p class="hint live-battery">Battery camera: awake only while this tab is open, for up to 5 minutes at a time.</p>{{end}}
@@ -32,12 +33,22 @@
 <section class="ptz-card" data-camera="{{.Camera.Name}}">
 <div class="sec-head"><h2>Pan and tilt</h2></div>
 <div class="ptz-pad">
+<button type="button" class="ptz-btn ptz-diag ptz-ul" data-cmd="leftUp" aria-label="Up and left">&#9700;</button>
 <button type="button" class="ptz-btn ptz-up" data-cmd="up" aria-label="Tilt up">&#9650;</button>
+<button type="button" class="ptz-btn ptz-diag ptz-ur" data-cmd="rightUp" aria-label="Up and right">&#9701;</button>
 <button type="button" class="ptz-btn ptz-left" data-cmd="left" aria-label="Pan left">&#9664;</button>
 <span class="ptz-hub"></span>
 <button type="button" class="ptz-btn ptz-right" data-cmd="right" aria-label="Pan right">&#9654;</button>
+<button type="button" class="ptz-btn ptz-diag ptz-dl" data-cmd="leftDown" aria-label="Down and left">&#9699;</button>
 <button type="button" class="ptz-btn ptz-down" data-cmd="down" aria-label="Tilt down">&#9660;</button>
+<button type="button" class="ptz-btn ptz-diag ptz-dr" data-cmd="rightDown" aria-label="Down and right">&#9698;</button>
 </div>
+{{if .PTZ.HasZoom}}<div class="ptz-row"><span>Zoom</span>
+<button type="button" class="ptz-hold" data-cmd="zoomDec" aria-label="Zoom out">&minus;</button>
+<button type="button" class="ptz-hold" data-cmd="zoomInc" aria-label="Zoom in">+</button></div>{{end}}
+{{if .PTZ.HasPatrol}}<div class="ptz-row"><span>Patrol{{template "info" "Tours the patrol set up in the Reolink app, through its saved presets."}}</span>
+<button type="button" class="quiet ptz-patrol" data-cmd="startPatrol">Start</button>
+<button type="button" class="quiet ptz-patrol" data-cmd="stopPatrol">Stop</button></div>{{end}}
 <label class="ptz-speed"><span>Speed</span>
 <input type="range" id="ptz-speed" min="{{.PTZ.SpeedMin}}" max="{{.PTZ.SpeedMax}}" value="{{.PTZ.Speed}}">
 <output for="ptz-speed" class="mono">{{.PTZ.Speed}}</output></label>
@@ -295,6 +306,19 @@
 </form>
 </section>
 {{end}}
+{{if and .Support .Support.CanTalk}}
+<section id="talk-gain">
+<div class="sec-head"><h2>Talk</h2><span class="sec-where">in reostream</span></div>
+<form class="setting autosave" method="post" action="{{base}}/cameras/{{.Camera.Name}}/talkgain">
+<p><span class="tier tier-instant" title="Saves instantly, nothing stops"></span><label for="talk-gain-db">Talk gain</label>{{template "info" "How much reostream turns your voice up or down before the camera's speaker, for hold to talk and a recorder's talk button. Peaks are held at -1 dBFS. Turn it down if talk sounds distorted."}}</p>
+<div class="control">
+<select id="talk-gain-db" name="db">
+{{$g := .Camera.TalkGainDB}}{{range .TalkGains}}<option value="{{.}}"{{if eq . $g}} selected{{end}}>{{if gt . 0}}+{{end}}{{.}} dB</option>{{end}}
+</select>
+</div>
+</form>
+</section>
+{{end}}
 {{$volume := and .Siren.Have (not (.Shows "Speaker"))}}
 {{$alarm := and .Siren.Have .Siren.HaveAlarm (not (.Shows "Siren on detection"))}}
 {{if or $volume $alarm}}
@@ -372,6 +396,11 @@ function netConfirm(f) {
 {{end}}
 
 {{if eq .Cat "ptz"}}
+{{if .PTZ.BehindRecorder}}
+<section>
+<p class="hint">Auto return and calibrate are not available through a recorder: the NVR refuses them. Change them in the Reolink app, or add the camera by its own address.</p>
+</section>
+{{else}}
 <section>
 <div class="sec-head"><h2>Auto return</h2><span class="sec-where">on camera</span></div>
 {{if .PTZ.GuardErr}}<p class="outcome-refused">{{.PTZ.GuardErr}}</p>
@@ -381,7 +410,7 @@ function netConfirm(f) {
 <div class="control">
 <input type="hidden" name="enable" value="{{if .PTZ.Guard.Enable}}1{{else}}0{{end}}">
 <button type="button" class="switch" data-field="enable" aria-pressed="{{if .PTZ.Guard.Enable}}true{{else}}false{{end}}" aria-label="Return to guard position" data-governs="row-guard-timeout"><span class="knob"></span></button>
-{{if not .PTZ.Guard.Valid}}<span class="hint">No guard position set; set one in the Reolink app.</span>{{end}}
+{{if not .PTZ.Guard.Valid}}<span class="hint">No guard position set yet: point the camera, then use Set to where it points now below.</span>{{end}}
 </div>
 </form>
 <form class="setting autosave" id="row-guard-timeout" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/guard">
@@ -404,11 +433,12 @@ function netConfirm(f) {
 <form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/ptz/calibrate" data-nav onsubmit="return confirm('Calibrate? The camera turns through its whole range for a minute or two.')">
 <p><span class="tier tier-untested" title="Not yet verified on a camera"></span>Pan and tilt{{template "info" "The camera turns to both ends of each axis to relearn its limits. Use it if positions or presets have drifted."}}</p>
 <div class="control">
-{{if .PTZ.Calibrated}}<span class="hint">{{.PTZ.Calibrated}}</span>{{end}}
+{{if eq .PTZ.Calibrated "running"}}<span class="hint">Calibrating now</span>{{else if eq .PTZ.Calibrated "done"}}<span class="hint">Last calibration finished</span>{{else if eq .PTZ.Calibrated "not run"}}<span class="hint">Not calibrated yet</span>{{end}}
 <button type="submit">Calibrate</button>
 </div>
 </form>
 </section>
+{{end}}
 {{if .Track.Supported}}
 <section>
 <div class="sec-head"><h2>Auto tracking</h2><span class="sec-where">on camera</span></div>

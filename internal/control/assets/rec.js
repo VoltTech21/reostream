@@ -14,6 +14,16 @@
   var spans = document.querySelectorAll('.rec-span');
   var base = pageBase + '/cameras/' + encodeURIComponent(box.dataset.camera) + '/recordings/clip';
   var stream = 'sub', cur = -1, player = null;
+  // Turned like the live player (#15): every clip when the camera has a
+  // rotate setting, else a clip whose picture is tall, from a camera that
+  // sends its full resolution sideways. See recPage.Rotate.
+  var rotate = +box.dataset.rotate || 0, rotateSet = box.dataset.rotateSet === '1';
+  if (window.reostreamTurn) {
+    reostreamTurn(box, video, rotateSet ? rotate : 0);
+    video.addEventListener('loadedmetadata', function () {
+      reostreamTurn(box, video, rotateSet || video.videoHeight > video.videoWidth ? rotate : 0);
+    });
+  }
   try { stream = localStorage.getItem('reostream.recStream') || 'sub'; } catch (e) {}
 
   function stop() {
@@ -49,6 +59,15 @@
     if (!window.mpegts || !mpegts.isSupported()) { empty.textContent = 'This browser cannot play the clip; use Download.'; return; }
     player = mpegts.createPlayer({type: 'mpegts', isLive: false, url: url(c, false)}, {enableStashBuffer: true});
     player.attachMediaElement(video);
+    // A browser that cannot decode the clip (main is often H.265, which
+    // Chrome on Linux and Firefox lack) says so here instead of loading
+    // forever.
+    var mine = player;
+    player.on(mpegts.Events.ERROR, function () {
+      if (player !== mine) return;
+      empty.textContent = 'This browser cannot play this clip' + (stream === 'main' ? ' in main quality; try Sub, or' : ';') + ' use Download.';
+      empty.hidden = false;
+    });
     player.load();
     video.hidden = false;
     video.addEventListener('playing', function once() { video.removeEventListener('playing', once); empty.hidden = true; });
