@@ -58,6 +58,25 @@ reach. reostream connects and tells you what it is before anything is saved.</p>
 </form>
 </details>
 
+<details class="card" id="battery-add">
+<summary>Add a battery camera by its UID</summary>
+<p class="hint">For a battery camera (Argus and similar) on a network the scan does not reach,
+such as another VLAN. reostream needs host networking for battery cameras either way. It keeps its ports closed and answers by its UID, which is on its sticker
+and in the Reolink app under the camera's info. reostream logs in once to check the password,
+which wakes it for a moment, and adds it with no streams so it can sleep.</p>
+<form id="battery-form">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<label class="field"><span class="label">Address</span><input name="address" placeholder="192.168.1.60" required></label>
+<label class="field"><span class="label">UID</span><input name="uid" placeholder="9527000XXXXXXXXX" required autocomplete="off"></label>
+<label class="field"><span class="label">Call it</span><input name="name" required></label>
+<label class="field"><span class="label">Username</span><input name="username" value="admin"></label>
+<label class="field"><span class="label">Password</span><input type="password" name="password"></label>
+</div>
+<button type="submit" class="quiet">Add this camera</button>
+</form>
+<div id="battery-result"></div>
+</details>
+
 </div>
 
 
@@ -147,6 +166,31 @@ document.addEventListener('click', async function (e) {
   } catch (err) {
     button.disabled = false;
     button.textContent = was;
+  }
+});
+
+// --- A battery camera by its UID -----------------------------------------
+//
+// The same add the scan's cards use: /setup/add-found keyed by address,
+// with the UID marking it a battery camera, so the login check and the
+// streamless add are the scan's own.
+var batteryForm = document.getElementById('battery-form');
+batteryForm.addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var f = batteryForm, addr = f.address.value.trim();
+  var body = new URLSearchParams();
+  body.set('add', addr);
+  body.set('name.' + addr, f.name.value.trim());
+  body.set('uid.' + addr, f.uid.value.trim());
+  body.set('username.' + addr, f.username.value.trim() || 'admin');
+  body.set('password.' + addr, f.password.value);
+  var out = document.getElementById('battery-result');
+  out.innerHTML = '<p class="hint searching"><span class="spinner" aria-hidden="true"></span>Waking the camera to check its login&hellip;</p>';
+  try {
+    var resp = await fetch('{{base}}/setup/add-found', {method: 'POST', body: body});
+    out.innerHTML = await resp.text();
+  } catch (err) {
+    out.innerHTML = '<p class="outcome-refused">reostream could not be reached. Try again.</p>';
   }
 });
 

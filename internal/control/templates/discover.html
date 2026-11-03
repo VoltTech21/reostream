@@ -2,7 +2,7 @@
 {{if .Err}}
 <p class="outcome-refused">{{.Err}}</p>
 {{else}}
-<p class="hint">Scanned {{.Scanned}} addresses on {{.Range}}, including battery cameras.{{if .Configured}} {{.Configured}} answered but are already added, so they were left alone.{{end}}</p>
+<p class="hint">Scanned {{.Scanned}} addresses on {{.Range}}, including battery cameras.{{if .Configured}} {{.Configured}} answered but are already added, so they were left alone.{{end}}{{if .NotReolink}} {{.NotReolink}} other {{if eq .NotReolink 1}}device has{{else}}devices have{{end}} the port open but {{if eq .NotReolink 1}}is not a Reolink{{else}}are not Reolinks{{end}}, so {{if eq .NotReolink 1}}it was{{else}}they were{{end}} left out.{{end}}</p>
 {{if not .Found}}
 <p class="hint">Nothing else answered. A camera has to be powered on and on one of these
 networks to be found; if you know its address, add it by address below.</p>

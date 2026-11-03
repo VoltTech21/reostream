@@ -28,10 +28,8 @@ It prints the same claim token the container does. No runtime dependencies.
 
 ### Mac
 
-Run reostream natively on a Mac, not in Docker Desktop. Docker on a Mac runs in a virtual
-machine, and a battery camera's UDP replies never reach a container there, even with host
-networking on (tested 2026-11-02, Docker Desktop 29.3 on macOS 26.4). Wired cameras are
-not affected.
+Running reostream natively is the simplest way on a Mac. Docker Desktop works too, with
+one extra setting for battery cameras (see below).
 
 ```
 curl -fsSL -o reostream \
@@ -44,6 +42,23 @@ Use `reostream-darwin-amd64` on an Intel Mac. Run it from Terminal: macOS keeps 
 background process that no app vouches for off the local network (Privacy & Security >
 Local Network), so started detached it finds nothing. A file downloaded with a browser
 instead of curl may need `xattr -d com.apple.quarantine reostream` before it runs.
+
+In Docker Desktop, a battery camera answers on a UDP port the container picks, and the
+virtual machine Docker runs in forwards nothing there, even with host networking on. Set
+`REOSTREAM_BATTERY_UDP_PORT` to a free port and publish that port, so the camera is told to
+answer on it:
+
+```
+docker run -d --name reostream --restart unless-stopped \
+  -p 8560:8560 -p 8561:8561 -p 8562:8562 \
+  -p 41000:41000/udp -e REOSTREAM_BATTERY_UDP_PORT=41000 \
+  -v reostream-data:/data ghcr.io/volttech21/reostream:latest
+```
+
+Use bridge networking (no `--network host`) and the same number on both sides of `-p`.
+The setup page's battery camera search does not reach your network from inside Docker
+Desktop, so add battery cameras by address. Wired cameras need none of this. Tested
+2026-11-02 with Docker Desktop 29.3 on macOS 26.4.
 
 ### systemd
 

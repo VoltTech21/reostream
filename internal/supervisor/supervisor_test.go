@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -299,5 +300,18 @@ func TestValidateAcceptsAMotionTopicCamera(t *testing.T) {
 	cams := []config.Camera{{Name: "porch", Address: "192.0.2.10", UID: "95270000TESTUID1", MotionTopic: "reostream/argus/motion"}}
 	if err := s.Validate(cams); err != nil {
 		t.Fatalf("Validate = %v", err)
+	}
+}
+
+// A zoom stream that neither Baichuan nor the camera's RTSP served waits
+// zoomRetry, not the usual backoff: the main stream slots it is waiting on
+// do not free up in seconds, and each attempt is another login.
+func TestZoomUnavailableWaitsLonger(t *testing.T) {
+	err := fmt.Errorf("%w: rtsp: connection refused", stream.ErrZoomUnavailable)
+	if got := retryAfter(err, 4*time.Second); got != zoomRetry {
+		t.Fatalf("retryAfter = %s, want %s", got, zoomRetry)
+	}
+	if got := retryAfter(errors.New("no video frame"), 4*time.Second); got != 4*time.Second {
+		t.Fatalf("retryAfter for another error = %s, want the backoff", got)
 	}
 }

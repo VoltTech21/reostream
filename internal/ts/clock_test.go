@@ -141,3 +141,15 @@ func TestClockResumeAfterAWrapKeepsTheTimeline(t *testing.T) {
 		t.Fatalf("PTS after wrap+resume = %d, want %d", got, before+90000)
 	}
 }
+
+// A camera whose time steps back gets the previous timestamp until it
+// catches up, and each such frame is counted (#25).
+func TestClockCountsHeldFrames(t *testing.T) {
+	c := NewClock()
+	for _, us := range []uint32{1_000_000, 1_050_000, 1_100_000, 900_000, 950_000, 1_150_000} {
+		c.PTS(us)
+	}
+	if got := c.Held(); got != 2 {
+		t.Fatalf("held %d frames, want 2", got)
+	}
+}

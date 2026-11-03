@@ -56,12 +56,12 @@ func TestCheckStillAcceptsAndRejects(t *testing.T) {
 // xor loop would do for inputs that differ only past the first block.
 func TestStretchSeparatesSimilarPasswords(t *testing.T) {
 	// A small iteration count: this is about the construction, not the cost.
-	a := stretch("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", 16)
-	b := stretch("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac", 16)
+	a, _ := stretch("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", 16)
+	b, _ := stretch("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac", 16)
 	if a == b {
 		t.Error("two passwords differing only in their last byte derived to the same key")
 	}
-	if a == stretch("", 16) {
+	if empty, _ := stretch("", 16); a == empty {
 		t.Error("a long password derived to the same key as an empty one")
 	}
 }

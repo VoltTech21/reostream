@@ -562,6 +562,22 @@ var publicRoutes = map[string]bool{
 	"POST /login": true,
 }
 
+// maxBody caps any request body the control page reads. Every form and
+// document it takes is a few kilobytes; talk audio goes over a websocket,
+// which has no body.
+const maxBody = 4 << 20
+
+// limitBodies applies maxBody to every route, so a client cannot make a
+// handler read an unbounded body.
+func limitBodies(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// The claim routes sit outside the auth wrapper on purpose. While the
@@ -694,7 +710,7 @@ func (s *Server) Handler() http.Handler {
 		streamSrv := server.New(s.opts.Hubs).AllowWake()
 		mux.Handle("GET /stream/", s.wrap(http.StripPrefix("/stream", streamSrv.StreamHandler())))
 	}
-	return s.withBase(s.claimGate(mux))
+	return s.withBase(s.claimGate(limitBodies(mux)))
 }
 
 // render writes one page. data must carry a Title, which layout.html uses.

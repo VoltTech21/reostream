@@ -34,8 +34,11 @@ var ErrSilent = errors.New("bcudp: camera stopped answering")
 // Conn is one UDP session with a battery camera, as a reliable ordered byte
 // stream. It implements net.Conn.
 type Conn struct {
-	sock     *net.UDPConn
-	remote   *net.UDPAddr
+	sock   *net.UDPConn
+	remote *net.UDPAddr
+	// reply is the shared socket on the reply port, when one is set: sock
+	// is then reply's, and this session only borrows it. See replyport.go.
+	reply    *replySock
 	cid, did uint32
 	// ip is the address dialled, noted as ours until Close. See Ours.
 	ip net.IP
@@ -77,15 +80,28 @@ func dial(ctx context.Context, host, uid string, ports []int) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	rport, err := replyPort()
+	if err != nil {
+		return nil, err
+	}
 	sock, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		return nil, fmt.Errorf("bcudp: listen: %w", err)
 	}
+	var c *Conn
 	oursOpen(ip)
-	c, err := connect(ctx, sock, ip, uid, ports)
+	if rport == 0 {
+		c, err = connect(ctx, sock, ip, uid, ports)
+		if err != nil {
+			sock.Close()
+		}
+	} else {
+		// sock only carries C2D_C; the session is on the reply port.
+		c, err = connectOnReplyPort(ctx, sock, rport, ip, uid, ports)
+		sock.Close()
+	}
 	if err != nil {
 		oursClosed(ip)
-		sock.Close()
 		return nil, err
 	}
 	c.ip = ip
@@ -113,7 +129,7 @@ func connect(ctx context.Context, sock *net.UDPConn, ip net.IP, uid string, port
 	if !ok {
 		deadline = time.Now().Add(defaultConnectTimeout)
 	}
-	cid := rand.Uint32()&0x7fffffff | 1
+	cid := newCID()
 	port := sock.LocalAddr().(*net.UDPAddr).Port
 	pkt := encodeDiscovery(newTID(), connectXML(uid, port, cid, ""))
 
@@ -163,8 +179,92 @@ func connect(ctx context.Context, sock *net.UDPConn, ip net.IP, uid string, port
 	}
 }
 
+// connectOnReplyPort is connect with the camera told to answer on the reply
+// port: C2D_C goes out from sock, and the session runs on the shared
+// socket.
+func connectOnReplyPort(ctx context.Context, sock *net.UDPConn, rport int, ip net.IP, uid string, ports []int) (*Conn, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(defaultConnectTimeout)
+	}
+	r, err := acquireReply(rport)
+	if err != nil {
+		return nil, err
+	}
+	type reply struct {
+		from *net.UDPAddr
+		rep  *connectRep
+	}
+	got := make(chan reply, 1)
+	cid := newCID()
+	r.onCID(cid, func(b []byte, from *net.UDPAddr) {
+		if magicOf(b) != magicDiscovery {
+			return
+		}
+		_, body, err := decodeDiscovery(b)
+		if err != nil {
+			return
+		}
+		m, err := parseP2P(body)
+		if err != nil || m.ConnectR == nil {
+			return
+		}
+		select {
+		case got <- reply{from, m.ConnectR}:
+		default:
+		}
+	})
+	pkt := encodeDiscovery(newTID(), connectXML(uid, rport, cid, ""))
+	t := time.NewTimer(0)
+	defer t.Stop()
+	timeout := time.NewTimer(time.Until(deadline))
+	defer timeout.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			r.dropCID(cid)
+			r.release()
+			return nil, fmt.Errorf("bcudp: connect %s: %w", ip, ctx.Err())
+		case <-timeout.C:
+			r.dropCID(cid)
+			r.release()
+			return nil, fmt.Errorf("bcudp: connect %s: no answer for uid %s on reply port %d: %w", ip, uid, rport, os.ErrDeadlineExceeded)
+		case <-t.C:
+			for _, p := range ports {
+				_, _ = sock.WriteToUDP(pkt, &net.UDPAddr{IP: ip, Port: p})
+			}
+			t.Reset(resendEvery)
+		case g := <-got:
+			if g.rep.Rsp != 0 {
+				r.dropCID(cid)
+				r.release()
+				return nil, fmt.Errorf("bcudp: connect %s: camera refused (rsp %d)", ip, g.rep.Rsp)
+			}
+			// Through a port forward the reply is from the forward, not
+			// the camera, and the session is sent back the same way.
+			c := newSession(r.sock, g.from, cid, g.rep.DID)
+			c.reply = r
+			r.onCID(cid, func(b []byte, from *net.UDPAddr) {
+				if from.IP.Equal(c.remote.IP) {
+					c.handle(b)
+				}
+			})
+			c.start()
+			return c, nil
+		}
+	}
+}
+
 func newConn(sock *net.UDPConn, remote *net.UDPAddr, cid, did uint32) *Conn {
-	c := &Conn{
+	c := newSession(sock, remote, cid, did)
+	c.wg.Add(1)
+	go c.recvLoop()
+	c.start()
+	return c
+}
+
+func newSession(sock *net.UDPConn, remote *net.UDPAddr, cid, did uint32) *Conn {
+	return &Conn{
 		sock:      sock,
 		remote:    remote,
 		cid:       cid,
@@ -175,10 +275,12 @@ func newConn(sock *net.UDPConn, remote *net.UDPAddr, cid, did uint32) *Conn {
 		wake:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}
-	c.wg.Add(2)
-	go c.recvLoop()
+}
+
+// start runs the session's timers: acks, resends, heartbeats.
+func (c *Conn) start() {
+	c.wg.Add(1)
 	go c.timerLoop()
-	return c
 }
 
 // signalLocked wakes every Read waiting for data.
@@ -420,7 +522,12 @@ func (c *Conn) Close() error {
 			}
 			_, _ = c.sock.WriteToUDP(disc, c.remote)
 		}
-		err = c.sock.Close()
+		if c.reply != nil {
+			c.reply.dropCID(c.cid)
+			c.reply.release()
+		} else {
+			err = c.sock.Close()
+		}
 		c.wg.Wait()
 		if c.ip != nil {
 			oursClosed(c.ip)
@@ -446,3 +553,5 @@ func (c *Conn) SetReadDeadline(t time.Time) error {
 func (c *Conn) SetWriteDeadline(time.Time) error { return nil }
 
 func newTID() uint32 { return rand.Uint32() }
+
+func newCID() uint32 { return rand.Uint32()&0x7fffffff | 1 }

@@ -1,5 +1,8 @@
 {{define "body"}}
 <h1>Point your recorder at these</h1>
+{{if .URLs.Open}}
+<p class="outcome-refused" id="open-streams">These streams have no login, so anyone on your network can watch them{{if .URLs.RTSP}}, and talk through a camera's speaker over RTSP{{end}}. Set a <code>username</code> and <code>password</code> under <code>[rtsp]</code> on the <a href="{{base}}/config">config page</a>; they then guard the RTSP and HTTP streams both, and go in your recorder's URLs.</p>
+{{end}}
 
 {{if .Error}}
 <p class="state-down">

@@ -5,12 +5,11 @@
 package webui
 
 import (
-	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
 	"net/http"
 	"sync"
 	"time"
@@ -157,30 +156,18 @@ const loginKDFIterations = 100_000
 // can be copied and compared without carrying state.
 var loginKDFSalt = []byte("reostream login kdf v1")
 
-// stretch is PBKDF2-HMAC-SHA256 for a single 32 byte block: U1 = HMAC(pw,
-// salt||1), Ui = HMAC(pw, Ui-1), and the output is every U xored together.
-// Written out rather than imported because crypto/pbkdf2 is not in this
-// toolchain's standard library and this is the whole of it for one block --
-// a standard construction over stdlib HMAC, not a new one.
-func stretch(password string, iter int) [32]byte {
-	mac := hmac.New(sha256.New, []byte(password))
-	block := make([]byte, len(loginKDFSalt)+4)
-	copy(block, loginKDFSalt)
-	binary.BigEndian.PutUint32(block[len(loginKDFSalt):], 1)
-	mac.Write(block)
-	u := mac.Sum(nil)
-
+// stretch is PBKDF2-HMAC-SHA256 of password over loginKDFSalt, one 32
+// byte key. It was written out by hand before crypto/pbkdf2 joined the
+// standard library (Go 1.24); TestStretchMatchesStandardPBKDF2 pins that the
+// two give the same bytes.
+func stretch(password string, iter int) ([32]byte, error) {
 	var out [32]byte
-	copy(out[:], u)
-	for i := 1; i < iter; i++ {
-		mac.Reset()
-		mac.Write(u)
-		u = mac.Sum(u[:0])
-		for j := range out {
-			out[j] ^= u[j]
-		}
+	k, err := pbkdf2.Key(sha256.New, password, loginKDFSalt, iter, len(out))
+	if err != nil {
+		return out, err
 	}
-	return out
+	copy(out[:], k)
+	return out, nil
 }
 
 // Check compares a submitted password in constant time, so a wrong one
@@ -199,8 +186,16 @@ func stretch(password string, iter int) [32]byte {
 // it would save the operator ~83ms and halve the attacker's cost per guess,
 // which is the wrong way round.
 func (a Auth) Check(password string) bool {
-	got := stretch(password, loginKDFIterations)
-	want := stretch(a.Password, loginKDFIterations)
+	// A derivation that fails refuses the login: two failed derivations
+	// would otherwise compare equal and let any password in.
+	got, err := stretch(password, loginKDFIterations)
+	if err != nil {
+		return false
+	}
+	want, err := stretch(a.Password, loginKDFIterations)
+	if err != nil {
+		return false
+	}
 	return subtle.ConstantTimeCompare(got[:], want[:]) == 1
 }
 

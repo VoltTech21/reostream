@@ -181,6 +181,9 @@ func (m *Muxer) Carries(codec string, audio bool) bool {
 // sending a codec this muxer cannot carry.
 func (m *Muxer) DroppedAudio() int { return m.droppedAudio }
 
+// HeldFrames is the video clock's Clock.Held.
+func (m *Muxer) HeldFrames() uint64 { return m.clock.Held() }
+
 // Header returns a freshly built PAT and PMT pair, for a client that joins
 // after the stream has already started. internal/hub calls this once, when
 // the codec first becomes known, and caches the result for every future

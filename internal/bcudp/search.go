@@ -59,6 +59,14 @@ func search(ctx context.Context, dst *net.UDPAddr, first bool) ([]Info, error) {
 	sock := pc.(*net.UDPConn)
 	defer sock.Close()
 
+	rport, err := replyPort()
+	if err != nil {
+		return nil, err
+	}
+	if rport != 0 {
+		return searchOnReplyPort(ctx, sock, rport, dst, first)
+	}
+
 	port := sock.LocalAddr().(*net.UDPAddr).Port
 	pkt := encodeDiscovery(newTID(), searchXML(port))
 	var found []Info
@@ -87,24 +95,87 @@ func search(ctx context.Context, dst *net.UDPAddr, first bool) ([]Info, error) {
 			if !dst.IP.Equal(net.IPv4bcast) && !from.IP.Equal(dst.IP) {
 				continue
 			}
-			_, body, err := decodeDiscovery(buf[:n])
-			if err != nil {
-				continue
-			}
-			m, err := parseP2P(body)
-			if err != nil || m.SearchR == nil || seen[from.IP.String()] {
+			info, ok := searchInfo(buf[:n], from.IP)
+			if !ok || seen[from.IP.String()] {
 				continue
 			}
 			seen[from.IP.String()] = true
-			info := Info{Addr: from.IP, UID: m.SearchR.UID, Battery: -1}
-			if m.SearchR.Bat != nil {
-				info.Asleep = true
-				info.Battery = m.SearchR.Bat.Pct
-			}
 			found = append(found, info)
 			if first {
 				return found, nil
 			}
 		}
 	}
+}
+
+// searchOnReplyPort is search with the camera told to answer on the reply port.
+// A reply that came through a port forward is not from the camera's own
+// address, so it is known by the tid it echoes, and a camera asked by
+// address is reported at that address.
+func searchOnReplyPort(ctx context.Context, sock *net.UDPConn, rport int, dst *net.UDPAddr, first bool) ([]Info, error) {
+	r, err := acquireReply(rport)
+	if err != nil {
+		return nil, err
+	}
+	defer r.release()
+	type reply struct {
+		b    []byte
+		from net.IP
+	}
+	got := make(chan reply, 16)
+	tid := newTID()
+	r.onTID(tid, func(b []byte, from *net.UDPAddr) {
+		select {
+		case got <- reply{append([]byte(nil), b...), from.IP}:
+		default:
+		}
+	})
+	defer r.dropTID(tid)
+
+	pkt := encodeDiscovery(tid, searchXML(rport))
+	var found []Info
+	seen := map[string]bool{}
+	t := time.NewTimer(0)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return found, nil
+		case <-t.C:
+			_, _ = sock.WriteToUDP(pkt, dst)
+			t.Reset(resendEvery)
+		case g := <-got:
+			addr := g.from
+			if !dst.IP.Equal(net.IPv4bcast) {
+				addr = dst.IP
+			}
+			info, ok := searchInfo(g.b, addr)
+			if !ok || seen[addr.String()] {
+				continue
+			}
+			seen[addr.String()] = true
+			found = append(found, info)
+			if first {
+				return found, nil
+			}
+		}
+	}
+}
+
+// searchInfo reads a D2C_S_R from the camera at addr.
+func searchInfo(b []byte, addr net.IP) (Info, bool) {
+	_, body, err := decodeDiscovery(b)
+	if err != nil {
+		return Info{}, false
+	}
+	m, err := parseP2P(body)
+	if err != nil || m.SearchR == nil {
+		return Info{}, false
+	}
+	info := Info{Addr: addr, UID: m.SearchR.UID, Battery: -1}
+	if m.SearchR.Bat != nil {
+		info.Asleep = true
+		info.Battery = m.SearchR.Bat.Pct
+	}
+	return info, true
 }

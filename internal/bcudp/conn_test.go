@@ -37,7 +37,11 @@ type fakeCam struct {
 	got      []byte
 	discs    int
 	hbs      int
-	done     chan struct{}
+	// searchedPort and connectedPort are the ports the last C2D_S and
+	// C2D_C named for the reply.
+	searchedPort  int
+	connectedPort int
+	done          chan struct{}
 }
 
 func newFakeCam(t *testing.T) *fakeCam {
@@ -90,12 +94,16 @@ func (f *fakeCam) ctlLoop() {
 		}
 		switch {
 		case m.Search != nil:
+			f.mu.Lock()
+			f.searchedPort = m.Search.Port
+			f.mu.Unlock()
 			reply := []byte("<P2P><D2C_S_R><bat><low>0</low><pct>57</pct><c>0</c><p>0</p></bat><uid>" + testUID + "</uid></D2C_S_R></P2P>")
 			f.ctl.WriteToUDP(encodeDiscovery(tid, reply), &net.UDPAddr{IP: from.IP, Port: m.Search.Port})
 		case m.Connect != nil && m.Connect.UID == testUID:
 			f.mu.Lock()
 			f.client = &net.UDPAddr{IP: from.IP, Port: m.Connect.Port}
 			f.cid = m.Connect.CID
+			f.connectedPort = m.Connect.Port
 			f.mu.Unlock()
 			reply := render("D2C_C_R", tag("rsp", 0), tag("cid", m.Connect.CID), tag("did", f.did))
 			f.sess.WriteToUDP(encodeDiscovery(tid, reply), f.client)

@@ -178,8 +178,16 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	defer h.MarkDisconnected()
 
 	zoom := isZoom(cfg.Stream)
-	if path, ok := nativePaths[cfg.Stream]; ok && (!zoom || zoomOverRTSP(cfg.Name)) {
-		return runNative(ctx, cfg, h, path)
+	if path, ok := nativePaths[cfg.Stream]; ok && (!zoom || zoomOverRTSP(cfg.Name, cfg.Stream)) {
+		err := runNative(ctx, cfg, h, path)
+		if zoom && err != nil && ctx.Err() == nil {
+			// The camera's RTSP did not work either (often it is just
+			// off): try Baichuan again next time rather than staying on
+			// a path that cannot recover.
+			dropZoomOverRTSP(cfg.Name, cfg.Stream)
+			return fmt.Errorf("%w: %w", ErrZoomUnavailable, err)
+		}
+		return err
 	}
 
 	kind, ok := streamKind(cfg.Stream)
@@ -331,6 +339,10 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	waitKey := false
 	var mux *ts.Muxer
 	var reportedDroppedAudio int
+	// Frames whose timestamp was held because the camera's time went
+	// backwards, logged at most once a minute.
+	var reportedHeld uint64
+	var heldLogged time.Time
 	lastPing := time.Now()
 
 	// On a connection of its own, a camera that goes quiet is caught by
@@ -364,12 +376,14 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			if privacyOn(msg) {
 				return fmt.Errorf("stream: %s: %w", cfg.Name, ErrPrivacy)
 			}
-			if zoom && sub == nil && msg.Header.MsgID == baichuan.MsgIDVideo && byte(msg.Header.EncOffset) != zoomChannel {
-				// The channel 0 sub stream that unlocks the zoom: wanted
-				// only for that, so its media goes nowhere.
-				continue
-			}
-			if len(msg.Payload) > 0 {
+			// The channel 0 sub stream that unlocks the zoom is wanted only
+			// for that, so its media goes nowhere. It still falls through
+			// to the ping and no-video checks below: it flows the whole
+			// time, so skipping them with it left a zoom that sent nothing
+			// at 0 fps for 12 minutes (cam-19, 2026-11-03) instead of
+			// trying RTSP after mediaTimeout.
+			unlock := zoom && sub == nil && msg.Header.MsgID == baichuan.MsgIDVideo && byte(msg.Header.EncOffset) != zoomChannel
+			if len(msg.Payload) > 0 && !unlock {
 				d.Write(msg.Payload, msg.StartsPacket)
 				if d.TakeGap() && !waitKey {
 					waitKey = true
@@ -436,6 +450,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 							}
 							mux = nm
 							reportedDroppedAudio = mux.DroppedAudio()
+							reportedHeld = mux.HeldFrames()
 							// Set the header before the first Publish. A client
 							// that subscribes between Publish and SetHeader gets
 							// no PAT/PMT and stalls until the next table repeat.
@@ -522,6 +537,10 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 							h.AddDroppedAudio(dropped - reportedDroppedAudio)
 							reportedDroppedAudio = dropped
 						}
+						if held := mux.HeldFrames(); held > reportedHeld && time.Since(heldLogged) >= time.Minute {
+							log.Printf("stream: %s: the camera's clock went backwards; %d frames kept the previous timestamp, which a player can show as a frozen picture", cfg.Name, held-reportedHeld)
+							reportedHeld, heldLogged = held, time.Now()
+						}
 					}
 				}
 			}
@@ -555,7 +574,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			// need to race each other.
 			if now.Sub(lastMedia) >= mediaTimeout {
 				if zoom && !gotVideo {
-					useZoomOverRTSP(cfg.Name)
+					useZoomOverRTSP(cfg.Name, cfg.Stream)
 				}
 				return fmt.Errorf("stream: %s: no video frame in %s: camera is answering but not sending media (held session)", cfg.Name, mediaTimeout)
 			}
@@ -608,26 +627,43 @@ func startZoom(conn *baichuan.Conn, stream string) error {
 	return conn.StartVideoOn(zoomChannel, zoomChannel, baichuan.StreamMain)
 }
 
-// zoomRTSP records cameras whose zoom never sent video over Baichuan, so
-// later attempts use the camera's own RTSP instead (runNative) for the rest
-// of this process's life.
+// zoomRTSP records the zoom streams (camera name and stream) that never
+// sent video over Baichuan, so the next attempt uses the camera's own RTSP
+// instead (runNative). Each zoom stream has its own mark: zoom_sub failing
+// says nothing about zoom. A mark lasts until the RTSP attempt fails too
+// (dropZoomOverRTSP), so a camera with RTSP off goes back to Baichuan
+// instead of being stuck on a path it cannot serve.
 var (
 	zoomRTSPMu sync.Mutex
-	zoomRTSP   = map[string]bool{}
+	zoomRTSP   = map[[2]string]bool{}
 )
 
-func zoomOverRTSP(name string) bool {
+func zoomOverRTSP(name, stream string) bool {
 	zoomRTSPMu.Lock()
 	defer zoomRTSPMu.Unlock()
-	return zoomRTSP[name]
+	return zoomRTSP[[2]string{name, stream}]
 }
 
-func useZoomOverRTSP(name string) {
+func useZoomOverRTSP(name, stream string) {
 	zoomRTSPMu.Lock()
-	zoomRTSP[name] = true
+	zoomRTSP[[2]string{name, stream}] = true
 	zoomRTSPMu.Unlock()
-	log.Printf("stream: %s: the zoom lens sent no video over Baichuan; using the camera's RTSP from now on", name)
+	log.Printf("stream: %s: the %s stream sent no video over Baichuan; trying the camera's RTSP next", name, stream)
 }
+
+func dropZoomOverRTSP(name, stream string) {
+	zoomRTSPMu.Lock()
+	delete(zoomRTSP, [2]string{name, stream})
+	zoomRTSPMu.Unlock()
+	log.Printf("stream: %s: the camera's RTSP did not serve the %s stream either; trying Baichuan again next", name, stream)
+}
+
+// ErrZoomUnavailable is a zoom stream that sent no video over Baichuan and
+// that the camera's RTSP did not serve either. Usually the camera's main
+// stream slots (two, device-wide) are taken by other clients and its RTSP is
+// off, which retrying every few seconds will not change, so the supervisor
+// waits longer before the next attempt (see retryAfter).
+var ErrZoomUnavailable = errors.New("the camera sent no zoom video over Baichuan or RTSP")
 
 // ErrPrivacy is a stream that cannot run because the camera is in privacy
 // mode (E1 series): it turns down the preview with status 425, or reports

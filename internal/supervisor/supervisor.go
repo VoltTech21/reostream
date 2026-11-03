@@ -864,9 +864,18 @@ func (s *Supervisor) PrivacyOff(camera string) {
 // in fifteen seconds.
 const authRetry = 5 * time.Minute
 
+// zoomRetry is how long a zoom stream waits after neither Baichuan nor the
+// camera's RTSP sent it video. Each attempt is a login and a 30 s wait on a
+// camera whose main stream slots are likely taken, and at the usual backoff
+// that repeats about once a minute for as long as they stay taken.
+const zoomRetry = 2 * time.Minute
+
 func retryAfter(err error, backoff time.Duration) time.Duration {
 	if errors.Is(err, baichuan.ErrUnauthorized) {
 		return authRetry
+	}
+	if errors.Is(err, stream.ErrZoomUnavailable) {
+		return zoomRetry
 	}
 	return backoff
 }

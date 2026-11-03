@@ -2,6 +2,9 @@ package stream
 
 import (
 	"context"
+	"errors"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,5 +149,113 @@ func TestZoomSubDropsTheStreamThatUnlocksIt(t *testing.T) {
 	case <-ch:
 		t.Fatal("channel 0's frames were published as the zoom sub")
 	case <-time.After(1500 * time.Millisecond):
+	}
+}
+
+// The RTSP fallback is per stream: zoom_sub having gone to RTSP must not
+// move zoom there too (2026-11-02, a TrackFlex user's zoom_sub).
+func TestZoomRTSPFallbackIsPerStream(t *testing.T) {
+	useZoomOverRTSP("per-stream-cam", "zoom_sub")
+	t.Cleanup(func() { dropZoomOverRTSP("per-stream-cam", "zoom_sub") })
+	if zoomOverRTSP("per-stream-cam", "zoom") {
+		t.Fatal("zoom_sub's RTSP mark moved zoom to RTSP as well")
+	}
+	if !zoomOverRTSP("per-stream-cam", "zoom_sub") {
+		t.Fatal("zoom_sub's RTSP mark was not kept")
+	}
+
+	// And zoom still runs over Baichuan.
+	cam := fakecam.New(t, retagVideo(t, h265Fixture(t), zoomChannel))
+	h := hub.New(64)
+	ch, cancelSub := h.Subscribe()
+	defer cancelSub()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Run(ctx, Config{Name: "per-stream-cam", Address: cam.Addr(), Stream: "zoom"}, h)
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no zoom frame reached the hub")
+	}
+}
+
+// A zoom stream on RTSP whose RTSP fails (a camera with RTSP off) goes back
+// to Baichuan on the next attempt instead of staying on RTSP for good.
+func TestZoomRTSPFailureGoesBackToBaichuan(t *testing.T) {
+	old := nativeRTSPPort
+	nativeRTSPPort = "1" // nothing listens: the RTSP attempt fails at once
+	t.Cleanup(func() { nativeRTSPPort = old })
+
+	useZoomOverRTSP("rtsp-off-cam", "zoom_sub")
+	t.Cleanup(func() { dropZoomOverRTSP("rtsp-off-cam", "zoom_sub") })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := Run(ctx, Config{Name: "rtsp-off-cam", Address: "127.0.0.1:9", Stream: "zoom_sub"}, hub.New(4))
+	if !errors.Is(err, ErrZoomUnavailable) {
+		t.Fatalf("Run error = %v, want ErrZoomUnavailable so the supervisor waits longer", err)
+	}
+	if zoomOverRTSP("rtsp-off-cam", "zoom_sub") {
+		t.Fatal("zoom_sub stayed on RTSP after its RTSP attempt failed")
+	}
+}
+
+// A zoom that sends nothing while channel 0's sub stream, the one that
+// unlocks it, keeps flowing still times out and is marked for RTSP. The
+// unlock stream used to skip the no-video check along with its media, so on
+// a TrackMix whose main stream slots were taken the zoom sat at 0 fps for
+// 12 minutes (cam-19, 2026-11-03).
+func TestZoomTimesOutWhileTheUnlockStreamFlows(t *testing.T) {
+	fixture := retagVideo(t, h265Fixture(t), 0)
+	loginOnly := messagePrefixLen(t, fixture, 2)
+	// Only whole video messages are repeated, as a camera streaming the
+	// unlock stream sends: anything else would reach the no-video check by
+	// another way, and a capture can end partway through a message, which
+	// repeated would misframe the next pass.
+	var media []byte
+	for off := loginOnly; off+20 <= len(fixture); {
+		h, n, err := baichuan.DecodeHeader(fixture[off:])
+		end := off + n + int(h.MsgLen)
+		if err != nil || end > len(fixture) {
+			break
+		}
+		if h.MsgID == baichuan.MsgIDVideo {
+			media = append(media, fixture[off:end]...)
+		}
+		off = end
+	}
+	cam := fakecam.NewWriter(t, func(conn net.Conn, clientGone <-chan struct{}) {
+		if _, err := conn.Write(fixture[:loginOnly]); err != nil {
+			return
+		}
+		for {
+			select {
+			case <-clientGone:
+				return
+			default:
+			}
+			if _, err := conn.Write(media); err != nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	t.Cleanup(func() { dropZoomOverRTSP("unlock-only-cam", "zoom") })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := Config{Name: "unlock-only-cam", Address: cam.Addr(), Stream: "zoom", MediaTimeout: 300 * time.Millisecond}
+	runDone := make(chan error, 1)
+	go func() { runDone <- Run(ctx, cfg, hub.New(8)) }()
+
+	select {
+	case err := <-runDone:
+		if err == nil || !strings.Contains(err.Error(), "no video frame") {
+			t.Fatalf("Run error = %v, want the no-video condition", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("zoom kept waiting while only the unlock stream flowed")
+	}
+	if !zoomOverRTSP("unlock-only-cam", "zoom") {
+		t.Fatal("zoom was not marked to try the camera's RTSP next")
 	}
 }

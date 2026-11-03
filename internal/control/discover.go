@@ -98,6 +98,9 @@ type DiscoverResult struct {
 	Scanned    int
 	Found      []DiscoveredCamera
 	Configured int
+	// NotReolink counts addresses that had the port open but answered in
+	// another protocol, left out of Found.
+	NotReolink int
 	Err        string
 }
 
@@ -586,7 +589,15 @@ func (s *Server) discover(ctx context.Context, ranges []netip.Prefix, user, pass
 		}(i, host)
 	}
 	wg.Wait()
-	res.Found = append(res.Found, battery...)
+	kept := res.Found[:0]
+	for _, f := range res.Found {
+		if f.Report.NotReolink {
+			res.NotReolink++
+			continue
+		}
+		kept = append(kept, f)
+	}
+	res.Found = append(kept, battery...)
 	return res
 }
 

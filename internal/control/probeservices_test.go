@@ -154,3 +154,22 @@ func TestTheScanAddFormHasTheServicesBoxTicked(t *testing.T) {
 		t.Errorf("no ticked services box on the scan's add form:\n%s", b)
 	}
 }
+
+// A battery camera on a network the scan does not reach (another VLAN)
+// can still be added by its UID, through the scan's own add.
+func TestSetupPageOffersABatteryCameraByUID(t *testing.T) {
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: writeTestConfig(t)})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	resp, err := http.Get(ts.URL + "/setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	for _, want := range []string{`id="battery-form"`, `name="uid"`, `/setup/add-found`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("setup page is missing %s", want)
+		}
+	}
+}

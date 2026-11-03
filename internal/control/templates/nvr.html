@@ -2,6 +2,7 @@
 {{template "appsettings-open" "nvr"}}
 {{if .Error}}<p class="outcome-refused">Could not read the config: {{.Error}}</p>{{end}}
 {{$u := .URLs}}{{$p := .}}
+{{if .URLs.Open}}<p class="outcome-refused" id="open-streams">These streams have no login, so anyone on your network can watch them{{if .URLs.RTSP}}, and talk through a camera's speaker over RTSP{{end}}. Set a <code>username</code> and <code>password</code> under <code>[rtsp]</code> on the <a href="{{base}}/config">config page</a>; they then guard the RTSP and HTTP streams both.</p>{{end}}
 <div class="seg nvr-tabs" role="tablist">
 <button type="button" role="tab" data-tab="frigate">Frigate</button>
 <button type="button" role="tab" data-tab="go2rtc">go2rtc</button>

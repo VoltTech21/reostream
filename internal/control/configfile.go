@@ -359,16 +359,33 @@ func (s *Server) writeAndApply(text string) (string, error) {
 }
 
 func (s *Server) saveConfigPage(w http.ResponseWriter, r *http.Request) {
-	text := r.FormValue("toml")
-	note, err := s.writeAndApply(text)
+	// A post with no config in it saves nothing. FormValue reads a form
+	// that did not parse, or one with no toml field, as "", and writing
+	// that removed every camera (2026-11-03). A body cut off by a size
+	// limit lands here too, as a parse error.
+	if err := r.ParseForm(); err != nil {
+		code := http.StatusBadRequest
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			code = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "config not saved: "+err.Error(), code)
+		return
+	}
+	text, ok := r.PostForm["toml"]
+	if !ok || strings.TrimSpace(text[0]) == "" {
+		http.Error(w, "config not saved: the form had no config in it", http.StatusBadRequest)
+		return
+	}
+	note, err := s.writeAndApply(text[0])
 	if err != nil {
 		s.render(w, r, "config.html", configPage{
 			Path:  s.opts.ConfigPath,
-			Title: "Config", Text: text, Error: err.Error(),
+			Title: "Config", Text: text[0], Error: err.Error(),
 		})
 		return
 	}
 	s.render(w, r, "config.html", configPage{
-		Path: s.opts.ConfigPath, Title: "Config", Text: text, Saved: true, ReloadNote: note,
+		Path: s.opts.ConfigPath, Title: "Config", Text: text[0], Saved: true, ReloadNote: note,
 	})
 }

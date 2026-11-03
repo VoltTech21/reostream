@@ -31,6 +31,11 @@ type RecorderURLs struct {
 	// StreamRTSP is the RTSP output per camera and stream, for the streams
 	// the config serves over RTSP. Empty when RTSP is off.
 	StreamRTSP map[string]map[string]string
+	// Open is set when the streams have no login ([rtsp] username and
+	// password guard both the RTSP and the HTTP stream port): anyone on
+	// the network can watch them, and talk through a camera's speaker
+	// over the RTSP back channel.
+	Open bool
 	// FrigateInputs is each camera's Frigate ffmpeg inputs, in Cameras
 	// order, for the snippet and for updating a pasted config.
 	FrigateInputs map[string][]frigateInput
@@ -98,6 +103,7 @@ func recorderURLs(cfg *config.Config, host string) RecorderURLs {
 	// the host and port they are meant to be.
 	httpBase := net.JoinHostPort(host, portOf(cfg.Listen))
 	out := RecorderURLs{StreamHTTP: make(map[string]map[string]string, len(cfg.Cameras)), StreamRTSP: make(map[string]map[string]string), FrigateInputs: map[string][]frigateInput{}, RTSPHost: host}
+	out.Open = cfg.RTSP == nil || cfg.RTSP.Username == ""
 	login, user, pass := streamLogin(cfg)
 	out.LoginUser, out.LoginPassword = user, pass
 	if cfg.RTSP != nil {

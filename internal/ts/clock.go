@@ -34,6 +34,7 @@ type Clock struct {
 	wraps   uint64 // how many times the camera clock has rolled over
 	lastPTS uint64 // previous return value, for the monotonic clamp below
 	offset  uint64 // where the current camera timeline joins the PTS timeline, see Resume
+	held    uint64 // frames given lastPTS because the camera's time went backwards
 }
 
 func NewClock() *Clock { return &Clock{} }
@@ -81,6 +82,7 @@ func (c *Clock) PTS(micros uint32) uint64 {
 		// is harmless. A timestamp that jumps backwards or forwards reads as
 		// a stall or a seek, which is what an unnoticed underflow or a stray
 		// out of order frame produces if this is emitted uncapped.
+		c.held++
 		return c.lastPTS
 	}
 	c.lastPTS = pts
@@ -122,6 +124,12 @@ func (c *Clock) Resume(gap time.Duration) {
 // nonzero count on a short stream means the wrap detector fired on
 // something that was not a wrap.
 func (c *Clock) Wraps() uint64 { return c.wraps }
+
+// Held reports how many frames were given the previous timestamp because
+// the camera's time went backwards. A run of them shows in a player as a
+// frozen picture while the stream itself looks healthy (#25), so the
+// stream logs it.
+func (c *Clock) Held() uint64 { return c.held }
 
 // LastPTS is the most recent timestamp this clock emitted, which is the
 // stream's current position on the presentation timeline. AudioClock uses it

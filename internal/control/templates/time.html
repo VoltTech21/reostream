@@ -19,7 +19,7 @@
 <section>
 <div class="sec-head"><h2>Clock</h2><span class="sec-where">on camera</span></div>
 {{if .TimeZoneErr}}<p class="outcome-refused">{{.TimeZoneErr}}</p>{{end}}
-{{if .NTPErr}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
+{{if and .NTPErr (ne .NTPErr .TimeZoneErr)}}<p class="outcome-refused">{{.NTPErr}}</p>{{end}}
 
 <form class="setting" method="post" action="{{base}}/cameras/{{.Camera.Name}}/time/sync" data-nav>
 <p><span class="tier tier-instant"></span>Camera clock{{template "info" "Sync now sets the camera's clock from reostream's (this machine's own, kept right by the system)."}}</p>

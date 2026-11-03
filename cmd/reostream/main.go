@@ -68,6 +68,12 @@ const firstRunLogInterval = 60 * time.Second
 // round trip takes.
 const runStopGrace = 5 * time.Second
 
+// headerTimeout bounds how long a client may take to send its request
+// headers, so connections that trickle them in cannot pile up and hold
+// the servers. Only the headers: a stream reader's response runs for as
+// long as it watches.
+const headerTimeout = 10 * time.Second
+
 func main() {
 	configFlag := flag.String("config", "", "path to the TOML config file (default: <data>/config.toml)")
 	dataDir := flag.String("data", "/data", "data directory; holds config.toml when -config is not set")
@@ -369,7 +375,7 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 			return nil, fmt.Errorf("control: listen on %s: %w", controlListen, lerr)
 		}
 		controlLn = ln
-		controlSrv = &http.Server{Addr: controlListen, Handler: ctl.Handler()}
+		controlSrv = &http.Server{Addr: controlListen, Handler: ctl.Handler(), ReadHeaderTimeout: headerTimeout}
 		// RegisterOnShutdown runs at the start of Shutdown, before it waits
 		// on active connections, which is exactly when a live log stream
 		// needs to be released: Shutdown blocks on active connections
@@ -405,7 +411,7 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 	}
 
 	streamHandler := srv.Handler()
-	httpSrv := &http.Server{Addr: listen, Handler: server.RequireLogin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpSrv := &http.Server{Addr: listen, ReadHeaderTimeout: headerTimeout, Handler: server.RequireLogin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if frames.Handles(r) {
 			framesSrv.ServeHTTP(w, r)
 			return

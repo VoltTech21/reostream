@@ -3,6 +3,8 @@ package control
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,5 +361,59 @@ func TestSaveConfigDoesNotFallBackOnAnUnrelatedRenameError(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != validTOML {
 		t.Fatal("a save that should have failed cleanly modified the file")
+	}
+}
+
+// A post with no config in it, or a blank one, is refused and leaves the
+// file alone. Writing the "" that FormValue returns for a missing field
+// emptied the file and removed every camera (2026-11-03).
+func TestSaveConfigPageRefusesAPostWithNoConfig(t *testing.T) {
+	path := writeTestConfig(t, "one")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+	for _, body := range []string{"", "other=1", "toml=+%0A"} {
+		req := httptest.NewRequest("POST", "/config", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %q: status %d, want 400", body, rec.Code)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("body %q changed the config to %q", body, after)
+		}
+	}
+}
+
+// A config post over the body limit is refused as too large, not cut off
+// and saved as whatever arrived.
+func TestSaveConfigPageRefusesAnOversizedPost(t *testing.T) {
+	path := writeTestConfig(t, "one")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, Options{AllowNoPassword: true, ConfigPath: path})
+	body := "toml=" + strings.Repeat("a", maxBody+1)
+	req := httptest.NewRequest("POST", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status %d, want 413", rec.Code)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("an oversized post changed the config")
 	}
 }

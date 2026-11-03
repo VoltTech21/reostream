@@ -140,6 +140,10 @@ type CameraReport struct {
 	// DeviceName is the camera's own name (what the Reolink app shows), so
 	// reostream can take it rather than inventing one.
 	DeviceName string
+	// NotReolink is set when whatever answered on the port replied in
+	// something other than Reolink's protocol: a Google speaker or a
+	// dashcam can have port 9000 open too.
+	NotReolink bool
 }
 
 // RecorderCam is one camera on an NVR or Home Hub channel.
@@ -386,7 +390,7 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 		if strings.Contains(err.Error(), "connection refused") {
 			msg += batteryHint(ctx, addr)
 		}
-		return CameraReport{Err: msg}
+		return CameraReport{Err: msg, NotReolink: errors.Is(err, baichuan.ErrBadMagic) || errors.Is(err, baichuan.ErrShortHeader)}
 	}
 	defer conn.Close()
 
@@ -534,7 +538,7 @@ func batteryHint(ctx context.Context, addr string) string {
 	if err != nil || info.UID == "" {
 		return ""
 	}
-	return fmt.Sprintf(": it is a battery camera (UID %s), which keeps that port closed. Add it from the scan results above, which list battery cameras with their UID", info.UID)
+	return fmt.Sprintf(": it is a battery camera (UID %s), which keeps that port closed. Add it with its UID in the battery camera section below", info.UID)
 }
 
 // describeDialError turns a connection failure into something a first time
