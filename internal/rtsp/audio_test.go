@@ -118,3 +118,39 @@ func TestAudioTimestampIsNotZero(t *testing.T) {
 		t.Error("audio RTP timestamp is 0; it was taken from the frame instead of reconstructed")
 	}
 }
+
+// A sink that states where its audio sits, on its video's clock (the
+// presence stream playing a clip in), has it placed there to the tick, not
+// merely within a second of the picture.
+func TestStatedAudioIsPlacedWhereItSays(t *testing.T) {
+	key := h265Keyframe(t)
+	// AAC-LC, 16 kHz, mono: an 11 byte ADTS frame.
+	adts := []byte{0xff, 0xf1, 0x60, 0x40, 0x01, 0x7f, 0xfc, 0x00, 0xc8, 0x00, 0x07}
+	video := func(micros uint32) baichuan.Frame {
+		return baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H265", Data: key, Micros: micros}
+	}
+	s := &Stream{}
+	s.Frame(video(1_000_000))
+	s.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Data: adts, Micros: 1_000_000})
+	if !s.Ready() {
+		t.Fatal("not ready after a keyframe and an AAC frame")
+	}
+	s.Frame(video(1_000_000))
+	s.Frame(video(1_500_000))
+	at := func(micros uint32) uint32 {
+		ts, _ := s.audioRTPTime(baichuan.Frame{Kind: baichuan.FrameAAC, Data: adts, Micros: micros})
+		return ts
+	}
+	want := func(pts90 uint64) uint32 { return uint32((pts90 + s.epoch90) * 16000 / rtpClockHz) }
+	// 200 ms after the first picture, which is PTS zero.
+	if got := at(1_200_000); got != want(18000) {
+		t.Fatalf("first stated frame at %d, want %d", got, want(18000))
+	}
+	if got := at(1_264_000); got != want(18000+5760) {
+		t.Fatalf("next frame at %d, want %d", got, want(18000+5760))
+	}
+	// Five frames went by uncounted (no reader): back in place.
+	if got := at(1_264_000 + 6*64_000); got != want(18000+7*5760) {
+		t.Fatalf("frame after a gap at %d, want %d", got, want(18000+7*5760))
+	}
+}

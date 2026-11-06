@@ -220,6 +220,16 @@ func isRecorderConn(conn *baichuan.Conn) bool {
 	return strings.TrimSpace(t) != "" && !strings.Contains(t, "ipc")
 }
 
+// secondLens reports a camera, not a recorder, with a zoom lens on
+// channel 1, from its login reply. See baichuan.DeviceInfo.SecondLens.
+func secondLens(conn *baichuan.Conn) bool {
+	if conn == nil {
+		return false
+	}
+	di, err := baichuan.ParseDeviceInfo(conn.DeviceInfo())
+	return err == nil && di.SecondLens()
+}
+
 func (s *Server) noteRecorder(addr string, conn *baichuan.Conn) {
 	rec := isRecorderConn(conn)
 	s.recorderMu.Lock()

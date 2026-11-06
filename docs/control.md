@@ -214,6 +214,61 @@ Mapped by setting each mode over CGI and reading the Baichuan `FloodlightTask` b
 So `on` is mode 1 with state 1, and `motion` is mode 1 with state 0, which is how these
 cameras ship.
 
+## Snapshots
+
+```
+GET /cameras/NAME/snapshot.jpg             # main stream, full resolution
+GET /cameras/NAME/snapshot.jpg?stream=sub  # the small one
+```
+
+A JPEG the camera makes itself, asked for with the snap message (`109`) on a connection of
+its own and passed through as it arrives. Nothing is decoded or re-encoded, so it costs
+reostream nothing and works without ffmpeg. It is not the page's camera button, which
+copies whatever frame the browser is playing, and it is not a battery camera's last
+picture: every request is a new one, sent with `Cache-Control: no-store`.
+
+A battery camera wakes for it. Any session over its UDP transport wakes the camera, the
+snapshot is that session, and closing it afterwards lets the camera sleep again. reostream
+knows the wake was its own, so it does not report it as motion. Anything else watching
+the camera does not know that: a second reostream, or the Reolink app, sees a camera that
+woke by itself.
+
+It lives on the page's port behind the page's login, because each request opens a
+session on the camera, and on a battery camera that is battery. A script signs in once
+and keeps the cookie:
+
+```
+curl -s -c jar --data-urlencode "password=YOUR_PAGE_PASSWORD" http://REOSTREAM:8562/login -o /dev/null
+curl -s -b jar -o snap.jpg http://REOSTREAM:8562/cameras/CAMERA/snapshot.jpg
+```
+
+One snapshot per camera is in flight at a time; a second request waits for the first.
+When the camera cannot give one, the answer is plain text with a status that says why:
+
+| status | meaning |
+|---|---|
+| 404 | no camera by that name in the config |
+| 400 | `stream` is not `main` or `sub` |
+| 502 | could not connect, the camera refused the snap (its status is in the text, for example 405 from a model that does not make stills), or it sent something that is not a JPEG |
+| 503 | the camera timed out moments ago and is not asked again for 30 s (`Retry-After`) |
+| 504 | no answer in time: 8 s to connect to a wired camera, 20 s for a battery camera to wake, then 20 s for the picture |
+
+Measured on 2026-11-03:
+
+| camera | stream | size | resolution | time |
+|---|---|---|---|---|
+| TrackMix PoE | main | 799 KB | 3840x2160 | 0.47 s |
+| TrackMix PoE | sub | 61 KB | 896x512 | 0.39 s |
+| Argus, asleep | main | 468 KB | 3840x2160 | 8.0 s, including the wake |
+
+The Argus picture carried the time it was asked for in its overlay, where its kept still
+was two minutes old, and the camera was asleep again within 35 s.
+
+A camera behind an NVR or Home Hub is asked through the recorder with its channel, which
+the snap message carries. I have not had a recorder answer one yet, so a refusal from it
+is reported as one. A TrackMix's second lens is not offered: the snapshot is the main
+lens.
+
 ## Not covered
 
 - **Battery cameras.** The ids are now known: `574/575` sleep state, `623` sleep status,

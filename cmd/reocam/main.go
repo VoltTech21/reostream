@@ -151,34 +151,17 @@ func snap(conn *baichuan.Conn, args []string) error {
 		return fmt.Errorf("usage: snap [main|sub] FILE")
 	}
 
-	if err := conn.Snap(stream); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	img, name, err := baichuan.TakeSnap(ctx, conn, stream)
+	if err != nil {
 		return err
 	}
 
-	var r baichuan.SnapReader
-	deadline := time.After(20 * time.Second)
-	for !r.Done() {
-		select {
-		case m, ok := <-conn.Messages():
-			if !ok {
-				return fmt.Errorf("connection closed after %d of %d bytes", len(r.Image()), r.Size())
-			}
-			if m.Header.MsgID == baichuan.MsgIDSnap && m.Header.Status() != 0 && m.Header.Status() != 200 {
-				return fmt.Errorf("camera refused the snap with status %d", m.Header.Status())
-			}
-			if err := r.Read(m); err != nil {
-				return err
-			}
-		case <-deadline:
-			return fmt.Errorf("timed out waiting for the image")
-		}
-	}
-
-	img := r.Image()
 	if err := os.WriteFile(out, img, 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("%s: %d bytes from %s\n", out, len(img), r.Name())
+	fmt.Printf("%s: %d bytes from %s\n", out, len(img), name)
 	return nil
 }
 

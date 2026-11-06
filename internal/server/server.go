@@ -2,9 +2,13 @@
 package server
 
 import (
+	"log"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 
+	"github.com/VoltTech21/reostream/internal/config"
 	"github.com/VoltTech21/reostream/internal/hub"
 	"github.com/VoltTech21/reostream/internal/supervisor"
 )
@@ -42,6 +46,11 @@ func StaticHubs(m map[string]*hub.Hub) HubSource { return staticHubs(m) }
 // matching hub, plus /api/status and /metrics for the whole fleet.
 type Server struct {
 	src HubSource
+
+	// hinted marks the paths notFound has logged its hint for, so a
+	// recorder retrying every few seconds logs it once.
+	hintMu sync.Mutex
+	hinted map[string]bool
 
 	// sup is optional; see SetSupervisor in status.go.
 	sup *supervisor.Supervisor
@@ -152,7 +161,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request) {
 	}
 	h, ok := s.lookup(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".ts"))
 	if !ok {
-		http.NotFound(w, r)
+		s.notFound(w, r)
 		return
 	}
 	if h.OnDemand() && !s.wake {
@@ -212,4 +221,57 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// streamPaths maps a hub's stream to the ending of its .ts URL; main is the
+// bare camera name.
+var streamPaths = []struct{ suffix, stream string }{
+	{"_zoom_sub", "zoom_sub"}, {"_zoom", "zoom"}, {"_sub", "sub"}, {"_extern", "extern"}, {"", "main"},
+}
+
+// notFound answers a .ts path no hub serves. When the camera it names has
+// other streams, the 404 says which and how to turn the asked-for one on,
+// as the RTSP 404 has since 11-02: a plain 404 left a recorder pointed at
+// /cam-19_zoom_sub.ts with nothing to go on. The log says it once per path.
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	stem := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".ts")
+	names := s.src.HubNames()
+	for _, sp := range streamPaths {
+		cam, cut := strings.CutSuffix(stem, sp.suffix)
+		if !cut || cam == "" {
+			continue
+		}
+		// Every stream turned on, in the order and words the RTSP 404 uses
+		// (config.ServedList), with the ones the camera has sent nothing
+		// for yet marked so.
+		var served []config.ServedPath
+		for _, other := range config.NotServedOrder {
+			if !slices.Contains(names, cam+"/"+other.Stream) {
+				continue
+			}
+			video := false
+			if h, ok := s.src.Hub(cam + "/" + other.Stream); ok {
+				video = !h.Stats().LastFrameAt.IsZero()
+			}
+			served = append(served, config.ServedPath{Path: "/" + cam + other.Suffix + ".ts", Video: video})
+		}
+		if len(served) == 0 {
+			continue
+		}
+		list := config.ServedList(served)
+		how := config.HowToServe(sp.stream)
+		s.hintMu.Lock()
+		first := !s.hinted[stem]
+		if s.hinted == nil {
+			s.hinted = map[string]bool{}
+		}
+		s.hinted[stem] = true
+		s.hintMu.Unlock()
+		if first {
+			log.Printf("http: /%s.ts is not served; this camera serves %s. %s", stem, list, how)
+		}
+		http.Error(w, "404 page not found: this camera serves "+list+". "+how+".", http.StatusNotFound)
+		return
+	}
+	http.NotFound(w, r)
 }

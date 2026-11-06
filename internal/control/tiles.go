@@ -134,15 +134,7 @@ func (s *Server) tiles() []tile {
 			// Always through this page's own signed-in mount: the public
 			// listener refuses a battery camera's stream.
 			t := tile{Camera: cam, Battery: true, Playable: true, Level: -1, URL: streamPrefix + "/" + cam + "_sub.ts"}
-			if byCam[cam]["sub"] != "" {
-				t.Still = streamPrefix + "/" + cam + "_sub.still.ts"
-				t.StillNote = "Asleep"
-				if h, ok := s.opts.Hubs.Hub(cam + "/sub"); ok {
-					if at := h.KeyframeAt(); !at.IsZero() {
-						t.StillNote += " · last picture " + stillTime(at, time.Now())
-					}
-				}
-			}
+			t.Still, t.StillNote = s.batteryStill(cam, byCam[cam])
 			out = append(out, t)
 			continue
 		}
@@ -161,6 +153,25 @@ func (s *Server) tiles() []tile {
 		out = append(out, t)
 	}
 	return out
+}
+
+// batteryStill is a sleeping battery camera's last picture, served without
+// waking it, and the note that says it is not live ("Asleep · last picture
+// 10:42"). Both are empty before the camera's first wake, when there is no
+// sub stream keyframe to show. The fleet tile and the Live tab show the
+// same one.
+func (s *Server) batteryStill(cam string, codecs map[string]string) (still, note string) {
+	if codecs["sub"] == "" {
+		return "", ""
+	}
+	still = streamPrefix + "/" + cam + "_sub.still.ts"
+	note = "Asleep"
+	if h, ok := s.opts.Hubs.Hub(cam + "/sub"); ok {
+		if at := h.KeyframeAt(); !at.IsZero() {
+			note += " · last picture " + stillTime(at, time.Now())
+		}
+	}
+	return still, note
 }
 
 // onDemand reports a battery camera, whose streams run only while watched.

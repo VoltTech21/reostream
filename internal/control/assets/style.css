@@ -1364,6 +1364,14 @@ a.camaddr:hover { color: var(--accent); text-decoration: underline; }
   transform: translate(-50%, -50%) rotate(var(--turn));
 }
 .live-player.turn-half video { transform: rotate(180deg); }
+/* A sleeping battery camera's last picture and its wake button, over the
+   whole player until it is pressed (camera.html). */
+.live-player .live-still { position: absolute; inset: 0; aspect-ratio: auto; z-index: 1; }
+.live-player .live-still img { background: #000; }
+.live-player .live-still[hidden] { display: none; }
+.live-player .live-still .play-btn { width: 52px; height: 52px; font-size: 18px; }
+/* A sleeping battery camera's one line about play, under the player. */
+.live-main > .live-battery { margin-top: 8px; }
 .live-tag {
   /* Bottom left: the top-left corner is where Reolink cameras draw their
      own date and time, and the badge covered it (click test, 10-27). */

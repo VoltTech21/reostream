@@ -115,6 +115,10 @@ type StreamReport struct {
 	Absent       bool
 	Undetermined bool
 	Reason       string
+	// Note says what a stream is when its picture was not read: the zoom
+	// lens's streams are offered from the login reply alone (see
+	// baichuan.DeviceInfo.SecondLens), and Codec is then empty.
+	Note string
 }
 
 // CameraReport is what a camera answered when asked what it is. Err is a
@@ -456,14 +460,23 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 		}
 		rep.Streams = append(rep.Streams, sr)
 	}
-	// A second lens (the TrackMix zoom), over Baichuan or else the camera's
-	// own RTSP. Only reported when the camera answers for it.
-	if opts.Channel == 0 && opts.UID == "" {
+	// A second lens (the TrackMix zoom): zoom and zoom_sub are offered,
+	// ticked, whenever the login reply says the camera has one. They used
+	// to be offered only when a zoom picture could be read here within 8 s,
+	// and a TrackMix whose main stream slots were busy, or whose zoom
+	// sends nothing over Baichuan with its RTSP still off, was added
+	// without them; the only way to get them then was editing the config
+	// (YseanY, TrackMix, 11-02). The picture is still read when it can be,
+	// to show its size.
+	if opts.Channel == 0 && opts.UID == "" && secondLens(conn) {
+		zoom := StreamReport{Name: "zoom", Note: "zoom lens, full size (takes one of the camera's two main stream slots)"}
 		zctx, zcancel := context.WithTimeout(ctx, 8*time.Second)
 		if codec, w, h, err := stream.ZoomInfo(zctx, addr, opts.Username, opts.Password); err == nil {
-			rep.Streams = append(rep.Streams, StreamReport{Name: "zoom", Codec: codec, Width: w, Height: h})
+			zoom.Codec, zoom.Width, zoom.Height = codec, w, h
 		}
 		zcancel()
+		rep.Streams = append(rep.Streams, zoom,
+			StreamReport{Name: "zoom_sub", Note: "zoom lens, small (896x512 on a TrackMix; for detection)"})
 	}
 
 	if !anyPresent {
@@ -595,6 +608,9 @@ func writeProbeJSON(w http.ResponseWriter, rep CameraReport) {
 			continue
 		}
 		detail := fmt.Sprintf("%dx%d %s", st.Width, st.Height, st.Codec)
+		if st.Codec == "" {
+			detail = st.Note
+		}
 		if strings.EqualFold(st.Codec, "hevc") || strings.EqualFold(st.Codec, "h265") {
 			detail += " · browsers cannot play this one"
 		}

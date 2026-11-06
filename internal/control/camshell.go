@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
-	"github.com/VoltTech21/reostream/internal/stream"
 )
 
 // The camera shell is what every page about one camera shares, per the
@@ -81,7 +80,8 @@ type camIdent struct {
 	Charging   bool
 	// DeviceName is the camera's own name, what the Reolink app shows.
 	DeviceName string
-	// Zoom is a second lens (TrackMix), over Baichuan or the camera's RTSP.
+	// Zoom is a second lens on channel 1 (TrackMix), as the camera's
+	// login reply reports it.
 	Zoom bool
 	at   time.Time
 }
@@ -240,16 +240,37 @@ func (s *Server) identFor(ctx context.Context, cam Camera) camIdent {
 			}
 		}
 	}
-	if cam.UID == "" && cam.Channel == 0 {
-		zctx, zcancel := context.WithTimeout(ctx, 8*time.Second)
-		_, _, _, zerr := stream.ZoomInfo(zctx, cam.Address, cam.Username, cam.Password)
-		zcancel()
-		id.Zoom = zerr == nil
-	}
+	// From the login reply, not by asking the zoom lens for video: that
+	// took one of the camera's two main stream slots on every read, and on
+	// a TrackMix whose slots were taken (main and zoom both streaming) it
+	// timed out, so the Cameras page offered no zoom streams to turn on.
+	id.Zoom = cam.UID == "" && cam.Channel == 0 && secondLens(conn)
 	identMu.Lock()
 	identCache[key] = id
 	identMu.Unlock()
 	return id
+}
+
+// identCached is what identFor last read for cam, however long ago, or a
+// zero ident when it never has. It never talks to the camera.
+func identCached(cam Camera) camIdent {
+	identMu.Lock()
+	defer identMu.Unlock()
+	return identCache[cam.Name+"@"+cam.Address]
+}
+
+// identForView is the identity a page that is only being looked at uses.
+// A battery camera is not woken for it: reading its name, signal and
+// battery wakes it, and the wake watch then saw the camera awake a few
+// seconds after that read had ended and logged it as motion, sending a
+// false motion event for opening its page (cam-10 Argus, 11-03). So a
+// battery camera's Live tab shows what was read last; the camera is only
+// talked to once someone acts on it (plays it, opens Settings).
+func (s *Server) identForView(ctx context.Context, cam Camera) camIdent {
+	if cam.UID != "" {
+		return identCached(cam)
+	}
+	return s.identFor(ctx, cam)
 }
 
 // settingsCats is the design's CATMETA, cut to what exists. Each entry is
@@ -311,7 +332,12 @@ func (s *Server) camHeadFor(ctx context.Context, cam Camera, tab, cat string) ca
 			}
 		}
 	}
-	id := s.identFor(ctx, cam)
+	var id camIdent
+	if tab == "live" {
+		id = s.identForView(ctx, cam)
+	} else {
+		id = s.identFor(ctx, cam)
+	}
 	// A battery camera records to its card by design, and right after it
 	// wakes its support block can read as having none.
 	h.Model, h.Firmware, h.HasSD = id.Model, id.Firmware, id.HasSD || cam.UID != ""

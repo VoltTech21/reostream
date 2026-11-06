@@ -76,9 +76,14 @@ func (ssf *serverStreamFormat) rtpInfoEntry(now time.Time) *headers.RTPInfoEntry
 	// RTP timestamp corresponding to the time value in
 	// the Range response header.
 	// remove a small quantity in order to avoid DTS > PTS
-	ts := uint32(uint64(ssf.lastRTP) +
-		uint64(now.Sub(ssf.lastNTP).Seconds()*float64(clockRate)) -
-		uint64(clockRate)/10)
+	//
+	// reostream patch: signed. lastNTP is the time the publisher gave the
+	// packet, which may be ahead of now; a negative interval converted to
+	// uint64 wraps on amd64 but is clamped to zero on arm64, which left each
+	// media's rtptime at its own last packet and the medias out of step.
+	ts := uint32(int64(ssf.lastRTP) +
+		int64(now.Sub(ssf.lastNTP).Seconds()*float64(clockRate)) -
+		int64(clockRate)/10)
 
 	return &headers.RTPInfoEntry{
 		SequenceNumber: &seqNum,

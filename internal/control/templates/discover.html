@@ -139,8 +139,12 @@ Enter this camera's login:</p>
 {{else}}
 <td><input type="checkbox" name="streams.{{$addr}}" value="{{.Name}}" checked></td>
 <td>{{.Name}}</td>
+{{if .Codec}}
 <td>{{.Codec}}{{if or (eq .Codec "h265") (eq .Codec "hevc")}} <span class="hint">(not shown in a browser; still recorded)</span>{{end}}</td>
 <td>{{.Width}}x{{.Height}}</td>
+{{else}}
+<td colspan="2" class="hint">{{.Note}}</td>
+{{end}}
 {{end}}
 </tr>
 {{end}}
@@ -149,7 +153,9 @@ Enter this camera's login:</p>
 {{end}}
 {{if gt .Report.Channels 1}}
 <p class="hint">This is a {{.Report.Channels}}-lens camera. reostream serves the second lens too, as the
-<code>zoom</code> stream, when the camera answers for it (listed above).</p>
+<code>zoom</code> and <code>zoom_sub</code> streams (listed above). Untick <code>zoom</code> if another app
+needs this camera's main stream: the camera serves its main streams to two viewers at most, and
+<code>main</code> and <code>zoom</code> are one each.</p>
 {{end}}
 {{if .Report.ServicesEnabled}}
 <p class="outcome-accepted">Turned on RTSP, ONVIF and the web page on this camera, so your recorder (and any second lens) can reach it.</p>

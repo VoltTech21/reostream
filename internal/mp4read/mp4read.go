@@ -2,7 +2,8 @@
 // write (to their SD card, and over FTP): a plain moov with an avc1 or
 // hvc1 track, or a fragmented file (battery doorbells) whose moov is empty
 // and whose samples sit in moof+mdat pairs. Just enough to hand the samples
-// back as Annex-B access units, parameter sets in front of each keyframe.
+// back as Annex-B access units, parameter sets in front of each keyframe,
+// and the AAC track beside them, if there is one, as ADTS frames.
 package mp4read
 
 import (
@@ -13,7 +14,7 @@ import (
 	"os"
 )
 
-// Sample is one video access unit in the file.
+// Sample is one access unit in the file.
 type Sample struct {
 	Offset int64
 	Size   uint32
@@ -26,14 +27,48 @@ type Sample struct {
 type Track struct {
 	Codec     string // "H264" or "H265"
 	Timescale uint32
-	Params    [][]byte // VPS/SPS/PPS or SPS/PPS, without start codes
-	Samples   []Sample
-	nalLen    int
-	f         *os.File
-	// A fragmented file's track_ID and its trex defaults.
-	frag                     bool
-	id                       uint32
-	defDur, defSize, defFlag uint32
+	// Start is when the first sample shows, in Timescale units: its decode
+	// time less the edit list's skip. It is what lines the audio up with
+	// the picture.
+	Start   int64
+	Params  [][]byte // VPS/SPS/PPS or SPS/PPS, without start codes
+	Samples []Sample
+	// Audio is the file's AAC track, or nil when it has none, or one that
+	// ADTS cannot frame.
+	Audio  *Audio
+	nalLen int
+	f      *os.File
+	frag   bool
+	trak   trak
+	// Every track's trex defaults, by track_ID, so a fragment of a track
+	// not read here still says where the next one's data starts.
+	trex map[uint32][3]uint32
+}
+
+// Audio is a file's AAC track.
+type Audio struct {
+	Timescale uint32
+	// Start is when the first sample plays, in Timescale units, on the
+	// same footing as Track.Start.
+	Start int64
+	// Object is the MPEG-4 audio object type (2 is AAC-LC), Rate the
+	// sample rate in Hz, Channels the channel configuration.
+	Object, Rate, Channels int
+	Samples                []Sample
+	rateIndex              int
+	f                      *os.File
+	trak                   trak
+}
+
+// trak is what reading a track's samples needs beyond the samples: a
+// fragmented file's track_ID, and while reading the fragments, the decode
+// time the next sample starts at.
+type trak struct {
+	id      uint32
+	samples *[]Sample
+	start   *int64
+	next    uint64
+	timed   bool // a tfdt or the sample tables have said where it starts
 }
 
 // Open reads path's video track. Close the track when done.
@@ -58,10 +93,17 @@ func Open(path string) (*Track, error) {
 		return nil, err
 	}
 	if t.frag {
-		if err := t.readFragments(f, st.Size()); err != nil {
+		traks := []*trak{&t.trak}
+		if t.Audio != nil {
+			traks = append(traks, &t.Audio.trak)
+		}
+		if err := readFragments(f, st.Size(), traks, t.trex); err != nil {
 			f.Close()
 			return nil, err
 		}
+	}
+	if t.Audio != nil && len(t.Audio.Samples) == 0 {
+		t.Audio = nil
 	}
 	return t, nil
 }
@@ -97,6 +139,30 @@ func (t *Track) AnnexB(i int) ([]byte, error) {
 		out = append(out, buf[:n]...)
 		buf = buf[n:]
 	}
+	return out, nil
+}
+
+// ADTS reads audio sample i with an ADTS header in front: the framing a
+// raw AAC stream, and MPEG-TS, carry it in.
+func (a *Audio) ADTS(i int) ([]byte, error) {
+	s := a.Samples[i]
+	n := int(s.Size) + 7
+	if n >= 1<<13 {
+		return nil, errors.New("mp4read: AAC sample too big for ADTS")
+	}
+	out := make([]byte, n)
+	if _, err := a.f.ReadAt(out[7:], s.Offset); err != nil {
+		return nil, err
+	}
+	// Sync word, MPEG-4, layer 0, no CRC; profile (object type less one),
+	// rate index, channels; the frame length with the header; buffer
+	// fullness all ones (variable rate); one raw data block.
+	out[0], out[1] = 0xff, 0xf1
+	out[2] = byte(a.Object-1)<<6 | byte(a.rateIndex)<<2 | byte(a.Channels>>2)
+	out[3] = byte(a.Channels&3)<<6 | byte(n>>11)
+	out[4] = byte(n >> 3)
+	out[5] = byte(n&7)<<5 | 0x1f
+	out[6] = 0xfc
 	return out, nil
 }
 
@@ -201,6 +267,25 @@ func child(b []byte, path ...string) []byte {
 }
 
 func (t *Track) parseMoov(moov []byte) error {
+	u32 := binary.BigEndian.Uint32
+	var movieScale uint32
+	if mvhd := child(moov, "mvhd"); len(mvhd) >= 20 {
+		if mvhd[0] == 1 && len(mvhd) >= 24 {
+			movieScale = u32(mvhd[20:])
+		} else {
+			movieScale = u32(mvhd[12:])
+		}
+	}
+	mvex := child(moov, "mvex")
+	for _, x := range children(mvex) {
+		if x.typ == "trex" && len(x.body) >= 24 {
+			if t.trex == nil {
+				t.trex = map[uint32][3]uint32{}
+			}
+			t.trex[u32(x.body[4:])] = [3]uint32{u32(x.body[12:]), u32(x.body[16:]), u32(x.body[20:])}
+		}
+	}
+	video := false
 	for _, c := range children(moov) {
 		if c.typ != "trak" {
 			continue
@@ -215,56 +300,272 @@ func (t *Track) parseMoov(moov []byte) error {
 			continue
 		}
 		e := entries[0]
-		if e.typ != "avc1" && e.typ != "hvc1" && e.typ != "hev1" {
+		isVideo := !video && (e.typ == "avc1" || e.typ == "hvc1" || e.typ == "hev1")
+		if !isVideo && (t.Audio != nil || e.typ != "mp4a") {
 			continue
 		}
-		if len(e.body) < 78 {
-			return errors.New("mp4read: short sample entry")
-		}
+		var scale uint32
 		if mdhd := child(c.body, "mdia", "mdhd"); len(mdhd) >= 20 {
 			if mdhd[0] == 1 && len(mdhd) >= 24 {
-				t.Timescale = binary.BigEndian.Uint32(mdhd[20:])
+				scale = u32(mdhd[20:])
 			} else {
-				t.Timescale = binary.BigEndian.Uint32(mdhd[12:])
+				scale = u32(mdhd[12:])
 			}
 		}
-		cfg := children(e.body[78:])
-		var err error
-		if e.typ == "avc1" {
-			t.Codec = "H264"
-			err = t.parseAvcC(find(cfg, "avcC"))
+		var tk *trak
+		if isVideo {
+			if len(e.body) < 78 {
+				return errors.New("mp4read: short sample entry")
+			}
+			t.Timescale = scale
+			cfg := children(e.body[78:])
+			var err error
+			if e.typ == "avc1" {
+				t.Codec = "H264"
+				err = t.parseAvcC(find(cfg, "avcC"))
+			} else {
+				t.Codec = "H265"
+				err = t.parseHvcC(find(cfg, "hvcC"))
+			}
+			if err != nil {
+				return err
+			}
+			video = true
+			t.trak.samples, t.trak.start = &t.Samples, &t.Start
+			tk = &t.trak
 		} else {
-			t.Codec = "H265"
-			err = t.parseHvcC(find(cfg, "hvcC"))
+			a, ok := parseMp4a(e.body)
+			if !ok {
+				// Audio that ADTS cannot frame is left out; the
+				// picture still plays.
+				continue
+			}
+			a.Timescale, a.f = scale, t.f
+			a.trak.samples, a.trak.start = &a.Samples, &a.Start
+			t.Audio = a
+			tk = &a.trak
 		}
-		if err != nil {
-			return err
-		}
-		if mvex := child(moov, "mvex"); mvex != nil {
+		*tk.start = editStart(c.body, movieScale, scale)
+		if mvex != nil {
 			// Fragmented: the samples are in the moofs, unless the moov
 			// holds some of its own first.
 			t.frag = true
 			if tkhd := child(c.body, "tkhd"); len(tkhd) >= 24 {
 				if tkhd[0] == 1 && len(tkhd) >= 32 {
-					t.id = binary.BigEndian.Uint32(tkhd[20:])
+					tk.id = u32(tkhd[20:])
 				} else {
-					t.id = binary.BigEndian.Uint32(tkhd[12:])
+					tk.id = u32(tkhd[12:])
 				}
 			}
-			for _, x := range children(mvex) {
-				if x.typ == "trex" && len(x.body) >= 24 && binary.BigEndian.Uint32(x.body[4:]) == t.id {
-					t.defDur = binary.BigEndian.Uint32(x.body[12:])
-					t.defSize = binary.BigEndian.Uint32(x.body[16:])
-					t.defFlag = binary.BigEndian.Uint32(x.body[20:])
-				}
-			}
-			if stsz := child(stbl, "stsz"); len(stsz) < 12 || binary.BigEndian.Uint32(stsz[8:]) == 0 {
-				return nil
+			if stsz := child(stbl, "stsz"); len(stsz) < 12 || u32(stsz[8:]) == 0 {
+				continue
 			}
 		}
-		return t.parseTables(stbl)
+		samples, err := parseTables(stbl)
+		if err != nil {
+			if isVideo {
+				return err
+			}
+			t.Audio = nil
+			continue
+		}
+		*tk.samples = samples
+		tk.timed = true
 	}
-	return errors.New("mp4read: no H.264 or H.265 video track")
+	if !video {
+		return errors.New("mp4read: no H.264 or H.265 video track")
+	}
+	return nil
+}
+
+// editStart is when a track's first sample plays, in its own timescale,
+// from its edit list: later by any empty edit in front, earlier by the
+// media time the first real edit starts at. An AAC encoder's priming
+// samples are skipped this way.
+func editStart(trak []byte, movieScale, scale uint32) int64 {
+	elst := child(trak, "edts", "elst")
+	if len(elst) < 8 {
+		return 0
+	}
+	u32 := binary.BigEndian.Uint32
+	v1 := elst[0] == 1
+	n := int(u32(elst[4:]))
+	b := elst[8:]
+	var empty int64
+	for i := 0; i < n; i++ {
+		var dur uint64
+		var at int64
+		if v1 {
+			if len(b) < 20 {
+				break
+			}
+			dur, at = binary.BigEndian.Uint64(b), int64(binary.BigEndian.Uint64(b[8:]))
+			b = b[20:]
+		} else {
+			if len(b) < 12 {
+				break
+			}
+			dur, at = uint64(u32(b)), int64(int32(u32(b[4:])))
+			b = b[12:]
+		}
+		if at == -1 {
+			if movieScale != 0 {
+				empty += int64(dur * uint64(scale) / uint64(movieScale))
+			}
+			continue
+		}
+		return empty - at
+	}
+	return empty
+}
+
+// parseMp4a reads an mp4a sample entry's AudioSpecificConfig, from its
+// esds, into the fields an ADTS header needs.
+func parseMp4a(entry []byte) (*Audio, bool) {
+	// The sample entry (8 bytes) and the audio sample entry (20); a
+	// QuickTime sound description version 1 or 2 is longer.
+	if len(entry) < 28 {
+		return nil, false
+	}
+	at := 28
+	switch binary.BigEndian.Uint16(entry[8:]) {
+	case 1:
+		at += 16
+	case 2:
+		at += 36
+	}
+	if len(entry) < at {
+		return nil, false
+	}
+	cfg := children(entry[at:])
+	esds := find(cfg, "esds")
+	if esds == nil {
+		esds = child(find(cfg, "wave"), "esds")
+	}
+	if len(esds) < 4 {
+		return nil, false
+	}
+	asc := decoderSpecificInfo(esds[4:])
+	return parseASC(asc)
+}
+
+// decoderSpecificInfo finds the DecoderSpecificInfo (tag 5) inside an
+// ES_Descriptor (tag 3) and its DecoderConfigDescriptor (tag 4).
+func decoderSpecificInfo(b []byte) []byte {
+	desc := func(b []byte) (tag byte, body, rest []byte, ok bool) {
+		if len(b) < 2 {
+			return 0, nil, nil, false
+		}
+		tag, b = b[0], b[1:]
+		n := 0
+		for i := 0; i < 4; i++ {
+			if len(b) == 0 {
+				return 0, nil, nil, false
+			}
+			c := b[0]
+			b = b[1:]
+			n = n<<7 | int(c&0x7f)
+			if c&0x80 == 0 {
+				break
+			}
+		}
+		if n > len(b) {
+			return 0, nil, nil, false
+		}
+		return tag, b[:n], b[n:], true
+	}
+	tag, es, _, ok := desc(b)
+	if !ok || tag != 3 || len(es) < 3 {
+		return nil
+	}
+	flags := es[2]
+	es = es[3:]
+	if flags&0x80 != 0 { // streamDependenceFlag
+		if len(es) < 2 {
+			return nil
+		}
+		es = es[2:]
+	}
+	if flags&0x40 != 0 { // URL_Flag
+		if len(es) < 1 || len(es) < 1+int(es[0]) {
+			return nil
+		}
+		es = es[1+int(es[0]):]
+	}
+	if flags&0x20 != 0 { // OCRstreamFlag
+		if len(es) < 2 {
+			return nil
+		}
+		es = es[2:]
+	}
+	for len(es) > 0 {
+		tag, body, rest, ok := desc(es)
+		if !ok {
+			return nil
+		}
+		es = rest
+		if tag != 4 || len(body) < 13 {
+			continue
+		}
+		body = body[13:] // object type, stream type, buffer size, bitrates
+		for len(body) > 0 {
+			tag, info, rest, ok := desc(body)
+			if !ok {
+				return nil
+			}
+			if tag == 5 {
+				return info
+			}
+			body = rest
+		}
+	}
+	return nil
+}
+
+// adtsRates is the sampling frequency index table ADTS and the
+// AudioSpecificConfig share.
+var adtsRates = []int{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+
+// parseASC reads an AudioSpecificConfig. ADTS has two bits for the object
+// type and no room for an explicit rate or a program config element, so a
+// config that needs any of those is refused. HE-AAC (SBR, and PS on top)
+// is framed as its AAC-LC core, which is how ADTS signals it.
+func parseASC(b []byte) (*Audio, bool) {
+	var pos int
+	bits := func(n int) int {
+		v := 0
+		for i := 0; i < n; i++ {
+			if pos/8 >= len(b) {
+				return -1
+			}
+			v = v<<1 | int(b[pos/8]>>(7-pos%8)&1)
+			pos++
+		}
+		return v
+	}
+	object := func() int {
+		o := bits(5)
+		if o == 31 {
+			o = 32 + bits(6)
+		}
+		return o
+	}
+	obj := object()
+	idx := bits(4)
+	if idx == 15 {
+		return nil, false
+	}
+	ch := bits(4)
+	if obj == 5 || obj == 29 {
+		if bits(4) == 15 { // the extension rate
+			bits(24)
+		}
+		obj = object()
+	}
+	if obj < 1 || obj > 4 || idx < 0 || idx >= len(adtsRates) || ch < 1 || ch > 7 {
+		return nil, false
+	}
+	return &Audio{Object: obj, Rate: adtsRates[idx], Channels: ch, rateIndex: idx}, true
 }
 
 func find(bs []box, typ string) []byte {
@@ -333,19 +634,20 @@ func (t *Track) parseHvcC(b []byte) error {
 	return nil
 }
 
-func (t *Track) parseTables(stbl []byte) error {
+// parseTables reads a track's samples from its sample tables.
+func parseTables(stbl []byte) ([]Sample, error) {
 	u32 := binary.BigEndian.Uint32
 	stsz := child(stbl, "stsz")
 	if len(stsz) < 12 {
-		return errors.New("mp4read: no stsz")
+		return nil, errors.New("mp4read: no stsz")
 	}
 	fixed, count := u32(stsz[4:]), int(u32(stsz[8:]))
-	t.Samples = make([]Sample, count)
-	for i := range t.Samples {
+	samples := make([]Sample, count)
+	for i := range samples {
 		if fixed != 0 {
-			t.Samples[i].Size = fixed
+			samples[i].Size = fixed
 		} else if 12+4*i+4 <= len(stsz) {
-			t.Samples[i].Size = u32(stsz[12+4*i:])
+			samples[i].Size = u32(stsz[12+4*i:])
 		}
 	}
 	// Chunk offsets, then which samples each chunk holds.
@@ -361,7 +663,7 @@ func (t *Track) parseTables(stbl []byte) error {
 	}
 	stsc := child(stbl, "stsc")
 	if len(stsc) < 8 || len(chunks) == 0 {
-		return errors.New("mp4read: no chunk tables")
+		return nil, errors.New("mp4read: no chunk tables")
 	}
 	type run struct{ first, per int }
 	var runs []run
@@ -378,8 +680,8 @@ func (t *Track) parseTables(stbl []byte) error {
 		}
 		off := chunks[ci]
 		for k := 0; k < per && si < count; k++ {
-			t.Samples[si].Offset = off
-			off += int64(t.Samples[si].Size)
+			samples[si].Offset = off
+			off += int64(samples[si].Size)
 			si++
 		}
 	}
@@ -388,7 +690,7 @@ func (t *Track) parseTables(stbl []byte) error {
 		for i := 0; i < int(u32(stts[4:])) && 8+8*i+8 <= len(stts); i++ {
 			n, d := int(u32(stts[8+8*i:])), u32(stts[8+8*i+4:])
 			for k := 0; k < n && si < count; k++ {
-				t.Samples[si].Dur = d
+				samples[si].Dur = d
 				si++
 			}
 		}
@@ -396,26 +698,29 @@ func (t *Track) parseTables(stbl []byte) error {
 	if stss := child(stbl, "stss"); len(stss) >= 8 {
 		for i := 0; i < int(u32(stss[4:])) && 8+4*i+4 <= len(stss); i++ {
 			if k := int(u32(stss[8+4*i:])) - 1; k >= 0 && k < count {
-				t.Samples[k].Key = true
+				samples[k].Key = true
 			}
 		}
 	} else {
-		for i := range t.Samples {
-			t.Samples[i].Key = true
+		for i := range samples {
+			samples[i].Key = true
 		}
 	}
-	return nil
+	return samples, nil
 }
 
-// readFragments appends the video track's samples from each moof, in file
-// order. Each traf names its track; the others (audio) are skipped.
-func (t *Track) readFragments(r io.ReaderAt, size int64) error {
+// readFragments appends each track's samples from each moof, in file
+// order. Each traf names its track; one that is not in traks is skipped.
+func readFragments(r io.ReaderAt, size int64, traks []*trak, trex map[uint32][3]uint32) error {
 	u32 := binary.BigEndian.Uint32
-	// Where the next sample starts, in Timescale units, to stretch the last
-	// sample of a fragment over any gap before the next one's tfdt.
-	var next uint64
-	for _, s := range t.Samples {
-		next += uint64(s.Dur)
+	for _, tk := range traks {
+		// Where the next sample starts, in the track's timescale, to
+		// stretch the last sample of a fragment over any gap before the
+		// next one's tfdt.
+		tk.next = 0
+		for _, s := range *tk.samples {
+			tk.next += uint64(s.Dur)
+		}
 	}
 	return eachTop(r, size, func(typ string, off, h, n int64) (bool, error) {
 		if typ != "moof" {
@@ -438,12 +743,19 @@ func (t *Track) readFragments(r io.ReaderAt, size int64) error {
 			}
 			flags := u32(tfhd) & 0xffffff
 			id := u32(tfhd[4:])
+			var tk *trak
+			for _, k := range traks {
+				if k.id == id {
+					tk = k
+				}
+			}
 			p := tfhd[8:]
 			base := dataEnd
 			if flags&0x20000 != 0 {
 				base = off
 			}
-			dur, sz, fl := t.defDur, t.defSize, t.defFlag
+			d := trex[id]
+			dur, sz, fl := d[0], d[1], d[2]
 			for _, f := range []struct {
 				bit uint32
 				n   int
@@ -462,17 +774,21 @@ func (t *Track) readFragments(r io.ReaderAt, size int64) error {
 				}
 				p = p[f.n:]
 			}
-			if tfdt := child(tf.body, "tfdt"); id == t.id && len(tfdt) >= 8 {
+			if tfdt := child(tf.body, "tfdt"); tk != nil && len(tfdt) >= 8 {
 				var dt uint64
 				if tfdt[0] == 1 && len(tfdt) >= 12 {
 					dt = binary.BigEndian.Uint64(tfdt[4:])
 				} else {
 					dt = uint64(u32(tfdt[4:]))
 				}
-				if k := len(t.Samples) - 1; k >= 0 && dt > next && dt-next < 1<<31 {
-					t.Samples[k].Dur += uint32(dt - next)
+				if !tk.timed {
+					// The first fragment says where the track starts.
+					*tk.start += int64(dt)
+					tk.timed = true
+				} else if k := len(*tk.samples) - 1; k >= 0 && dt > tk.next && dt-tk.next < 1<<31 {
+					(*tk.samples)[k].Dur += uint32(dt - tk.next)
 				}
-				next = dt
+				tk.next = dt
 			}
 			cont := base
 			for _, tr := range children(tf.body) {
@@ -524,13 +840,13 @@ func (t *Track) readFragments(r io.ReaderAt, size int64) error {
 						b = b[4:]
 					}
 					at += int64(s.Size)
-					if id != t.id {
+					if tk == nil {
 						continue
 					}
 					// sample_is_non_sync_sample
 					s.Key = sf&0x10000 == 0
-					t.Samples = append(t.Samples, s)
-					next += uint64(s.Dur)
+					*tk.samples = append(*tk.samples, s)
+					tk.next += uint64(s.Dur)
 				}
 				// A later trun without its own offset carries on from here.
 				cont, dataEnd = at, at

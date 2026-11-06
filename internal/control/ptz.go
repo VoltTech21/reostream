@@ -42,9 +42,12 @@ type ptzView struct {
 	// BehindRecorder hides auto return and calibrate, which a recorder
 	// refuses (see notThroughRecorder).
 	BehindRecorder bool
-	Speed          int
-	SpeedMin       int
-	SpeedMax       int
+	// Unread is a battery camera's presets left unread so that opening
+	// its page does not wake it; the card offers to read them.
+	Unread   bool
+	Speed    int
+	SpeedMin int
+	SpeedMax int
 }
 
 // NextPresetID is the lowest id no saved preset uses.

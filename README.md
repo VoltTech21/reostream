@@ -166,6 +166,17 @@ Reported working by users (thank you!):
 | Duo 4K Wi-Fi (3 cameras) | video | Reddit |
 | RLC-811A (v3.1.0.3485) | video (sub and extern) | Reddit |
 | Lumus Pro | video (Frigate with hardware decoding off for it) | GitHub #17 |
+| RLC-410-5MP | video (Frigate) | Reddit |
+| RLC-420 | video (Frigate) | Reddit |
+| RLC-420-5MP | video (Frigate) | Reddit |
+| RLC-422 | video (Frigate) | Reddit |
+| RLC-510A | video (Frigate) | Reddit |
+| RLC-520A | video (Frigate) | Reddit |
+| Duo PoE | video (Frigate) | Reddit |
+| Duo 2 PoE | video (Frigate) | Reddit |
+| Duo Floodlight PoE | video (Frigate) | Reddit |
+| E1 Outdoor | video (Frigate) | Reddit |
+| FE-W | video (Frigate) | Reddit |
 
 Your camera not here? Open an issue with the model, firmware and what worked,
 and it goes on the list.

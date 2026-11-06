@@ -357,6 +357,22 @@ func (s *Supervisor) setBackoff(start, max, reset time.Duration) {
 	s.backoffReset = reset
 }
 
+// failKey is the name a stream's failures and its recovery are logged
+// under. For most streams that is the camera: a camera that cannot be
+// reached fails on every stream at once, and failures.go says so once. A
+// zoom stream is its own, "cam-19/zoom": the zoom lens fails on its own
+// while the wide lens streams on (no zoom video over Baichuan, its RTSP
+// off, both main stream slots taken), and "cam-19: now can't reach the
+// camera" read as the whole TrackMix being down when only the zoom stream
+// was retrying (11-03). Keyed apart, it also no longer flips the camera's
+// own line between its reason and the wide streams'.
+func failKey(cfg stream.Config) string {
+	if cfg.Stream == "zoom" || cfg.Stream == "zoom_sub" {
+		return hubName(cfg.Name, cfg.Stream)
+	}
+	return cfg.Name
+}
+
 // hubName is the key streams are published under and looked up by:
 // "<camera>/<stream>".
 func hubName(camera, stream string) string {
@@ -705,7 +721,11 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 		e.stat.started = start
 		s.mu.Unlock()
 		// A failing camera coming back is noticed as soon as this run
-		// delivers, not when it next ends.
+		// delivers, not when it next ends. Delivers means a frame: the
+		// hub is marked connected as soon as the camera takes the stream
+		// request, and a TrackMix zoom lens takes it and then sends
+		// nothing for 30 s, so "back after 2m" was logged on every retry
+		// of a zoom stream that never came back (11-03).
 		running := make(chan struct{})
 		go func(cam string) {
 			t := time.NewTicker(time.Second)
@@ -715,13 +735,13 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 				case <-running:
 					return
 				case <-t.C:
-					if !e.h.Stats().ConnectedAt.IsZero() {
+					if e.h.Stats().LastFrameAt.After(start) {
 						s.noteRecovered(cam)
 						return
 					}
 				}
 			}
-		}(e.cfg.Name)
+		}(failKey(e.cfg))
 		err := s.run(ctx, e.cfg, e.h)
 		close(running)
 		ran := time.Since(start)
@@ -770,14 +790,14 @@ func (s *Supervisor) runStream(ctx context.Context, e *entry) {
 		// two streams sat at 19 restarts with an empty container log, which
 		// told an operator nothing about what to fix.
 		if err != nil && ctx.Err() == nil {
-			s.noteFailure(e.cfg.Name, err)
+			s.noteFailure(failKey(e.cfg), err)
 		}
 
 		select {
 		case <-ctx.Done():
 			e.h.Close()
 			return
-		case <-time.After(retryAfter(err, backoff)):
+		case <-time.After(retryWait(err, backoff)):
 		}
 
 		// Only reached by actually looping back to run again, so this
@@ -869,6 +889,10 @@ const authRetry = 5 * time.Minute
 // camera whose main stream slots are likely taken, and at the usual backoff
 // that repeats about once a minute for as long as they stay taken.
 const zoomRetry = 2 * time.Minute
+
+// retryWait is retryAfter; a test shortens it to see a zoom stream's
+// next run without waiting out zoomRetry.
+var retryWait = retryAfter
 
 func retryAfter(err error, backoff time.Duration) time.Duration {
 	if errors.Is(err, baichuan.ErrUnauthorized) {

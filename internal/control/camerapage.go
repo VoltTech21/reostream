@@ -49,10 +49,19 @@ type cameraPage struct {
 	Streams []liveStream
 	// Battery is a camera that sleeps; its Live tab wakes it while open.
 	Battery bool
+	// WakeOnClick is a battery camera that is not kept streaming
+	// (always_on): its Live tab shows Still, its last picture, with a play
+	// button, and wakes it only when that (or a stream) is clicked. Still
+	// and StillNote are empty before its first wake.
+	WakeOnClick      bool
+	Still, StillNote string
 	// CopyURLs is the Live tab's Copy URL list.
 	CopyURLs []copyURL
 	// Dewarp is true for a fisheye, whose Live tab links the browser dewarp.
 	Dewarp bool
+	// ZoomOffer is a camera with a zoom lens whose zoom streams are not
+	// pulled: the Live tab offers to turn them on (zoomstreams.go).
+	ZoomOffer bool
 
 	// Clips is the Auto-save motion clips section.
 	Clips clipsView
@@ -387,10 +396,18 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	}
 	page.Head = s.camHeadFor(r.Context(), cam, "live", "")
 	page.CopyURLs = s.copyURLsFor(r, cam)
-	page.Support = s.identFor(r.Context(), cam).Support
+	// A battery camera is not woken for its page being opened (see
+	// identForView): its support block is the one read last, and the
+	// floodlight and presets are not read unless asked for (?presets=1,
+	// the presets card's own link). A battery camera has no web API for
+	// the floodlight read in any case.
+	sleeper := cam.UID != ""
+	id := s.identForView(r.Context(), cam)
+	page.Support = id.Support
+	page.ZoomOffer = s.zoomOffer(cam, id)
 	page.Dewarp = page.Support != nil && page.Support.HasFishEye(0)
 	// The floodlight quick action, only on a camera that says it has one.
-	if page.Support != nil && page.Support.HasFloodlight(0) {
+	if page.Support != nil && page.Support.HasFloodlight(0) && !sleeper {
 		if c, err := s.cgiDial(cam); err == nil {
 			ctx, cancel := context.WithTimeout(r.Context(), readTimeout*2)
 			if mode, state, err := readFloodlight(ctx, c, cam.Channel); err == nil {
@@ -401,7 +418,9 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 			c.Close()
 		}
 	}
-	if page.Support != nil && page.Support.HasPTZ() {
+	if page.Support != nil && page.Support.HasPTZ() && sleeper && r.URL.Query().Get("presets") == "" {
+		page.PTZ = ptzView{Speed: ptzSpeed, SpeedMin: ptzSpeedMin, SpeedMax: ptzSpeedMax, Unread: true}
+	} else if page.Support != nil && page.Support.HasPTZ() {
 		ctx, cancel := context.WithTimeout(r.Context(), readTimeout*2)
 		page.PTZ = s.readPresets(ctx, cam)
 		cancel()
@@ -416,6 +435,15 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	if page.Battery {
 		// The public listener refuses a battery camera's stream.
 		base = ""
+		// Opening the page used to start the sub stream by itself, and
+		// that woke the camera just as the ident read did (6e85c6f): a
+		// look at the page cost battery. It now shows the last picture and
+		// waits for a click, like the camera's fleet tile. An always_on
+		// camera streams anyway, so it plays at once as before.
+		if !s.alwaysOnCameras()[cam.Name] {
+			page.WakeOnClick = true
+			page.Still, page.StillNote = s.batteryStill(cam.Name, codecs)
+		}
 	}
 	for _, row := range page.Group.Rows {
 		name := streamOf(row.Name)

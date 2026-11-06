@@ -32,11 +32,37 @@ func fast(t *testing.T) {
 	t.Cleanup(func() { idleEvery, liveGrace = idle, grace })
 }
 
+// video and audio split the stream's frames into its pictures and its
+// sound.
+func video(fs []baichuan.Frame) []baichuan.Frame {
+	var out []baichuan.Frame
+	for _, f := range fs {
+		if f.Kind == baichuan.FrameIFrame || f.Kind == baichuan.FramePFrame {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func audio(fs []baichuan.Frame) []baichuan.Frame {
+	var out []baichuan.Frame
+	for _, f := range fs {
+		if f.Kind == baichuan.FrameAAC {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// increasing checks the pictures' clock and the sound's each only go
+// forward.
 func increasing(t *testing.T, fs []baichuan.Frame) {
 	t.Helper()
-	for i := 1; i < len(fs); i++ {
-		if fs[i].Micros <= fs[i-1].Micros {
-			t.Fatalf("clock went back at frame %d: %d after %d", i, fs[i].Micros, fs[i-1].Micros)
+	for _, fs := range [][]baichuan.Frame{video(fs), audio(fs)} {
+		for i := 1; i < len(fs); i++ {
+			if fs[i].Micros <= fs[i-1].Micros {
+				t.Fatalf("%s clock went back at frame %d: %d after %d", fs[i].Kind, i, fs[i].Micros, fs[i-1].Micros)
+			}
 		}
 	}
 }
@@ -47,17 +73,17 @@ func TestTheStillIsPrimedThenRepeated(t *testing.T) {
 	s := &sink{}
 	p := New("porch", s)
 	p.Seed("../mp4read/testdata/h265.mp4")
-	if n := len(s.snapshot()); n != primeFrames {
+	if n := len(video(s.snapshot())); n != primeFrames {
 		t.Fatalf("primed with %d frames, want %d", n, primeFrames)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	p.Run(ctx)
 	fs := s.snapshot()
-	if len(fs) < primeFrames+3 {
-		t.Fatalf("only %d frames after idling", len(fs))
+	if len(video(fs)) < primeFrames+3 {
+		t.Fatalf("only %d frames after idling", len(video(fs)))
 	}
-	for _, f := range fs {
+	for _, f := range video(fs) {
 		if f.Kind != baichuan.FrameIFrame || f.Codec != "H265" {
 			t.Fatalf("idle frame %+v", f.Kind)
 		}
@@ -101,11 +127,11 @@ func TestLiveFramesPassAndOtherCodecsDoNot(t *testing.T) {
 	s := &sink{}
 	p := New("porch", s)
 	p.Seed("../mp4read/testdata/h265.mp4")
-	base := len(s.snapshot())
+	base := len(video(s.snapshot()))
 	p.Frame(baichuan.Frame{Kind: baichuan.FramePFrame, Codec: "H265", Data: []byte{0, 0, 0, 1, 2, 1}, Micros: 5_000_000})
 	p.Frame(baichuan.Frame{Kind: baichuan.FramePFrame, Codec: "H265", Data: []byte{0, 0, 0, 1, 2, 1}, Micros: 5_066_000})
 	p.Frame(baichuan.Frame{Kind: baichuan.FrameIFrame, Codec: "H264", Data: []byte{0, 0, 0, 1, 0x65}, Micros: 5_100_000})
-	fs := s.snapshot()
+	fs := video(s.snapshot())
 	if len(fs)-base != 2 {
 		t.Fatalf("%d live frames out, want the two H.265 ones", len(fs)-base)
 	}

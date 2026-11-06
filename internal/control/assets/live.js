@@ -52,13 +52,21 @@
       try { localStorage.setItem('reostream.ptzSpeed', speed.value); } catch (e) {}
     });
     var queue = Promise.resolve();
+    // enqueue runs step after everything queued before it, whether that
+    // worked or not. Chained with a bare then, one refused command left
+    // queue rejected for good, and every later move, stop and preset on
+    // the page was silently skipped until a reload (found 11-03 against
+    // the emulator, which answered 502).
+    var enqueue = function (step) {
+      queue = queue.catch(function () {}).then(step);
+      return queue;
+    };
     var post = function (url, params) {
-      queue = queue.then(function () {
+      return enqueue(function () {
         return fetch(url, {method: 'POST', body: new URLSearchParams(params)})
           .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t); }); note.textContent = ''; })
           .catch(function (e) { note.textContent = 'The camera refused: ' + e.message; throw e; });
-      });
-      return queue.catch(function () {});
+      }).catch(function () {});
     };
     var send = function (cmd) { post(base, {command: cmd, speed: speed.value}); };
 
@@ -69,14 +77,17 @@
     if (save) {
       save.addEventListener('submit', function (e) {
         e.preventDefault();
-        queue = queue.then(function () {
+        enqueue(function () {
           return fetch(base + '/preset', {method: 'POST', body: new URLSearchParams({op: 'save', id: save.dataset.id, name: save.elements.name.value})})
             .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t); }); location.reload(); })
             .catch(function (e) { note.textContent = 'The camera refused: ' + e.message; });
         });
       });
     }
-    var stop = function () {
+    // stopMove, not stop: a var here is the whole file's, and one named
+    // stop replaced the player's stop() below, so switching streams on a
+    // camera with this card never tore the old player down (11-03).
+    var stopMove = function () {
       if (!moving) return;
       moving.classList.remove('held');
       moving = null;
@@ -88,19 +99,19 @@
     ptz.querySelectorAll('.ptz-btn, .ptz-hold').forEach(function (b) {
       b.addEventListener('pointerdown', function (e) {
         e.preventDefault();
-        if (moving) stop();
+        if (moving) stopMove();
         moving = b;
         b.classList.add('held');
         try { b.setPointerCapture(e.pointerId); } catch (x) {}
         send(b.dataset.cmd);
       });
-      b.addEventListener('pointerup', stop);
-      b.addEventListener('pointercancel', stop);
-      b.addEventListener('lostpointercapture', stop);
+      b.addEventListener('pointerup', stopMove);
+      b.addEventListener('pointercancel', stopMove);
+      b.addEventListener('lostpointercapture', stopMove);
     });
     ptz.querySelector('.ptz-pad').addEventListener('contextmenu', function (e) { e.preventDefault(); });
-    window.addEventListener('blur', stop);
-    document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); });
+    window.addEventListener('blur', stopMove);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) stopMove(); });
   }
 
   var box = document.querySelector('.live-player');
@@ -240,7 +251,32 @@
   // A battery camera starts on sub: smaller, quicker to wake, and H.264.
   var first = battery ? (byName(saved) || byName('sub') || byName('main'))
     : (byName(saved) || byName('main') || byName('extern') || byName('sub'));
-  if (first) pick(first);
+  // A sleeping battery camera (data-wake="click") is not played on open:
+  // playing wakes it, and a look at the page cost battery every time
+  // (11-04). It shows its last picture, drawn from the keyframe reostream
+  // kept, and wakes on the play button or a stream picked. stillBox, not
+  // still: still is the frozen-picture counter above, and one var name in
+  // this file is one variable.
+  var stillBox = box.querySelector('.live-still');
+  if (box.dataset.wake === 'click' && stillBox) {
+    if (window.reostreamSnapshots && stillBox.dataset.src) reostreamSnapshots([stillBox]);
+    // The line under the player says what play does until it is pressed,
+    // then what the camera is doing (camera.html, data-awake).
+    var wakeHint = document.querySelector('.live-battery');
+    var woken = function () {
+      stillBox.hidden = true;
+      if (wakeHint && wakeHint.dataset.awake) wakeHint.textContent = wakeHint.dataset.awake;
+    };
+    var wake = function (opt) {
+      woken();
+      if (opt) pick(opt);
+    };
+    stillBox.querySelector('.live-wake').addEventListener('click', function () { wake(first); });
+    opts.forEach(function (o) {
+      o.addEventListener('click', function () { if (!o.disabled) woken(); });
+    });
+    if (!first && opts.length) { empty.textContent = 'No stream this browser can play.'; empty.hidden = false; }
+  } else if (first) pick(first);
   else if (opts.length) { empty.textContent = 'No stream this browser can play.'; empty.hidden = false; }
 
   // Fullscreen: the player box, so the LIVE tag stays; iPhone Safari only

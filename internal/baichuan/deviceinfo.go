@@ -3,6 +3,7 @@ package baichuan
 import (
 	"encoding/xml"
 	"fmt"
+	"strings"
 )
 
 // DeviceInfo is the document a camera sends as its login reply on success,
@@ -34,6 +35,22 @@ type DeviceInfo struct {
 			Height int    `xml:"height"`
 		} `xml:"resolution"`
 	} `xml:"DeviceInfo"`
+}
+
+// SecondLens reports a camera with a second lens on channel 1: the
+// TrackMix's zoom lens (and the other two-lens trackers, the TrackFlex and
+// the Omvi 3i, which report the same way). It is in the login reply, so
+// knowing it costs nothing, where asking channel 1 for video takes one of
+// the camera's two main stream slots and waits on an answer a camera with
+// its slots taken never sends.
+//
+// An NVR or Home Hub reports a channel per camera it holds, so only a
+// device that calls itself a camera ("ipc", "fisheye_ipc") counts. The
+// dual-lens panoramas (Duo 2, Duo 3) stitch both lenses into one picture
+// and report one channel (pano, 10-27 sweep), so they are not counted.
+func (d DeviceInfo) SecondLens() bool {
+	t := strings.ToLower(d.DeviceInfo.Type + " " + d.DeviceInfo.TypeInfo)
+	return d.DeviceInfo.ChannelNum >= 2 && strings.Contains(t, "ipc")
 }
 
 // ParseDeviceInfo reads the document Conn.DeviceInfo returns.

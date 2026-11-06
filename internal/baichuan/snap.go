@@ -1,6 +1,7 @@
 package baichuan
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 )
@@ -69,3 +70,49 @@ func (s *SnapReader) Name() string { return s.name }
 // Size is the length the camera declared, valid once the first reply has
 // been read.
 func (s *SnapReader) Size() int { return s.size }
+
+// SnapRefusedError is a camera answering a Snap with a status other than
+// success: 405 from a model or recorder that does not make stills over this
+// protocol, 400 for a stream it does not have.
+type SnapRefusedError struct{ Status int16 }
+
+func (e *SnapRefusedError) Error() string {
+	return "baichuan: camera refused the snap: " + ExplainStatus(e.Status)
+}
+
+// TakeSnap asks conn's camera for a still and waits until all of it has
+// arrived or ctx ends. It returns the image, trimmed to the size the camera
+// declared, and the filename the camera gave it.
+//
+// The bytes are whatever the camera made, returned as they came. Every
+// camera that has answered one so far made a JPEG, but checking that is the
+// caller's business: reocam saves the file regardless, the control page
+// refuses to label anything else image/jpeg.
+func TakeSnap(ctx context.Context, conn *Conn, stream string) ([]byte, string, error) {
+	if err := conn.Snap(stream); err != nil {
+		return nil, "", err
+	}
+	var r SnapReader
+	for !r.Done() {
+		select {
+		case m, ok := <-conn.Messages():
+			if !ok {
+				if err := conn.Err(); err != nil {
+					return nil, "", fmt.Errorf("baichuan: connection closed after %d of %d snap bytes: %w", len(r.data), r.Size(), err)
+				}
+				return nil, "", fmt.Errorf("baichuan: connection closed after %d of %d snap bytes", len(r.data), r.Size())
+			}
+			// Status 0 is what a continuation carries; only a reply that
+			// says something else is a refusal.
+			if m.Header.MsgID == MsgIDSnap && m.Header.Status() != 0 && m.Header.Status() != 200 {
+				return nil, "", &SnapRefusedError{Status: m.Header.Status()}
+			}
+			if err := r.Read(m); err != nil {
+				return nil, "", err
+			}
+		case <-ctx.Done():
+			return nil, "", fmt.Errorf("baichuan: waiting for the snap (%d of %d bytes): %w", len(r.data), r.Size(), ctx.Err())
+		}
+	}
+	return r.Image(), r.Name(), nil
+}

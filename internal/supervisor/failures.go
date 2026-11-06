@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ var failRemind = 10 * time.Minute
 type camFailure struct {
 	since   time.Time
 	msg     string
+	same    string // msg as sameFailure compares it
 	tries   int
 	lastLog time.Time
 }
@@ -56,6 +58,22 @@ func lastPart(s string) string {
 	return s
 }
 
+// localEnd is the local end of a connection in a Go network error, the
+// "192.0.2.101:51234->" of "read tcp 192.0.2.101:51234->192.0.2.19:9000".
+var localEnd = regexp.MustCompile(`(?:\d{1,3}(?:\.\d{1,3}){3}|\[[^\]]*\]):\d+->`)
+
+// sameFailure is msg as it is compared with the last failure's. Every retry
+// is a new connection from a new local port, and the error text carries
+// that port, so compared as written a stream that could not get a camera
+// slot read as a new reason on every retry and logged a "now ... idle
+// timeout" line each time, 14 in 9 minutes on cam-19's zoom (11-04). The
+// local end is all that is dropped: the camera's address and port stay, so
+// a move to another camera address is still news. The logged line keeps the
+// whole text.
+func sameFailure(msg string) string {
+	return localEnd.ReplaceAllString(msg, "")
+}
+
 // noteFailure records one failed attempt for camera and logs it if it is the
 // first, a different reason from before, or failRemind since the last word.
 func (s *Supervisor) noteFailure(camera string, err error) {
@@ -63,6 +81,7 @@ func (s *Supervisor) noteFailure(camera string, err error) {
 		return
 	}
 	msg := plainError(err)
+	same := sameFailure(msg)
 	now := time.Now()
 	s.failMu.Lock()
 	defer s.failMu.Unlock()
@@ -72,14 +91,15 @@ func (s *Supervisor) noteFailure(camera string, err error) {
 	f := s.failures[camera]
 	switch {
 	case f == nil:
-		s.failures[camera] = &camFailure{since: now, msg: msg, tries: 1, lastLog: now}
+		s.failures[camera] = &camFailure{since: now, msg: msg, same: same, tries: 1, lastLog: now}
 		log.Printf("reostream: %s: %s; retrying", camera, msg)
-	case f.msg != msg:
-		f.msg, f.lastLog = msg, now
+	case f.same != same:
+		f.msg, f.same, f.lastLog = msg, same, now
 		f.tries++
 		log.Printf("reostream: %s: now %s; retrying", camera, msg)
 	default:
 		f.tries++
+		f.msg = msg
 		if now.Sub(f.lastLog) >= failRemind {
 			f.lastLog = now
 			log.Printf("reostream: %s: still failing after %d tries over %s: %s", camera, f.tries, roundDur(now.Sub(f.since)), msg)

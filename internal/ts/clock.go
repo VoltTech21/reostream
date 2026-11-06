@@ -195,6 +195,21 @@ const (
 // PTS returns the presentation timestamp for one AAC frame, given the video
 // stream's current position (Clock.LastPTS) and the frame's ADTS bytes.
 func (a *AudioClock) PTS(videoPTS uint64, adts []byte) uint64 {
+	return a.pts(videoPTS, adts, false)
+}
+
+// PTSAt is PTS for a frame whose own place on the video timeline is known:
+// at, in 90 kHz ticks. A presence stream knows it for the audio of a clip
+// it plays in (internal/presence). The samples are still counted, so the
+// step from frame to frame stays exact, but the count is held to the
+// stated place rather than to within a second of the picture: it starts
+// there, and is re-anchored there whenever it is off by more than half a
+// frame, after a reader joins mid stream for one.
+func (a *AudioClock) PTSAt(at uint64, adts []byte) uint64 {
+	return a.pts(at, adts, true)
+}
+
+func (a *AudioClock) pts(videoPTS uint64, adts []byte, stated bool) uint64 {
 	samples, rate, ok := adtsFrame(adts)
 	if !ok {
 		samples = defaultAudioFrameSamples
@@ -215,7 +230,11 @@ func (a *AudioClock) PTS(videoPTS uint64, adts []byte) uint64 {
 	// stays under one tick forever instead of accumulating. It matters for
 	// any rate that does not divide 90000 evenly, such as 44100.
 	pts := a.anchor + a.samples*90000/uint64(a.rate)
-	if diffTicks(pts, videoPTS) > audioResyncTicks {
+	limit := uint64(audioResyncTicks)
+	if stated {
+		limit = samples * 90000 / uint64(a.rate) / 2
+	}
+	if diffTicks(pts, videoPTS) > limit {
 		a.reanchor(videoPTS)
 		pts = a.anchor
 	}

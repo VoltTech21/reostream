@@ -35,5 +35,11 @@ Could not read the config: {{.Error}}. Fix it on the
 <ul class="url-list">{{range .URLs.HTTP}}<li><code>{{.}}</code></li>{{end}}</ul>
 </div>
 
+<div class="card">
+<h2>Snapshots</h2>
+<p>A JPEG the camera takes itself, on this page's address and behind its login. A battery camera wakes for it, so the picture is current. Add <code>?stream=sub</code> for the small one.</p>
+<ul class="url-list">{{range fleet}}<li><a href="{{base}}/cameras/{{.Name}}/snapshot.jpg"><code>{{base}}/cameras/{{.Name}}/snapshot.jpg</code></a></li>{{end}}</ul>
+</div>
+
 <p><a href="{{base}}/">Watch it work</a></p>
 {{end}}

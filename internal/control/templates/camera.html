@@ -18,17 +18,45 @@
 
 <div class="live-grid">
 <div class="live-main">
-<div class="live-player" data-camera="{{.Camera.Name}}"{{if .Battery}} data-battery="1"{{end}}>
+<div class="live-player" data-camera="{{.Camera.Name}}"{{if .Battery}} data-battery="1"{{end}}{{if .WakeOnClick}} data-wake="click"{{end}}>
 <video muted playsinline controls hidden></video>
+{{/* A sleeping battery camera: its last picture (drawn by live.js through
+     reostreamSnapshots, from the keyframe reostream kept, without waking
+     it) and a play button that wakes it. After the player's own video so
+     live.js's box.querySelector('video') still finds that one. */}}
+{{if .WakeOnClick}}<div class="cam-video live-still"{{if .Still}} data-src="{{at .Still}}"{{end}}>
+<img alt="" hidden>
+<video muted playsinline hidden></video>
+<button type="button" class="play-btn live-wake" aria-label="Play {{.Camera.Name}} (wakes it)">&#9654;</button>
+{{/* What the picture is, and nothing more: what play does is the one
+     line under the player (11-04). */}}
+<span class="still-note">{{if .StillNote}}{{.StillNote}}{{else}}Asleep{{end}}</span>
+</div>{{end}}
 <span class="live-tag" hidden><span class="dot"></span>LIVE</span>
 {{template "playerctl"}}
 <button type="button" class="live-full" id="live-full" aria-label="Fullscreen" title="Fullscreen"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
 <p class="live-empty"{{if .Streams}} hidden{{end}}>No video from this camera yet.</p>
-{{if .Battery}}<p class="hint live-battery">Battery camera: awake only while this tab is open, for up to 5 minutes at a time.</p>{{end}}
 </div>
+{{/* Under the player, not in it: in it, the still covered it and its own
+     "Asleep" note said half of it again (11-04). live.js swaps in
+     data-awake once the camera is woken. An always_on camera streams all
+     the time, so it gets no line: "awake only while this tab is open" was
+     not true of it. */}}
+{{if .WakeOnClick}}<p class="hint live-battery" data-awake="Battery camera: awake while it plays, for up to 5 minutes at a time. Each wake uses battery.">Battery camera: press play to wake it (uses battery). It stays awake while it plays, for up to 5 minutes at a time.</p>{{end}}
 </div>
 
 <aside class="live-side">
+{{if .ZoomOffer}}
+<section class="zoom-offer">
+<div class="sec-head"><h2>Zoom lens</h2></div>
+<p class="hint">This camera has a second, zoom lens that reostream is not pulling yet.</p>
+<form method="post" action="{{base}}/cameras/{{.Camera.Name}}/zoom">
+<button type="submit" name="which" value="sub">Add zoom_sub</button>
+<button type="submit" name="which" value="both" class="quiet">Add zoom and zoom_sub</button>
+</form>
+<p class="hint">zoom_sub is small (for detection). zoom is full size and takes one of the camera's two main stream slots, so with main and zoom both pulled nothing else gets this camera's main stream.</p>
+</section>
+{{end}}
 {{if and .Support .Support.HasPTZ}}
 <section class="ptz-card" data-camera="{{.Camera.Name}}">
 <div class="sec-head"><h2>Pan and tilt</h2></div>
@@ -55,10 +83,11 @@
 <div class="ptz-presets">
 {{range .PTZ.Presets}}<button type="button" class="ptz-preset" data-id="{{.ID}}"><span>{{.Name}}</span><span class="mono">#{{.ID}}</span></button>{{end}}
 {{if .PTZ.PresetErr}}<p class="hint">Presets: {{.PTZ.PresetErr}}</p>{{end}}
-<form class="ptz-save" data-id="{{.PTZ.NextPresetID}}">
+{{if .PTZ.Unread}}<p class="hint">Presets are not read when this page opens, so the camera can sleep. <a href="?presets=1">Show presets</a> (wakes it).</p>
+{{else}}<form class="ptz-save" data-id="{{.PTZ.NextPresetID}}">
 <input type="text" name="name" placeholder="Name this view" maxlength="32" aria-label="Preset name">
 <button type="submit" class="quiet">+ Save as preset</button>
-</form>
+</form>{{end}}
 </div>
 <p class="hint ptz-note" aria-live="polite"></p>
 </section>

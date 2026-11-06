@@ -268,3 +268,27 @@ func TestAudioClockReadsTheRateFromADTS(t *testing.T) {
 		t.Fatalf("48 kHz audio step = %d ticks, want 1920", got)
 	}
 }
+
+func TestAudioClockHoldsStatedFramesToTheirPlace(t *testing.T) {
+	// A frame whose place is stated starts there, steps by its exact
+	// sample count even when the stated places carry the microsecond to
+	// tick truncation, and is moved back into place when the count is off
+	// by more than half a frame, as it is when a reader joins after
+	// frames went by uncounted.
+	a := NewAudioClock()
+	adts := []byte{0xFF, 0xF1, 0x60, 0x40, 0x40, 0xFF, 0xFC} // 16 kHz
+	const at = 90000 * 5
+	if got := a.PTSAt(at, adts); got != at {
+		t.Fatalf("first stated frame at %d, want %d", got, at)
+	}
+	if got := a.PTSAt(at+5759, adts); got != at+5760 {
+		t.Fatalf("second stated frame at %d, want the exact step to %d", got, at+5760)
+	}
+	if got := a.PTSAt(at+3*5760, adts); got != at+3*5760 {
+		t.Fatalf("a frame after one went uncounted at %d, want %d", got, at+3*5760)
+	}
+	// Half a second off is well inside PTS's one second, but not here.
+	if got := a.PTSAt(at+45000, adts); got != at+45000 {
+		t.Fatalf("a frame half a second on at %d, want %d", got, at+45000)
+	}
+}

@@ -13,6 +13,9 @@ window.reostreamPlayer = function (url, video) {
   // load measured 7,597 exceptions reading "buffered" off a SourceBuffer
   // removed from its media source, which is what made the page crawl. The
   // seek below does the same job at the only moment it matters.
+  // (The Live tab's own flood of those errors on a camera with a pan and
+  // tilt pad was live.js never destroying the old player at all: see
+  // stopMove there, 11-03.)
   var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: url});
   if (video) {
     video.addEventListener('play', function () {

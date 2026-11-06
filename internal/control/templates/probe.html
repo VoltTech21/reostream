@@ -16,9 +16,10 @@
 {{else if .Undetermined}}
 <td colspan="3" class="state-undetermined">could not determine: {{.Reason}}</td>
 {{else}}
-<td>{{.Codec}}</td>
+{{if .Codec}}<td>{{.Codec}}</td>
 <td>{{.Width}}x{{.Height}}</td>
-<td><input form="add-camera" type="checkbox" name="streams" value="{{.Name}}" checked></td>
+{{else}}<td colspan="2" class="hint">{{.Note}}</td>
+{{end}}<td><input form="add-camera" type="checkbox" name="streams" value="{{.Name}}" checked></td>
 {{end}}
 </tr>
 {{end}}

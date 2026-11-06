@@ -331,13 +331,32 @@ which of its streams are served; cameras added from the page serve all of them. 
 the `[rtsp]` section to turn it off.
 
 Serves `rtsp://host:8561/<cam>`, `<cam>_sub` and `<cam>_extern`, plus `<cam>_zoom` and
-`<cam>_zoom_sub` for a TrackMix's zoom lens (add `"zoom_sub"` to the camera's `streams`
-for the lighter one, 896x512, e.g. for Frigate's detect role). TCP interleaved is the default; UDP is offered, but a lost packet is
+`<cam>_zoom_sub` for a second lens (the TrackMix's zoom). TCP interleaved is the default; UDP is offered, but a lost packet is
 a corrupt frame. Read over TCP (`-rtsp_transport tcp` for ffmpeg; go2rtc and Frigate's
 presets already do): a 16 MP keyframe is hundreds of UDP packets, and a Duo 3 main stream
 read over UDP had 101 of 394 frames damaged even on loopback. Frames dropped further on,
 between go2rtc and Frigate, show only in go2rtc's `/api/streams`, as a `drops` count on a
 reader's `senders`.
+
+### The zoom lens
+
+A two-lens camera (TrackMix, Omvi 3i and other two-lens models) says so when reostream logs in,
+and its zoom lens is served as two more streams: `zoom`, at full size, and `zoom_sub`, small
+(896x512 on a TrackMix, e.g. for Frigate's detect role).
+
+- Adding the camera (Setup, or the network scan) lists both, ticked. Untick `zoom` if
+  another app needs the camera's main stream: the camera serves its main streams to two
+  viewers at most, and `main` and `zoom` are one each. `zoom_sub` costs no main slot.
+- A camera already added without them: its Live tab offers **Add zoom_sub** and **Add zoom
+  and zoom_sub**, and the Cameras page has a tick box for each. Either way they are added to
+  the camera's `streams` (and its `rtsp` list, when it has one) and reostream reloads.
+  Nothing is added until you ask.
+- By hand: add `"zoom"` and/or `"zoom_sub"` to the camera's `streams` and `rtsp` lists.
+
+A recorder asking for a stream that is not turned on gets a 404, and the log says which
+streams that camera does serve and how to turn the missing one on. A stream that is on but
+has had no video from the camera yet (both main slots in use elsewhere, say) is listed with
+"(no video yet)", and asking for it says so instead.
 
 ### A login for the streams
 
