@@ -49,6 +49,26 @@ func TestSaveConfigWritesAndBacksUp(t *testing.T) {
 	}
 }
 
+// TestSaveConfigWritesLFWhenGivenCRLF is the Config page: a browser
+// submits the textarea with CRLF line endings, and the file must not take
+// them on, or the camera list's block editor stops finding its cameras.
+func TestSaveConfigWritesLFWhenGivenCRLF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	if err := saveConfig(path, strings.ReplaceAll(validTOML, "\n", "\r\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != validTOML {
+		t.Fatalf("got %q, want %q", got, validTOML)
+	}
+}
+
 func TestSaveConfigRejectsAnUnknownKeyAndLeavesTheFileAlone(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

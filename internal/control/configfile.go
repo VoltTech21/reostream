@@ -100,6 +100,13 @@ var renameConfig = os.Rename
 // disk just because it is well formed, or a restart is left unable to boot
 // from the very file it wrote.
 func saveConfig(path, text string, checkFleet func([]config.Camera) error) error {
+	// A browser submits a textarea with CRLF line endings whatever the
+	// file had, so a save from the Config page turned the whole file into
+	// CRLF. The loader takes that, but the camera list's block editor
+	// works line by line on "\n"; keep the file in the one form it
+	// expects.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+
 	// The very first save has nothing to put a temp file next to: the data
 	// directory is a fresh volume and may not exist yet. MkdirAll first so
 	// that case works; it is a harmless no-op every other time, when the

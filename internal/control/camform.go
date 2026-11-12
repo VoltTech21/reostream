@@ -385,7 +385,17 @@ func findCameraBlock(lines []string, name string) (start, end int, found bool) {
 		var doc struct {
 			Camera []struct{ Name string }
 		}
-		text := strings.Join(lines[sp.start:sp.end], "\n")
+		// Splitting on "\n" leaves a CRLF file's "\r" on every line, and
+		// the block's last line then ends in a bare "\r", which the
+		// decoder refuses. The file loads fine as a whole, so the block
+		// was taken as "not this camera" and the edit appended a second
+		// one, failing as a duplicate name. A file saved from the Config
+		// page before saveConfig normalized line endings is like this.
+		block := make([]string, 0, sp.end-sp.start)
+		for _, l := range lines[sp.start:sp.end] {
+			block = append(block, strings.TrimSuffix(l, "\r"))
+		}
+		text := strings.Join(block, "\n")
 		if _, err := toml.Decode(text, &doc); err != nil || len(doc.Camera) == 0 {
 			// A block this cannot read is a block this must not edit.
 			// The whole file still has to load for saveConfig to write
