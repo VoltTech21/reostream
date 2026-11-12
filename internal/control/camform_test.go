@@ -115,6 +115,37 @@ address = "192.0.2.51"
 	}
 }
 
+// TestUpsertFindsABlockInACRLFFile is a file saved from the Config page,
+// which a browser submits with CRLF line endings. The block scan used to
+// fail to decode such a block, take it for some other camera, and append
+// a second block with the same name, which the save then refused as a
+// duplicate.
+func TestUpsertFindsABlockInACRLFFile(t *testing.T) {
+	text := strings.ReplaceAll(`listen = "0.0.0.0:8560"
+
+[[camera]]
+name = "one"
+address = "192.0.2.50"
+streams = ["main", "sub"]
+
+[[camera]]
+name = "two"
+address = "192.0.2.51"
+streams = ["main"]
+`, "\n", "\r\n")
+	got := upsertCameraBlock(text, config.Camera{Name: "one", Address: "192.0.2.50", Streams: []string{"main"}})
+
+	if n := strings.Count(got, `name = "one"`); n != 1 {
+		t.Fatalf("camera one appears %d times, want 1, so the block was appended rather than replaced:\n%q", n, got)
+	}
+	if strings.Contains(got, `"sub"`) {
+		t.Errorf("camera one still pulls sub:\n%q", got)
+	}
+	if !strings.Contains(got, `name = "two"`) {
+		t.Errorf("editing camera one destroyed camera two:\n%q", got)
+	}
+}
+
 // TestUpsertAppendsToAnEmptyFile is the first camera on a fresh install,
 // where there is no text to preserve and nothing to separate the block
 // from.
