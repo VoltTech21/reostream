@@ -24,10 +24,12 @@ func TestConfidenceLabels(t *testing.T) {
 		{"osd set", 45, Proven},
 		{"led set", 209, Proven},
 		{"email cfg set", 43, Proven},
+		// Lit and darkened a pano and an Argus, each seen in its report
+		// and in the picture (11-06).
+		{"floodlight set", 288, Proven},
 		// Accepted with any field changed, answered 200 every time, and
 		// re-read identical every time, on two different models.
 		{"md set", 47, KnownInert},
-		{"floodlight set", 288, KnownInert},
 	}
 	for _, tc := range cases {
 		got := confidenceOf(baichuan.ConfigPair{Set: tc.set, Name: tc.name})

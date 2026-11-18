@@ -160,7 +160,11 @@ func (s *Server) addOneFound(addr, name, user, pass string, streams []string, ui
 	if !ok {
 		return fmt.Errorf("the config produced for %q does not contain it", name)
 	}
-	if _, err := s.writeAndApply(upsertCameraBlock(text, cam)); err != nil {
+	text, err = upsertCameraBlock(text, cam)
+	if err != nil {
+		return err
+	}
+	if _, err := s.writeAndApply(text); err != nil {
 		return err
 	}
 	return nil

@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// A battery camera wakes for any session, ours included, and a search
-// only says that it is awake, not why. So every session this process
-// opens is noted here, from the first packet of the dial to its close, and
-// a camera that woke while one was open (or had just closed) woke for us.
+// A battery camera's search answer drops its battery block for any
+// client session, ours included, and does not say whose. So every session
+// this process opens is noted here, from the first packet of the dial to
+// its close, and a camera with a session going while one of ours was open
+// (or had just closed) is awake for us.
 var ours struct {
 	mu   sync.Mutex
 	open map[string]int
@@ -39,8 +40,9 @@ func oursClosed(ip net.IP) {
 }
 
 // Ours reports whether this process has a session with the camera at ip
-// open, or had one within the last d: anything else that wakes the camera
-// is someone else (the Reolink app) or the camera itself (motion).
+// open, or had one within the last d: any other session is someone else's
+// (the Reolink app, another reostream). Motion is not a session at all; it
+// shows in how fast the camera answers (see the supervisor's wake watch).
 func Ours(ip net.IP, d time.Duration) bool {
 	k := ip.String()
 	ours.mu.Lock()

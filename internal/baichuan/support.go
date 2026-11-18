@@ -114,6 +114,11 @@ func ParseSupport(x []byte) (Support, error) {
 // then refuses every later session until it reboots.
 func (s Support) CanTalk() bool { return s.Support.AudioTalk != 0 }
 
+// HasSiren reports whether the camera has a siren to sound. audioAlarm is 1
+// on the TrackMix, the pano, the fisheye and the Argus PT Ultra, and 0 on the
+// RLC-810As, which have no speaker.
+func (s Support) HasSiren() bool { return s.Support.AudioAlarm != 0 }
+
 // HasExternStream reports whether the camera serves the balanced stream.
 func (s Support) HasExternStream() bool { return s.Support.NoExternStream == 0 }
 

@@ -20,6 +20,10 @@ type SubscribeOptions struct {
 	Retry time.Duration
 	// OnError, when set, hears why each connection ended.
 	OnError func(error)
+	// SkipRetained drops the retained messages a broker replays on
+	// subscribing. A command topic needs it: a retained "PRESS" would
+	// sound a siren every time the connection came back.
+	SkipRetained bool
 }
 
 // subscribeKeepAlive is the keep-alive a subscriber asks for. Unlike a
@@ -131,6 +135,9 @@ func subscribeOnce(ctx context.Context, o SubscribeOptions, topics []string, fn 
 						return err
 					}
 				}
+			}
+			if o.SkipRetained && typ&0x01 != 0 {
+				continue
 			}
 			fn(topic, rest)
 		case 9: // SUBACK

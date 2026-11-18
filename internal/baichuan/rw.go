@@ -42,8 +42,9 @@ func ReadConfigWith(ctx context.Context, conn *Conn, id uint32, req []byte) ([]b
 // camera answered.
 //
 // A 200 from this function is not evidence the camera did anything. Message
-// 47 and message 288 both accept a valid document, on hardware that
-// implements the matching read, answer 200, and change nothing observable.
+// 47 accepts a valid document, on hardware that implements the matching
+// read, answers 200, and changes nothing observable; message 288 does the
+// same with the right root element and wrong fields inside it.
 // Callers that need to know whether a write took effect must read the block
 // back on a fresh connection and compare.
 func WriteConfig(ctx context.Context, conn *Conn, id uint32, body []byte) (int16, error) {

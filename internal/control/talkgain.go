@@ -46,7 +46,11 @@ func (s *Server) serveTalkGain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cam.TalkGainDB = db
-	if _, err := s.writeAndApply(upsertCameraBlock(text, cam)); err != nil {
+	text, err = upsertCameraBlock(text, cam)
+	if err == nil {
+		_, err = s.writeAndApply(text)
+	}
+	if err != nil {
 		flash("refused", "talk gain: "+err.Error())
 		return
 	}

@@ -70,6 +70,40 @@ type videoEncoder interface {
 	Encode(au [][]byte) ([]*rtp.Packet, error)
 }
 
+// encodeEach packetizes one access unit with every NAL unit in packets of
+// its own: a single NAL unit packet when it fits, fragmentation units when
+// it does not, and never an aggregation packet (H.265 type 48, H.264
+// STAP-A). The marker bit is set only on the last packet of the access
+// unit, which is what tells a reader the picture is complete.
+//
+// The encoders batch NAL units small enough to share a packet into an
+// aggregation packet, which the RFCs allow and some readers mishandle.
+// go2rtc 1.9.10 passes an H.265 aggregation packet into its MP4 output as
+// one NAL unit instead of unpacking it, so a browser behind it decodes
+// pictures with slices missing and freezes (#25: a Duo 2 whose small
+// P-frame slices, smaller still with the floodlight on, landed in one
+// packet). The camera's own RTSP server never aggregates, so neither does
+// this: handing the encoder one NAL unit at a time leaves it nothing to
+// batch, and the sequence numbers still run on because it is one encoder.
+func encodeEach(enc videoEncoder, au [][]byte) ([]*rtp.Packet, error) {
+	var pkts []*rtp.Packet
+	for _, nalu := range au {
+		if len(nalu) == 0 {
+			// Encode panics on an empty NAL unit; there is nothing to send.
+			continue
+		}
+		p, err := enc.Encode([][]byte{nalu})
+		if err != nil {
+			return nil, err
+		}
+		pkts = append(pkts, p...)
+	}
+	for i, p := range pkts {
+		p.Marker = i == len(pkts)-1
+	}
+	return pkts, nil
+}
+
 // Stream is one camera stream served over RTSP. It implements
 // stream.FrameSink.
 //
@@ -372,6 +406,9 @@ func (s *Stream) videoFrame(f baichuan.Frame) {
 	now := s.wallNow()
 	if s.videoClock == nil {
 		s.videoClock = ts.NewClock()
+		// Read under s.mu, as every PTS call is, so the arrival it
+		// sees is this frame's (#33; see ts.Clock.UseArrival).
+		s.videoClock.UseArrival(s.wallNow)
 		// The clock's first frame is PTS zero, so the epoch is the wall
 		// clock at that frame, not when the stream was registered: a camera
 		// that took longer to answer this run than the last would otherwise
@@ -412,7 +449,7 @@ func (s *Stream) videoFrame(f baichuan.Frame) {
 		return
 	}
 
-	pkts, err := enc.Encode(nalus)
+	pkts, err := encodeEach(enc, nalus)
 	if err != nil {
 		return
 	}

@@ -531,6 +531,7 @@ var routePatterns = []string{
 	"POST /cameras/{name}/stitch",
 	"POST /cameras/{name}/encoding",
 	"POST /cameras/{name}/siren",
+	"POST /cameras/{name}/siren/sound",
 	"GET /cameras/{name}/talk",
 	"GET /cameras/{name}/align",
 	"GET /cameras/{name}/time",
@@ -658,6 +659,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /cameras/{name}/stitch", s.wrap(http.HandlerFunc(s.serveApplyStitch)))
 	mux.Handle("POST /cameras/{name}/encoding", s.wrap(http.HandlerFunc(s.serveApplyEncoding)))
 	mux.Handle("POST /cameras/{name}/siren", s.wrap(http.HandlerFunc(s.serveApplySiren)))
+	mux.Handle("POST /cameras/{name}/siren/sound", s.wrap(http.HandlerFunc(s.serveSoundSiren)))
 	mux.Handle("GET /cameras/{name}/talk", s.wrap(http.HandlerFunc(s.serveTalk)))
 	mux.Handle("GET /cameras/{name}/align", s.wrap(http.HandlerFunc(s.serveAlign)))
 	mux.Handle("GET /cameras/{name}/time", s.wrap(http.HandlerFunc(s.serveTime)))

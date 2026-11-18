@@ -256,4 +256,21 @@ func TestDialNamesPortSettingsWhenUnreachable(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Port Settings") {
 		t.Fatalf("err = %v, want a hint about Port Settings", err)
 	}
+	// What lets the floodlight and the siren go over Baichuan instead.
+	if !Unreachable(err) {
+		t.Fatalf("err = %v is not reported as no web API", err)
+	}
+}
+
+// A camera that answers and refuses is not one with no web API: going
+// round it over Baichuan would hide a wrong password.
+func TestARefusedLoginIsNotUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"cmd":"Login","code":1,"error":{"detail":"invalid user","rspCode":-27}}]`))
+	}))
+	defer srv.Close()
+	_, err := Dial(strings.TrimPrefix(srv.URL, "http://"), "admin", "wrong")
+	if err == nil || Unreachable(err) {
+		t.Fatalf("err = %v, want a refusal that is not unreachable", err)
+	}
 }

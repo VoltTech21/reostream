@@ -352,6 +352,9 @@ func (s *Server) syncRelay() {
 		})
 		log.Printf("control: listening for motion on %d topics", len(list))
 	}
+	if ev.MQTT != "" {
+		s.listenCommands(ctx, mq, ev, prefix, cfg.Cameras)
+	}
 	if len(discovery) > 0 {
 		s.startDiscovery(ctx, mq, ev, prefix, cfg.Cameras, discovery)
 	}

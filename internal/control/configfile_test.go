@@ -417,3 +417,19 @@ func TestSaveConfigPageRefusesAnOversizedPost(t *testing.T) {
 		t.Fatal("an oversized post changed the config")
 	}
 }
+
+// The Config file page's textarea submits CRLF; the file is written with
+// LF so the Camera list can find its blocks afterwards (#34).
+func TestSaveConfigWritesLFLineEndings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := saveConfig(path, strings.ReplaceAll(validTOML, "\n", "\r\n"), nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != validTOML {
+		t.Fatalf("got %q, want %q", got, validTOML)
+	}
+}

@@ -72,7 +72,7 @@ Address = "192.0.2.50"
 name = "two"
 address = "192.0.2.51"
 `
-	got := upsertCameraBlock(text, config.Camera{Name: "two", Address: "192.0.2.99", Streams: []string{"main"}})
+	got := mustUpsert(t, text, config.Camera{Name: "two", Address: "192.0.2.99", Streams: []string{"main"}})
 
 	for _, want := range []string{"# header comment", `Listen = "0.0.0.0:8560"`, "# the one in the hallway", `Name = "one"`, `Address = "192.0.2.50"`} {
 		if !strings.Contains(got, want) {
@@ -106,7 +106,7 @@ not a header
 name = "two"
 address = "192.0.2.51"
 `
-	got := upsertCameraBlock(text, config.Camera{Name: "two", Address: "192.0.2.99"})
+	got := mustUpsert(t, text, config.Camera{Name: "two", Address: "192.0.2.99"})
 	if !strings.Contains(got, "not a header") {
 		t.Errorf("the multi-line string was cut up:\n%s", got)
 	}
@@ -119,7 +119,7 @@ address = "192.0.2.51"
 // where there is no text to preserve and nothing to separate the block
 // from.
 func TestUpsertAppendsToAnEmptyFile(t *testing.T) {
-	got := upsertCameraBlock("", config.Camera{Name: "one", Address: "192.0.2.50"})
+	got := mustUpsert(t, "", config.Camera{Name: "one", Address: "192.0.2.50"})
 	if !strings.HasPrefix(got, "[[camera]]\n") {
 		t.Fatalf("got %q, want a bare block", got)
 	}
@@ -391,5 +391,89 @@ func TestFormEditOfABatteryCameraKeepsItsUID(t *testing.T) {
 	}
 	if cfg.Cameras[0].UID != "95270000TESTUID1" {
 		t.Fatalf("uid became %q", cfg.Cameras[0].UID)
+	}
+}
+
+func mustUpsert(t *testing.T, text string, cam config.Camera) string {
+	t.Helper()
+	got, err := upsertCameraBlock(text, cam)
+	if err != nil {
+		t.Fatalf("upsert %q: %v", cam.Name, err)
+	}
+	return got
+}
+
+// A config saved from the Config file page had CRLF endings, the block
+// scan could not read its camera blocks, and a save on the Camera list
+// appended a second block for the camera: "camera name used more than
+// once" (#34). The block is found and replaced, and the result is LF.
+func TestUpsertFindsTheBlockInACRLFFile(t *testing.T) {
+	text := "listen = \"0.0.0.0:8560\"\r\n\r\n[[camera]]\r\nname = \"porch\"\r\naddress = \"192.0.2.50\"\r\nstreams = [\"main\", \"sub\"]\r\n"
+	got := mustUpsert(t, text, config.Camera{Name: "porch", Address: "192.0.2.50", Streams: []string{"main"}})
+	if n := strings.Count(got, "[[camera]]"); n != 1 {
+		t.Fatalf("%d camera blocks, want 1:\n%s", n, got)
+	}
+	if strings.Contains(got, "\r") {
+		t.Errorf("CRLF left in the result: %q", got)
+	}
+	if !strings.Contains(got, `listen = "0.0.0.0:8560"`) {
+		t.Errorf("the rest of the file was lost:\n%s", got)
+	}
+}
+
+// A header with a comment after it is a header (11-11).
+func TestUpsertFindsAHeaderWithAComment(t *testing.T) {
+	text := `[[camera]] # front of the house
+name = "porch"
+address = "192.0.2.50"
+
+[[camera]]
+name = "gate"
+address = "192.0.2.51"
+`
+	got := mustUpsert(t, text, config.Camera{Name: "porch", Address: "192.0.2.99", Streams: []string{"main"}})
+	if n := strings.Count(got, "[[camera]]"); n != 2 {
+		t.Fatalf("%d camera blocks, want 2:\n%s", n, got)
+	}
+	if strings.Contains(got, `"192.0.2.50"`) || !strings.Contains(got, `name = "gate"`) {
+		t.Errorf("wrong block replaced:\n%s", got)
+	}
+}
+
+// An array spread over lines can have a line starting with "[" that is
+// part of the value, not a header that ends the block (11-11).
+func TestUpsertIsNotFooledByALineStartingWithABracketInsideAnArray(t *testing.T) {
+	text := `[[camera]]
+name = "porch"
+address = "192.0.2.50"
+streams = [
+["main"][0],
+]
+
+[[camera]]
+name = "gate"
+address = "192.0.2.51"
+`
+	lines := strings.Split(text, "\n")
+	start, end, found := findCameraBlock(lines, "gate")
+	if !found || lines[start] != "[[camera]]" || lines[start+1] != `name = "gate"` || end != len(lines)-1 {
+		t.Fatalf("gate block at %d-%d found %v", start, end, found)
+	}
+	if got := bracketDelta(`streams = [ # a [ in a comment`); got != 1 {
+		t.Errorf("bracketDelta counted a comment: %d", got)
+	}
+	if got := bracketDelta(`name = "a [b"`); got != 0 {
+		t.Errorf("bracketDelta counted a string: %d", got)
+	}
+}
+
+// When the scan cannot find a block the file does have, the save is
+// refused instead of appending a second one. A quoted table name is valid
+// TOML the scan does not recognize, so it stands in for whatever the next
+// unforeseen spelling is.
+func TestUpsertNeverAppendsADuplicateName(t *testing.T) {
+	text := "[[\"camera\"]]\nname = \"porch\"\naddress = \"192.0.2.50\"\nstreams = [\"main\"]\n"
+	if _, err := upsertCameraBlock(text, config.Camera{Name: "porch", Address: "192.0.2.99", Streams: []string{"main"}}); err == nil {
+		t.Fatal("appended a second block for a name the file already has")
 	}
 }

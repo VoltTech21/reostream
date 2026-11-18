@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -305,5 +306,43 @@ func TestBatteryCameraAlwaysOnStaysAwake(t *testing.T) {
 	// sub and main each hold one session.
 	if n := atomic.LoadInt32(&wakes); n != 2 {
 		t.Fatalf("woke %d times; want one session per stream", n)
+	}
+}
+
+// A battery camera that lists its streams stays on demand (#38): listing
+// main and sub, with rtsp naming both, used to run them around the clock
+// and keep the camera from ever sleeping.
+func TestBatteryCameraListingStreamsStaysOnDemand(t *testing.T) {
+	fastWake(t)
+	cam := battery
+	cam.Streams = []string{"main", "sub"}
+	cam.RTSP = []string{"main", "sub"}
+	var wakes, awake int32
+	s := New([]config.Camera{cam}, counting(&wakes, &awake))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	s.Run(ctx)
+	if wakes != 0 {
+		t.Fatalf("woke %d times with nobody watching", wakes)
+	}
+	for _, st := range []string{"main", "sub"} {
+		h, ok := s.Hub("porch/" + st)
+		if !ok || !h.OnDemand() {
+			t.Fatalf("listed %s stream is not on demand", st)
+		}
+	}
+}
+
+// main is always there for a battery camera, listed or not: the presence
+// stream and motion wakes hang off it.
+func TestBatteryCameraListingOnlySubKeepsMain(t *testing.T) {
+	cam := battery
+	cam.Streams = []string{"sub"}
+	streams, onDemand := cameraStreams(cam)
+	if !onDemand || !slices.Equal(streams, []string{"sub", "main"}) {
+		t.Fatalf("got %v on demand %v, want [sub main] on demand", streams, onDemand)
+	}
+	if !slices.Equal(cam.Streams, []string{"sub"}) {
+		t.Fatalf("cameraStreams changed the camera's own list: %v", cam.Streams)
 	}
 }

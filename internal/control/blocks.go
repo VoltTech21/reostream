@@ -54,11 +54,11 @@ var provenSetIDs = map[uint32]bool{
 	45:  true, // osd set
 	209: true, // led set
 	43:  true, // email cfg set
+	288: true, // floodlight set, with the app's document (docs/control.md)
 }
 
 var knownInertSetIDs = map[uint32]bool{
-	47:  true, // md set
-	288: true, // floodlight set
+	47: true, // md set
 }
 
 // confidenceOf labels a read/write pair by what this codebase has actually

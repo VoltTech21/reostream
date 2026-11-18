@@ -45,7 +45,7 @@ func main() {
 			os.Exit(1)
 		}
 		for _, info := range found {
-			fmt.Fprintf(os.Stderr, "bcprobe: %s uid %s asleep=%v battery=%d\n", info.Addr, info.UID, info.Asleep, info.Battery)
+			fmt.Fprintf(os.Stderr, "bcprobe: %s uid %s asleep=%v battery=%d rtt=%v\n", info.Addr, info.UID, info.Asleep, info.Battery, info.RTT.Round(time.Millisecond))
 		}
 		return
 	}

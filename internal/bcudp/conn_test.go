@@ -41,7 +41,10 @@ type fakeCam struct {
 	// C2D_C named for the reply.
 	searchedPort  int
 	connectedPort int
-	done          chan struct{}
+	// searchDelay holds each search reply back this long, like a sleeping
+	// camera's Wi-Fi does.
+	searchDelay time.Duration
+	done        chan struct{}
 }
 
 func newFakeCam(t *testing.T) *fakeCam {
@@ -96,7 +99,9 @@ func (f *fakeCam) ctlLoop() {
 		case m.Search != nil:
 			f.mu.Lock()
 			f.searchedPort = m.Search.Port
+			delay := f.searchDelay
 			f.mu.Unlock()
+			time.Sleep(delay)
 			reply := []byte("<P2P><D2C_S_R><bat><low>0</low><pct>57</pct><c>0</c><p>0</p></bat><uid>" + testUID + "</uid></D2C_S_R></P2P>")
 			f.ctl.WriteToUDP(encodeDiscovery(tid, reply), &net.UDPAddr{IP: from.IP, Port: m.Search.Port})
 		case m.Connect != nil && m.Connect.UID == testUID:
@@ -374,5 +379,34 @@ func TestSearch(t *testing.T) {
 	}
 	if got := found[0]; got.UID != testUID || !got.Asleep || got.Battery != 57 || !got.Addr.Equal(net.IPv4(127, 0, 0, 1)) {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// A search is timed from its send to the answer: the round trip is what
+// tells a camera awake to record (a few ms) from one asleep (20 to 500 ms).
+func TestSearchTimesTheAnswer(t *testing.T) {
+	checkSearchTiming(t, newFakeCam(t))
+}
+
+func checkSearchTiming(t *testing.T, f *fakeCam) {
+	t.Helper()
+	dst := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: f.port()}
+	ask := func() time.Duration {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		found, err := search(ctx, dst, true)
+		if err != nil || len(found) != 1 {
+			t.Fatalf("%v %v", found, err)
+		}
+		return found[0].RTT
+	}
+	if rtt := ask(); rtt <= 0 || rtt > 50*time.Millisecond {
+		t.Fatalf("an answer at once took %v", rtt)
+	}
+	f.mu.Lock()
+	f.searchDelay = 120 * time.Millisecond
+	f.mu.Unlock()
+	if rtt := ask(); rtt < 120*time.Millisecond || rtt >= resendEvery {
+		t.Fatalf("an answer held back 120 ms took %v", rtt)
 	}
 }

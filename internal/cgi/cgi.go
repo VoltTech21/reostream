@@ -107,9 +107,22 @@ func DialContext(ctx context.Context, host, user, password string) (*Client, err
 	if errors.As(httpsErr, &refused) {
 		return nil, httpsErr
 	}
-	return nil, fmt.Errorf("cgi: %s: could not reach the camera's HTTP or HTTPS API; "+
+	return nil, &unreachableError{fmt.Errorf("cgi: %s: could not reach the camera's HTTP or HTTPS API; "+
 		"turn one of them on in the Reolink app under Network > Advanced > Port Settings "+
-		"(http: %v; https: %v)", host, httpErr, httpsErr)
+		"(http: %v; https: %v)", host, httpErr, httpsErr)}
+}
+
+// unreachableError is a camera with no web API to talk to: neither HTTP nor
+// HTTPS answered at all. An original Lumus serves only its media port, 9000.
+type unreachableError struct{ error }
+
+func (e *unreachableError) Unwrap() error { return e.error }
+
+// Unreachable reports whether err is Dial finding no web API on the camera,
+// as opposed to one that answered and refused the login.
+func Unreachable(err error) bool {
+	var u *unreachableError
+	return errors.As(err, &u)
 }
 
 // replyError is a camera answering with an error, as opposed to a request

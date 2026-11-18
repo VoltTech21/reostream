@@ -19,8 +19,8 @@ import (
 //   - "confirmed": the write was made, the block was read back on a fresh
 //     connection, and the field holds the new value.
 //   - "accepted": the camera answered 200. No claim is made about effect.
-//     Message 47 (md set) and message 288 (floodlight set) both do this on
-//     models that implement the matching read, and change nothing.
+//     Message 47 (md set) does this on models that implement the matching
+//     read, and changes nothing.
 //   - "refused": the camera rejected the write. Detail explains what the
 //     status actually means, because 421 reads like "not supported" and
 //     means the message was built wrong instead.

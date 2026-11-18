@@ -40,6 +40,12 @@ func openReplySocks() int {
 	return len(replySocks.m)
 }
 
+// The reply port times a search the same way.
+func TestSearchOnReplyPortTimesTheAnswer(t *testing.T) {
+	useReplyPort(t, freePort(t))
+	checkSearchTiming(t, newFakeCam(t))
+}
+
 func TestReplyPortIsNamed(t *testing.T) {
 	port := freePort(t)
 	useReplyPort(t, port)

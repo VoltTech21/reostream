@@ -283,8 +283,9 @@ camera from the NVR does not put the old password back. reostream then gets
 
 To avoid it, give each camera a password before an NVR or hub goes on the same network, or
 turn that switch off. To recover a camera it has already taken, either add the camera
-through the NVR (its address and channel, as above, with the NVR's login), or add it back to
-the NVR and use the NVR's own camera settings to set a password you choose.
+through the NVR (its address and channel, as above, with the NVR's login), add it back to
+the NVR and use the NVR's own camera settings to set a password you choose, or factory reset
+the camera and set it up again with the NVR's switch off.
 
 ## Control page
 
@@ -522,8 +523,8 @@ password = "$BACKYARD_PW"
 - Motion: live, with nothing to set up. When the camera wakes for motion, reostream wakes
   its stream within about a second, so the presence stream carries the motion live, and
   reports it (`reostream/<camera>/motion` on MQTT). See [Motion](#motion) below.
-- Listing `streams` on a battery camera streams it all the time. Only do that on one with
-  constant power.
+- Its streams stay on demand whatever `streams` lists. Only `always_on` (below) keeps it
+  awake, and only on one with constant power.
 
 ### Battery cameras in Frigate
 
@@ -554,18 +555,23 @@ cameras:
 
 #### Motion
 
-Live motion works with nothing to set up. reostream asks the camera once a second whether it
-is asleep; the camera's low-power chip answers without waking it. When the camera's motion
-sensor wakes it to record, reostream sees it within about a second and:
+Live motion works with nothing to set up. reostream searches the camera once a second, which
+the camera answers without waking. Asleep, it answers slowly, at its Wi-Fi's power-save pace
+(about 20 to 500 ms). When its motion sensor wakes it to record, it answers within a few ms
+for as long as it records, and reostream takes three such answers in a row as motion, 5 to
+7 seconds after the motion starts. It then:
 
 - wakes the stream for 30 seconds, so the presence stream, and Frigate recording it, carries
   the motion live instead of the last picture
 - reports it like a wired camera's alerts: `<prefix>/<camera>/motion` on MQTT, and a Frigate
   event with `frigate_motion = true` (both need an `[events]` section)
 
-The camera only needs motion recording on, as it is out of the box. Opening the camera in
-the Reolink app wakes it too, and that looks the same from the network, so it also counts as
-motion. reostream's own sessions (a viewer, the camera page) never do.
+The camera only needs motion recording on, as it is out of the box. reostream has to be on
+the camera's local network: from further away (a VPN, another site) the answers are never
+that fast, motion is missed, and the log says so after 10 minutes. Opening the camera in the
+Reolink app, or another reostream showing it, is not motion: reostream logs that another
+client connected. Its own sessions (a viewer, the camera page) are not motion either. Motion
+that happens while any client is connected cannot be seen this way.
 
 To keep the clips themselves, turn on **Auto-save motion clips** on the camera's page. The
 camera then uploads each motion clip to reostream, which saves it on your disk and plays it
@@ -586,4 +592,11 @@ always_on = true
 ```
 
 Off by default. On a battery, even with solar, it drains the camera in days.
+
+#### A battery camera that will not add
+
+A battery camera bound to a Reolink cloud account can refuse to add, even with the right
+UID and a password just set in the app. Factory reset it, set it up again in the app as a
+local camera, not under a cloud account, give it a password, and add it to reostream
+again.
 

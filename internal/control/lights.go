@@ -90,8 +90,8 @@ func floodlightState(mode, state int) string {
 // cgiDial opens a CGI session to cam, using opts.CGIDial when the caller
 // supplied one so a test can substitute a fake HTTP server, and cgi.Dial
 // otherwise. This mirrors dial in camera.go, which does the same for
-// Baichuan: the floodlight is reachable only over CGI, never over Baichuan,
-// so it needs its own transport and its own substitution point.
+// Baichuan: the floodlight's modes, the fisheye and the stitch are set over
+// CGI, so it needs its own transport and its own substitution point.
 //
 // This does not take ctx, on purpose, even though every caller now has one
 // in hand: Options.CGIDial is the substitution point every test in this
@@ -162,14 +162,10 @@ func readFloodlight(ctx context.Context, c *cgi.Client, channel int) (mode, stat
 // setFloodlight sends mode and state over CGI, changed on top of the
 // camera's current WhiteLed document rather than composed from nothing.
 //
-// This is the floodlight's only working write path. Its Baichuan
-// equivalent, message 288, is known inert on this firmware: it takes a
-// document built with the correct element name, taken from the firmware
-// rather than guessed, and answers 200 while changing nothing observable. A
-// wrong element name on the same message answers 400, so the document is
-// parsed and then discarded, not merely unsupported. Routing the floodlight
-// through writeBlock because it looks tidier next to the rest of this
-// codebase would not work.
+// This sets the light's mode as well as whether it is lit. Its Baichuan
+// counterpart, message 288, only lights it or puts it out now and leaves
+// the mode alone, so it drives the light on a camera with no web API
+// (bclight.go) and this stays the write wherever the web API answers.
 //
 // The body posted here is readFloodlightDoc's own reply with mode and state
 // overwritten, never a three-field object built from scratch: the camera
@@ -255,7 +251,14 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
 
-	c, err := s.cgiDial(cam)
+	c, viaBaichuan, err := s.lightWebAPI(cam)
+	if viaBaichuan {
+		// No web API: the light over the media port (bclight.go). No
+		// undo: putting it out is the other half of the same button.
+		s.setFlash(w, r, flashFor(cam.Name+": floodlight", s.applyFloodlightBC(ctx, cam, opt)))
+		http.Redirect(w, r, "/cameras/"+url.PathEscape(cam.Name)+"/settings/lights", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("connecting to %s: %v", cam.Name, err), http.StatusBadGateway)
 		return
@@ -285,7 +288,7 @@ func (s *Server) serveApplyFloodlight(w http.ResponseWriter, r *http.Request) {
 			result.Outcome = "confirmed"
 		} else {
 			result.Outcome = "accepted"
-			result.Detail = fmt.Sprintf("the camera answered success, but still reads back as %q rather than %q after %s. Acceptance is not effect: see message 288 in docs/control.md.", after, opt.Value, floodlightSettle)
+			result.Detail = fmt.Sprintf("the camera answered success, but still reads back as %q rather than %q after %s. Acceptance is not effect.", after, opt.Value, floodlightSettle)
 		}
 	}
 

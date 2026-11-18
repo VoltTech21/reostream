@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -302,6 +303,9 @@ func TestRelayAnnouncesAndRetractsCameras(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	// Each announced binary sensor starts OFF, not "unknown" (11-13).
+	broker.waitFor(t, "reostream/porch/motion=OFF", "reostream/drive/motion=OFF")
+
 	writeEventsConfig(t, path, addr, true, "porch")
 	s.syncRelay()
 	broker.waitFor(t, drive+"=", "reostream/status=offline")
@@ -320,5 +324,25 @@ func TestRelayAnnouncesAndRetractsCameras(t *testing.T) {
 	}
 	if last != "reostream/status=offline" {
 		t.Fatalf("status ends %q after discovery was turned off, want offline", last)
+	}
+}
+
+// Every binary sensor discovery announces gets an OFF state; a sensor that
+// is not a binary sensor, like a battery level, does not.
+func TestHAInitialStates(t *testing.T) {
+	cams := []config.Camera{
+		{Name: "drive", Address: "192.0.2.1", Streams: []string{"main"}},
+		{Name: "porch", Address: "192.0.2.2", UID: "95270000TESTUID1"},
+	}
+	var got []string
+	for _, m := range haInitialStates("reostream", cams) {
+		got = append(got, m.Topic+"="+string(m.Payload))
+	}
+	want := []string{
+		"reostream/drive/motion=OFF", "reostream/drive/person=OFF", "reostream/drive/vehicle=OFF", "reostream/drive/animal=OFF",
+		"reostream/porch/motion=OFF",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }

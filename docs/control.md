@@ -140,7 +140,7 @@ reading it back on a fresh connection:
 | `209 led set` | takes effect |
 | `43 email cfg set` | takes effect |
 | `47 md set` | **200, and nothing changes** (both models) |
-| `288 floodlight set` | **200, and nothing changes** |
+| `288 floodlight set` | takes effect, with the app's document (see the floodlight below) |
 
 `md set` was tried with one sensitivity window changed, all four changed, and `enable`
 turned off. The camera answered 200 every time and re-read identical every time.
@@ -172,10 +172,13 @@ The shape is visible in the header: a two section message has `MsgLen` greater t
 
 ### A reply status is not proof
 
-Message 288 accepts a floodlight command, with the element name `FloodlightManual` taken
-from the firmware rather than guessed, and answers **200**. Snapshots taken either side of
-it show no change. A wrong element name on the same message answers 400, so the document
-is being parsed and then ignored.
+Message 288 was once recorded here as accepting a floodlight command and doing nothing. It
+was the document, not the message. The root element `FloodlightManual` had come from the
+firmware; the fields inside it had not. A pano tested on 2026-11-06 shows what that looks
+like: `<state>1</state>` where the camera wants `<status>1</status>` answers **200**,
+lights nothing and sends no floodlight report, while the Reolink app's own document lights
+it every time. A wrong root element answers 400; wrong fields inside a right one answer
+200 and are dropped. The camera checks the envelope, not the contents.
 
 `47 md set` behaves the same way and is the more instructive case, because unlike the
 floodlight there is no plausible hardware reason for it: the camera implements `md get`,
@@ -190,9 +193,9 @@ For anything physical, measure it.
 
 ### Some settings are HTTP only
 
-On this firmware the floodlight, the fisheye view modes and the dual lens stitch
-parameters are reachable over the camera's CGI API and not over Baichuan, whatever the
-dispatch table implies.
+On this firmware the floodlight's mode, the fisheye view modes and the dual lens stitch
+parameters are set over the camera's CGI API and not over Baichuan, whatever the dispatch
+table implies. Lighting the floodlight now is not: see below.
 
 `GetWhiteLed` intermittently answers `please login first` (rspCode -6) on a connection
 that logged in seconds earlier. The CGI client logs in again and retries once.
@@ -214,6 +217,74 @@ Mapped by setting each mode over CGI and reading the Baichuan `FloodlightTask` b
 So `on` is mode 1 with state 1, and `motion` is mode 1 with state 0, which is how these
 cameras ship.
 
+### Without a web API
+
+An original Lumus answers on 9000 alone (GitHub #29), and a battery camera has no web API
+at all. For those the light goes over Baichuan, in the Reolink app's own documents
+(captured to a TrackMix, and the same length to the byte as what the app sends a Lumus):
+
+```
+288 floodlight set   extension <channelId>0</channelId>
+  <FloodlightManual version="1.1"><channelId>0</channelId><status>1</status><duration>180</duration></FloodlightManual>
+```
+
+`status` 1 lights it, 0 puts it out. The camera answers 200 with no body, then pushes
+`291 floodlight report`, a `FloodlightStatusList` with each channel's `status` and
+`brightness` (a TrackMix lists both lenses). It also pushes one straight after every
+login, which is how the state is read without changing anything. 288 leaves the light's
+own behavior alone: what it does by itself is `FloodlightTask` (`289` read, `290` write),
+`alarmMode` 0 off, 1 on detection, 3 the schedule.
+
+Measured 2026-11-06 with the web API out of reach: a pano (wired) and an Argus PT Ultra
+(battery, over UDP) each lit on 288 status 1 and went dark on status 0, each confirmed by
+its 291 report and by the picture itself changing within a second of each command, with
+289 reading back the same before and after. Leaving `duration` out, or sending 0, lit the
+pano just the same.
+
+reostream uses this when the camera's web API cannot be reached at all (nothing answers
+HTTP or HTTPS) and on every battery camera. A web API that answers and refuses the login
+is reported as it is: that is a password to fix, not a camera to route round. Where the
+web API answers, the settings page keeps the CGI control and its four modes; over
+Baichuan the page offers on and off now, and shows the mode beside them.
+
+A battery camera wakes for a light command, as for any session. reostream marks the wake
+as its own, so it does not report it as motion. Another reostream watching the same camera
+cannot tell, and will.
+
+### The siren
+
+```
+263 play stop audio   extension <channelId>0</channelId>
+  <audioPlayInfo version="1.1"><channelId>0</channelId><playMode>0</playMode><playDuration>10</playDuration><playTimes>1</playTimes><onOff>1</onOff></audioPlayInfo>
+```
+
+One press, one siren, about 3 seconds on a Lumus, then it stops by itself; the app has no
+stop. This is the sound test too. The Live tab's Siren button and
+`POST /cameras/NAME/siren/sound` send it. Siren on detection is `AudioTask` (`232` read,
+`231` write, the set id below the get): read the whole task, change `enable`, write it all
+back. Whether a camera has a siren at all is the Support block's `audioAlarm`.
+
+### Over MQTT
+
+With `[events] mqtt` set, every camera listens on
+
+| topic | payload |
+|---|---|
+| `PREFIX/NAME/light/set` | `ON` or `OFF` |
+| `PREFIX/NAME/siren/set` | `PRESS` |
+| `PREFIX/NAME/siren_on_detection/set` | `ON` or `OFF` |
+
+and publishes the state the camera reports, retained, on `PREFIX/NAME/light` and
+`PREFIX/NAME/siren_on_detection`. A retained command is ignored, so a siren is never
+sounded again by a reconnect. The light here is 288 on every camera, web API or not: a
+Home Assistant light is "lit now", and the CGI write would also change the mode, its
+`off` stopping the light coming on for motion.
+
+With `ha_discovery` on, a camera whose Support block says it has them appears in Home
+Assistant with a light (Floodlight), a button (Sound siren) and a switch (Siren on
+detection). A battery camera's block is only read when someone opens its page, never to
+announce it, so its entities appear after that.
+
 ## Snapshots
 
 ```
@@ -229,9 +300,9 @@ picture: every request is a new one, sent with `Cache-Control: no-store`.
 
 A battery camera wakes for it. Any session over its UDP transport wakes the camera, the
 snapshot is that session, and closing it afterwards lets the camera sleep again. reostream
-knows the wake was its own, so it does not report it as motion. Anything else watching
-the camera does not know that: a second reostream, or the Reolink app, sees a camera that
-woke by itself.
+knows the wake was its own, so it does not report it as motion. A second reostream
+watching the same camera sees another client connected, which it logs, and does not
+report as motion either.
 
 It lives on the page's port behind the page's login, because each request opens a
 session on the camera, and on a battery camera that is battery. A script signs in once

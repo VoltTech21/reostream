@@ -83,6 +83,19 @@ cameras:
 
 The `#audio=opus` line is optional; it gives browsers and apps audio in live view.
 
+Name the go2rtc stream exactly like the Frigate camera (`driveway` above). Frigate's own
+page can pick another stream through `live.streams`, but the Advanced Camera Card in Home
+Assistant ignores that and asks go2rtc for the camera's name, so a different name gives a
+blank card.
+
+If Frigate runs on Docker's default bridge network and reostream on host networking,
+`127.0.0.1` inside the Frigate container is the container itself, not the host, and gives
+"connection refused". Use the host's LAN address in the go2rtc URLs instead.
+
+If a camera's main stream runs at about half its frame rate, look at its **Frame Rate Mode**
+in the Reolink app or on its Settings tab: on Auto some cameras lower the frame rate in
+low light. Set it to Constant.
+
 Read RTSP over TCP, which go2rtc and Frigate's presets do. Over UDP a big keyframe is
 hundreds of packets and losing any one damages the frame: a 16 MP Duo 3 main stream read
 over UDP had 101 of 394 frames damaged even on loopback. When recordings show green or gray
@@ -158,14 +171,14 @@ Reported working by users (thank you!):
 | E1 | video, privacy mode | GitHub #13 |
 | E1 Zoom 8 MP | video, two-way talk, pan/tilt | Reddit |
 | RLC-822A (6 cameras) | video | GitHub #1 |
-| Video Doorbell PoE (D340P) | video | GitHub #1 |
+| Video Doorbell PoE (D340P, v3.0.0.6460) | video, audio, two-way talk | GitHub #1, Reddit |
 | Video Doorbell (wired 2K) | video | Reddit |
-| Video Doorbell Wi-Fi | video | Reddit |
+| Video Doorbell Wi-Fi (2nd gen, v3.0.0.7106) | video (main, sub, extern), motion, two-way talk (silent on v3.0.0.6460) | Reddit, GitHub #7, #36 |
 | CX820 | video | Reddit |
 | Duo Floodlight Wi-Fi v2 | video | Reddit |
 | Duo 4K Wi-Fi (3 cameras) | video | Reddit |
-| RLC-811A (v3.1.0.3485) | video (sub and extern) | Reddit |
-| Lumus Pro | video (Frigate with hardware decoding off for it) | GitHub #17 |
+| RLC-811A (v3.1.0.4695) | video, audio | Reddit |
+| Lumus Pro | video (Frigate: NVIDIA decoding works; on Intel, hardware decoding off for it) | GitHub #17, Reddit |
 | RLC-410-5MP | video (Frigate) | Reddit |
 | RLC-420 | video (Frigate) | Reddit |
 | RLC-420-5MP | video (Frigate) | Reddit |
@@ -177,6 +190,13 @@ Reported working by users (thank you!):
 | Duo Floodlight PoE | video (Frigate) | Reddit |
 | E1 Outdoor | video (Frigate) | Reddit |
 | FE-W | video (Frigate) | Reddit |
+| CX810 (v3.1.0.6126) | video, audio | Reddit |
+| RLC-522 (v3.0.0.757) | video | GitHub #35 |
+| RLC-820A | video | Reddit |
+| RLC-510WA (Wi-Fi) | video | Reddit |
+| RLC-823S2 (v3.1.0.5714) | video (Frigate) | GitHub #33 |
+| Elite Floodlight (Wi-Fi) | video (main and sub, Frigate) | Reddit |
+| Solar Floodlight Cam (battery, Wi-Fi; v3.0.0.6133) | video on demand, live motion from waking, Frigate | GitHub #36 |
 
 Your camera not here? Open an issue with the model, firmware and what worked,
 and it goes on the list.

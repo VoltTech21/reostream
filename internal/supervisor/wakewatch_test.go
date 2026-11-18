@@ -28,7 +28,7 @@ func fastWatch(t *testing.T, flag *sleepFlag) {
 	wakeWatchEvery, wakeMotionHold = 5*time.Millisecond, 150*time.Millisecond
 	wakeSearch = func(ctx context.Context, host string) (bcudp.Info, error) {
 		flag.searched.Add(1)
-		return bcudp.Info{Addr: net.ParseIP(host), Asleep: flag.asleep.Load(), Battery: -1}, nil
+		return bcudp.Info{Addr: net.ParseIP(host), Asleep: flag.asleep.Load(), Battery: -1, RTT: 90 * time.Millisecond}, nil
 	}
 	wakeOurs = func(net.IP, time.Duration) bool { return flag.ours.Load() }
 	t.Cleanup(func() { wakeWatchEvery, wakeMotionHold, wakeSearch, wakeOurs = every, hold, search, ours })
@@ -50,34 +50,6 @@ func (m *motionLog) calls() []bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]bool(nil), m.got...)
-}
-
-// The camera's PIR wakes it: the main stream wakes with nobody watching,
-// motion goes on, and both end after the hold.
-func TestBatteryWakingOnItsOwnIsMotion(t *testing.T) {
-	var flag sleepFlag
-	flag.asleep.Store(true)
-	fastWatch(t, &flag)
-	var wakes, awake int32
-	var ml motionLog
-	s := New([]config.Camera{battery}, counting(&wakes, &awake))
-	s.SetMotionHook(ml.hook)
-	start(t, s)
-
-	waitFor(t, func() bool { return flag.searched.Load() >= 2 })
-	flag.asleep.Store(false)
-	waitFor(t, func() bool { return atomic.LoadInt32(&awake) == 1 })
-	// The hook can run a moment after the stream counts as awake.
-	waitFor(t, func() bool { return len(ml.calls()) >= 1 })
-	if got := ml.calls(); len(got) != 1 || !got[0] {
-		t.Fatalf("motion hook got %v, want [true]", got)
-	}
-	flag.ours.Store(true) // our stream now holds it awake
-	waitFor(t, func() bool { return len(ml.calls()) == 2 })
-	if got := ml.calls(); got[1] {
-		t.Fatalf("motion hook got %v, want [true false]", got)
-	}
-	waitFor(t, func() bool { return atomic.LoadInt32(&awake) == 0 })
 }
 
 // A wake our own session caused (a viewer, the page, the first picture)

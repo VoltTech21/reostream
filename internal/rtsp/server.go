@@ -55,6 +55,19 @@ type Server struct {
 	// hinted holds the missing paths already logged with a hint, so a
 	// recorder retrying every second logs it once.
 	hinted map[string]bool
+
+	// battery reports whether a camera name is a battery camera, whose
+	// other streams are never served here. See SetBattery.
+	battery func(camera string) bool
+}
+
+// SetBattery tells the server which cameras are battery cameras. Over RTSP
+// one serves only /<camera>, its presence stream, and a 404 for any other
+// of its paths says so instead of telling the reader to list the stream in
+// streams and rtsp, which no longer serves it and used to keep the camera
+// awake around the clock (#38). Call before Start.
+func (s *Server) SetBattery(battery func(camera string) bool) {
+	s.battery = battery
 }
 
 // RequireLogin makes every DESCRIBE and SETUP carry this username and
@@ -328,6 +341,11 @@ func (s *Server) notFound(path string) *base.Response {
 			hint += "; this camera serves " + list
 		}
 		res.StatusMessage = "Not Found: /" + path + " " + hint
+	} else if cam := cameraOfPath(path); stream != "main" && s.battery != nil && s.battery(cam) {
+		res.StatusMessage = "Not Found: " + cam + " is a battery camera and serves only /" + cam + " over RTSP"
+		hint = "is not served: " + cam + " is a battery camera, and over RTSP it serves only /" + cam +
+			", which a recorder can hold open while the camera sleeps. Its " + stream +
+			" stream plays on reostream's page while someone watches"
 	} else {
 		res.StatusMessage = "Not Found: this camera serves " + list + "; turn " + stream + " on in reostream to serve /" + path
 		hint = "is not served; this camera serves " + list + ". " + config.HowToServe(stream)
@@ -346,6 +364,17 @@ func (s *Server) notFound(path string) *base.Response {
 }
 
 // streamOfPath is the stream a path names: what its suffix says, else main.
+// cameraOfPath is the camera name a path starts with: the path without its
+// stream suffix.
+func cameraOfPath(path string) string {
+	for _, suf := range streamSuffixes {
+		if cam, cut := strings.CutSuffix(path, suf); cut && cam != "" {
+			return cam
+		}
+	}
+	return path
+}
+
 func streamOfPath(path string) string {
 	for _, suf := range streamSuffixes {
 		if cam, cut := strings.CutSuffix(path, suf); cut && cam != "" {

@@ -105,3 +105,31 @@ func TestNotFoundListsAStreamWithNoVideoYet(t *testing.T) {
 		t.Errorf("told to turn on a stream that is on:\n%s", logged.String())
 	}
 }
+
+// A battery camera's sub path is never served over RTSP. Its 404 used to
+// say to add "sub" to streams and rtsp, which kept the camera awake around
+// the clock (#38); it now says only /<camera> is served, and why.
+func TestNotFoundForABatteryCameraDoesNotSayToListTheStream(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	s := New("127.0.0.1:8554")
+	s.SetBattery(func(camera string) bool { return camera == "Driveway" })
+	main := s.Add("Driveway")
+	if err := s.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(s.Close)
+	feedUntilReady(t, main, captureFrames(t))
+
+	res := s.notFound("/Driveway_sub")
+	if want := "Not Found: Driveway is a battery camera and serves only /Driveway over RTSP"; res.StatusMessage != want {
+		t.Errorf("status line\n got %q\nwant %q", res.StatusMessage, want)
+	}
+	if strings.Contains(logged.String(), "streams and rtsp lists") {
+		t.Errorf("battery 404 still says to list the stream:\n%s", logged.String())
+	}
+	if !strings.Contains(logged.String(), "/Driveway_sub is not served: Driveway is a battery camera") {
+		t.Errorf("log line:\n%s", logged.String())
+	}
+}

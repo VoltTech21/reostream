@@ -161,3 +161,31 @@ func TestSubscribeStopsWithItsContext(t *testing.T) {
 		t.Fatal("Subscribe did not return after its context ended")
 	}
 }
+
+// A command topic must not act on a retained message the broker replays on
+// subscribing: only what is published while listening counts.
+func TestSubscribeSkipsRetainedWhenAsked(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	subscribed := make(chan []string, 4)
+	go fakeBroker(t, ln, [][]byte{
+		encodePublish("reostream/cam/siren/set", []byte("STALE"), 0, true, 0),
+		encodePublish("reostream/cam/siren/set", []byte("PRESS"), 0, false, 0),
+	}, subscribed)
+	got := make(chan string, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Subscribe(ctx, SubscribeOptions{Addr: ln.Addr().String(), ClientID: "t", SkipRetained: true}, []string{"reostream/cam/siren/set"},
+		func(_ string, payload []byte) { got <- string(payload) })
+	select {
+	case p := <-got:
+		if p != "PRESS" {
+			t.Fatalf("got %q first, want the retained message skipped", p)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("nothing delivered")
+	}
+}

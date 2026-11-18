@@ -301,6 +301,10 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 	// A battery camera's presence stream: what a recorder reads instead of
 	// the camera, so it can stay open around the clock. See internal/presence.
 	if rtspSrv != nil {
+		rtspSrv.SetBattery(func(camera string) bool {
+			c, ok := sup.CameraConfig(camera)
+			return ok && c.UID != ""
+		})
 		sup.AttachPresence(func(camera string, h *hub.Hub) stream.FrameSink {
 			if p := presence.Lookup(camera); p != nil {
 				return p

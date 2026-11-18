@@ -205,6 +205,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 	}
 	for _, cam := range cams {
 		s.talkGain[cam.Name] = cam.TalkGainDB
+		warnBatteryRTSP(cam)
 		streams, _ := cameraStreams(cam)
 		for _, st := range streams {
 			// One hub per camera+stream name so subscribers pick a specific
@@ -218,14 +219,48 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 	return s
 }
 
-// cameraStreams is the streams a camera runs. A battery camera that lists
-// none gets sub and main on demand: they exist so a viewer can wake it,
-// and run only while one is watching.
+// cameraStreams is the streams a camera runs. A battery camera's streams
+// are on demand whatever its streams list says: they exist so a viewer can
+// wake it, and run only while one is watching. Only always_on holds one
+// awake. A battery camera that lists none gets sub and main.
+//
+// Listing streams used to make a battery camera's streams run like a wired
+// camera's, around the clock, with nothing in the config saying so: the
+// camera never slept, never woke for motion, and lost about 1% of battery
+// an hour (#38, a Solar Floodlight Cam whose owner had followed the RTSP
+// 404's advice to add "sub" to streams and rtsp).
+//
+// main is always among them, listed or not: it is the stream the presence
+// stream and motion wakes hang off.
 func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
-	if len(cam.Streams) == 0 && cam.UID != "" {
+	if cam.UID == "" {
+		return cam.Streams, false
+	}
+	if len(cam.Streams) == 0 {
 		return []string{"sub", "main"}, true
 	}
-	return cam.Streams, false
+	streams = slices.Clone(cam.Streams)
+	if !slices.Contains(streams, "main") {
+		streams = append(streams, "main")
+	}
+	return streams, true
+}
+
+// warnBatteryRTSP logs once at start when a battery camera's rtsp list
+// names a stream other than main. Over RTSP a battery camera serves only
+// its presence stream, /<camera>, which a recorder can hold open without
+// keeping the camera awake; its other streams run only for a viewer on
+// reostream's page. The list is not refused, since a config written for
+// 0.2.8 (#38) would then stop reostream from starting.
+func warnBatteryRTSP(cam config.Camera) {
+	if cam.UID == "" {
+		return
+	}
+	for _, st := range cam.RTSP {
+		if st != "main" {
+			log.Printf("supervisor: %s: rtsp lists %q, but a battery camera serves only /%s over RTSP, so it can sleep; its %s stream plays on reostream's page while someone watches", cam.Name, st, cam.Name, st)
+		}
+	}
 }
 
 func newEntry(cam config.Camera, st string) *entry {

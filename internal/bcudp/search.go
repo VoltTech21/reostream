@@ -17,6 +17,13 @@ type Info struct {
 	UID     string
 	Asleep  bool // the reply carried a battery block, which only a sleeping camera sends
 	Battery int  // percent, or -1 when the reply carried none
+	// RTT is how long the answer took from the first time this search was
+	// sent. Asleep, a battery camera answers at its Wi-Fi's power-save
+	// pace, 20 to 500 ms; awake to record, within a few ms (2026-11-06
+	// capture), which is the only sign of motion a search carries. An
+	// answer to a resend is timed from the first send too, so it can only
+	// read slower than it was, never faster.
+	RTT time.Duration
 }
 
 // Search asks the camera at host for its UID and sleep state. It does not
@@ -72,8 +79,12 @@ func search(ctx context.Context, dst *net.UDPAddr, first bool) ([]Info, error) {
 	var found []Info
 	seen := map[string]bool{}
 	buf := make([]byte, 65536)
+	var sent time.Time
 	for {
 		_, _ = sock.WriteToUDP(pkt, dst)
+		if sent.IsZero() {
+			sent = time.Now()
+		}
 		next := time.Now().Add(resendEvery)
 		for time.Now().Before(next) {
 			if ctx.Err() != nil {
@@ -99,6 +110,7 @@ func search(ctx context.Context, dst *net.UDPAddr, first bool) ([]Info, error) {
 			if !ok || seen[from.IP.String()] {
 				continue
 			}
+			info.RTT = time.Since(sent)
 			seen[from.IP.String()] = true
 			found = append(found, info)
 			if first {
@@ -121,12 +133,13 @@ func searchOnReplyPort(ctx context.Context, sock *net.UDPConn, rport int, dst *n
 	type reply struct {
 		b    []byte
 		from net.IP
+		at   time.Time
 	}
 	got := make(chan reply, 16)
 	tid := newTID()
 	r.onTID(tid, func(b []byte, from *net.UDPAddr) {
 		select {
-		case got <- reply{append([]byte(nil), b...), from.IP}:
+		case got <- reply{append([]byte(nil), b...), from.IP, time.Now()}:
 		default:
 		}
 	})
@@ -137,11 +150,18 @@ func searchOnReplyPort(ctx context.Context, sock *net.UDPConn, rport int, dst *n
 	seen := map[string]bool{}
 	t := time.NewTimer(0)
 	defer t.Stop()
+	var sent time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return found, nil
 		case <-t.C:
+			// Stamped before the write: the reply port takes the answer in
+			// on its own goroutine, and on a fast path it can arrive before
+			// WriteToUDP returns, which timed after would make negative.
+			if sent.IsZero() {
+				sent = time.Now()
+			}
 			_, _ = sock.WriteToUDP(pkt, dst)
 			t.Reset(resendEvery)
 		case g := <-got:
@@ -153,6 +173,9 @@ func searchOnReplyPort(ctx context.Context, sock *net.UDPConn, rport int, dst *n
 			if !ok || seen[addr.String()] {
 				continue
 			}
+			// Timed when the reply port took it in, not when this loop
+			// got to it.
+			info.RTT = g.at.Sub(sent)
 			seen[addr.String()] = true
 			found = append(found, info)
 			if first {

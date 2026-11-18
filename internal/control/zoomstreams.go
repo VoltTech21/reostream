@@ -84,7 +84,11 @@ func (s *Server) serveZoomStreams(w http.ResponseWriter, r *http.Request) {
 			cam.RTSP = append(cam.RTSP, st)
 		}
 	}
-	if _, err := s.writeAndApply(upsertCameraBlock(text, cam)); err != nil {
+	text, err = upsertCameraBlock(text, cam)
+	if err == nil {
+		_, err = s.writeAndApply(text)
+	}
+	if err != nil {
 		flash("refused", "zoom streams: "+err.Error())
 		return
 	}

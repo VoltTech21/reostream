@@ -43,6 +43,12 @@ func (o *tsOutput) muxer(codec string, audio bool, now time.Time) (m *ts.Muxer, 
 		} else {
 			m, err = ts.NewMuxer(codec)
 		}
+		if err == nil {
+			// Live frames, so their arrival is real time: a camera
+			// whose clock jumps ahead of it is followed by arrival
+			// instead (#33). Recodec shares this clock.
+			m.FollowArrival(time.Now)
+		}
 		changed = true
 	case !o.mux.Carries(codec, audio):
 		m, err = o.mux.Recodec(codec, audio, gap)

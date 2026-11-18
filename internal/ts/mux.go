@@ -181,6 +181,14 @@ func (m *Muxer) Carries(codec string, audio bool) bool {
 // sending a codec this muxer cannot carry.
 func (m *Muxer) DroppedAudio() int { return m.droppedAudio }
 
+// FollowArrival lets the video clock follow frames' arrival on the wall
+// clock when the camera's own time jumps ahead of it (see Clock.UseArrival).
+// It carries over Recodec, which shares the clock.
+func (m *Muxer) FollowArrival(now func() time.Time) { m.clock.UseArrival(now) }
+
+// FollowedArrival is the video clock's Clock.Followed.
+func (m *Muxer) FollowedArrival() uint64 { return m.clock.Followed() }
+
 // HeldFrames is the video clock's Clock.Held.
 func (m *Muxer) HeldFrames() uint64 { return m.clock.Held() }
 

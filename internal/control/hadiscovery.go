@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,31 @@ type haEntity struct {
 	deviceClass string
 	unit        string
 	diagnostic  bool
+}
+
+// haControls are the entities that drive the camera rather than report it:
+// the floodlight, the siren and siren on detection. They follow from what
+// the camera's Support block says it has, which the config does not know,
+// so each is announced once that block has been read (learnControls) and
+// kept like a learned kind from then on. Home Assistant sends the command
+// to the state topic plus /set (a press, for the siren); see
+// handleCommand.
+var haControls = map[string]haEntity{
+	"light":              {component: "light", object: "light", name: "Floodlight"},
+	"siren":              {component: "button", object: "siren", name: "Sound siren"},
+	"siren_on_detection": {component: "switch", object: "siren_on_detection", name: "Siren on detection"},
+}
+
+// haControlKinds is haControls in a fixed order.
+var haControlKinds = []string{"light", "siren", "siren_on_detection"}
+
+// haKind finds a learned or control kind.
+func haKind(kind string) (haEntity, bool) {
+	if e, ok := haLearned[kind]; ok {
+		return e, true
+	}
+	e, ok := haControls[kind]
+	return e, ok
 }
 
 // haEntities is what a camera can report, which follows from how the relay
@@ -120,11 +146,35 @@ func haDiscoveryMessages(prefix, version string, cams []config.Camera) []discove
 	return out
 }
 
+// haInitialStates is OFF for every binary sensor haDiscoveryMessages
+// announces, retained like the relay's own state messages. Without it a
+// new entity read "unknown" in Home Assistant until the camera's first
+// event of that kind, which on a quiet camera could be days (11-13). A
+// state left ON by a reostream that stopped mid-event is put right by the
+// same message. Learned kinds are not here: they are announced because an
+// event of that kind arrived, and its state comes with it.
+func haInitialStates(prefix string, cams []config.Camera) []discoveryMessage {
+	var out []discoveryMessage
+	for _, c := range cams {
+		for _, e := range haEntities(c) {
+			if e.component == "binary_sensor" {
+				out = append(out, discoveryMessage{Topic: prefix + "/" + c.Name + "/" + e.object, Payload: []byte("OFF")})
+			}
+		}
+	}
+	return out
+}
+
 // haLearnedMessages builds the documents for the learned kinds of each
 // camera still in cams that can learn them. learned is camera -> kinds.
 func haLearnedMessages(prefix, version string, cams []config.Camera, learned map[string]map[string]bool) []discoveryMessage {
 	var out []discoveryMessage
 	for _, c := range cams {
+		for _, kind := range haControlKinds {
+			if learned[c.Name][kind] {
+				out = append(out, haEntityMessage(prefix, version, c.Name, haControls[kind]))
+			}
+		}
 		if !haLearns(c) {
 			continue
 		}
@@ -161,8 +211,16 @@ func haEntityMessage(prefix, version, camera string, e haEntity) discoveryMessag
 	if e.deviceClass != "" {
 		doc["device_class"] = e.deviceClass
 	}
-	if e.component == "binary_sensor" {
+	switch e.component {
+	case "binary_sensor":
 		doc["payload_on"], doc["payload_off"] = "ON", "OFF"
+	case "light", "switch":
+		doc["payload_on"], doc["payload_off"] = "ON", "OFF"
+		doc["command_topic"] = haCommandTopic(prefix, camera, e.object)
+	case "button":
+		delete(doc, "state_topic")
+		doc["command_topic"] = haCommandTopic(prefix, camera, e.object)
+		doc["payload_press"] = "PRESS"
 	}
 	if e.unit != "" {
 		doc["unit_of_measurement"] = e.unit
@@ -182,7 +240,7 @@ func haEntityMessage(prefix, version, camera string, e haEntity) discoveryMessag
 // in haLearned, returns its discovery document to publish. The topic joins
 // the relay's discovered set, so it is retracted with the rest.
 func (r *eventRelay) learn(prefix, version, camera, kind string) (discoveryMessage, bool) {
-	e, ok := haLearned[kind]
+	e, ok := haKind(kind)
 	if !ok {
 		return discoveryMessage{}, false
 	}
@@ -255,13 +313,20 @@ func announce(ctx context.Context, mq *mqtt.Client, msgs []discoveryMessage, ret
 // homeassistant/status), with the entities learned since, and the battery
 // cameras' levels as they change.
 func (s *Server) startDiscovery(ctx context.Context, mq *mqtt.Client, ev config.EventsConfig, prefix string, cams []config.Camera, msgs []discoveryMessage) {
-	go announce(ctx, mq, msgs, 30*time.Second)
+	// The states go after the documents, so Home Assistant has the entity
+	// when its first state arrives.
+	go announce(ctx, mq, append(slices.Clone(msgs), haInitialStates(prefix, cams)...), 30*time.Second)
 	// A learned entity's config is retained by the broker. Reading it back
 	// is how a restarted relay knows the entity is there, to retract it
 	// when the camera is removed or discovery is turned off.
 	topics := []string{haDiscoveryPrefix + "/status"}
 	learnedTopic := map[string][2]string{}
 	for _, c := range cams {
+		for kind, e := range haControls {
+			m := haEntityMessage(prefix, "", c.Name, e)
+			topics = append(topics, m.Topic)
+			learnedTopic[m.Topic] = [2]string{c.Name, kind}
+		}
 		if !haLearns(c) {
 			continue
 		}
@@ -289,6 +354,7 @@ func (s *Server) startDiscovery(ctx context.Context, mq *mqtt.Client, ev config.
 			go announce(ctx, mq, all, 30*time.Second)
 		}
 	})
+	go s.learnControls(ctx, mq, prefix, version, cams)
 	var battery []config.Camera
 	for _, c := range cams {
 		if c.UID != "" && c.Address != "" {

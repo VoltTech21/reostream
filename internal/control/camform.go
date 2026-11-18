@@ -350,6 +350,10 @@ func findCameraBlock(lines []string, name string) (start, end int, found bool) {
 	type span struct{ start, end int }
 	var spans []span
 	var multi string
+	// depth is how many arrays are open at the end of the line before: a
+	// value such as streams = [ spread over several lines can have a line
+	// that starts with "[" (an array inside it), and that is not a header.
+	depth := 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if multi != "" {
@@ -361,14 +365,17 @@ func findCameraBlock(lines []string, name string) (start, end int, found bool) {
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "[") {
+		if depth == 0 && strings.HasPrefix(trimmed, "[") {
 			if len(spans) > 0 {
 				spans[len(spans)-1].end = i
 			}
-			if strings.HasPrefix(trimmed, "[[") && strings.TrimSpace(strings.Trim(trimmed, "[]")) == "camera" {
+			if isCameraHeader(trimmed) {
 				spans = append(spans, span{start: i, end: len(lines)})
 			}
 			continue
+		}
+		if depth += bracketDelta(line); depth < 0 {
+			depth = 0
 		}
 		for _, delim := range []string{`"""`, `'''`} {
 			if strings.Count(line, delim)%2 == 1 {
@@ -385,7 +392,13 @@ func findCameraBlock(lines []string, name string) (start, end int, found bool) {
 		var doc struct {
 			Camera []struct{ Name string }
 		}
-		text := strings.Join(lines[sp.start:sp.end], "\n")
+		block := make([]string, 0, sp.end-sp.start)
+		for _, l := range lines[sp.start:sp.end] {
+			// A file saved with CRLF endings splits into lines ending in
+			// "\r", and the decoder refuses a bare one (#34).
+			block = append(block, strings.TrimSuffix(l, "\r"))
+		}
+		text := strings.Join(block, "\n")
 		if _, err := toml.Decode(text, &doc); err != nil || len(doc.Camera) == 0 {
 			// A block this cannot read is a block this must not edit.
 			// The whole file still has to load for saveConfig to write
@@ -400,8 +413,56 @@ func findCameraBlock(lines []string, name string) (start, end int, found bool) {
 	return 0, 0, false
 }
 
+// isCameraHeader reports whether a trimmed line is the [[camera]] table
+// header, allowing the spaces and the trailing comment TOML allows there:
+// "[[camera]] # porch" is a header like any other (11-11).
+func isCameraHeader(trimmed string) bool {
+	if !strings.HasPrefix(trimmed, "[[") {
+		return false
+	}
+	head, _, _ := strings.Cut(trimmed, "#")
+	head = strings.TrimSpace(head)
+	if !strings.HasSuffix(head, "]]") {
+		return false
+	}
+	return strings.TrimSpace(head[2:len(head)-2]) == "camera"
+}
+
+// bracketDelta is how many more arrays a line opens than it closes, not
+// counting brackets inside strings or after a comment.
+func bracketDelta(line string) int {
+	n := 0
+	var quote byte
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quote != 0:
+			if c == '\\' && quote == '"' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '#':
+			return n
+		case c == '[':
+			n++
+		case c == ']':
+			n--
+		}
+	}
+	return n
+}
+
 // upsertCameraBlock returns text with cam's [[camera]] block replaced, or
 // appended when there is no block for that name yet.
+//
+// It never appends a second block for a name the file already has. When
+// the scan cannot find a block the loader can (a CRLF file did that, #34,
+// and so did a header with a comment after it), appending made a file
+// that failed with "camera name used more than once", which read as the
+// person's mistake; it is an error here instead, and nothing is written.
 //
 // This is a text edit, not a re-encode. saveCamera used to run the whole
 // decoded config back through toml.NewEncoder, which produced a correct
@@ -410,25 +471,36 @@ func findCameraBlock(lines []string, name string) (start, end int, found bool) {
 // which a ledger ruling leaned on), the file's own key casing, and the
 // order a person had put things in. Adding one camera is one thing
 // changed, so one thing is what gets changed.
-func upsertCameraBlock(text string, cam config.Camera) string {
+func upsertCameraBlock(text string, cam config.Camera) (string, error) {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	block := cameraBlockText(cam)
 	lines := strings.Split(text, "\n")
 	start, end, found := findCameraBlock(lines, cam.Name)
 	if !found {
+		var doc struct {
+			Camera []struct{ Name string }
+		}
+		if _, err := toml.Decode(text, &doc); err == nil {
+			for _, c := range doc.Camera {
+				if c.Name == cam.Name {
+					return "", fmt.Errorf("could not find camera %q's block in the config file to change it; edit it on the Config file page instead", cam.Name)
+				}
+			}
+		}
 		// A blank line before the new block, so the file reads the way
 		// the ones people write by hand do. A file that is empty or
 		// whitespace-only becomes just the block.
 		existing := strings.TrimRight(text, "\n")
 		if strings.TrimSpace(existing) == "" {
-			return block
+			return block, nil
 		}
-		return existing + "\n\n" + block
+		return existing + "\n\n" + block, nil
 	}
 	var prefix string
 	if start > 0 {
 		prefix = strings.Join(lines[:start], "\n") + "\n"
 	}
-	return prefix + block + strings.Join(lines[end:], "\n")
+	return prefix + block + strings.Join(lines[end:], "\n"), nil
 }
 
 // removeCameraBlock drops the [[camera]] block named name from the config
@@ -514,7 +586,10 @@ func (s *Server) saveCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	note, err := s.writeAndApply(upsertCameraBlock(text, cam))
+	note, err := "", error(nil)
+	if text, err = upsertCameraBlock(text, cam); err == nil {
+		note, err = s.writeAndApply(text)
+	}
 	page := s.camerasPage(r.Context())
 	if err != nil {
 		page.Error = err.Error()

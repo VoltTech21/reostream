@@ -83,8 +83,7 @@ func (s *Server) serveSoundTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	doc := fmt.Sprintf("<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<body>\n<audioPlayInfo version=\"1.1\">\n<channelId>%d</channelId>\n<playMode>0</playMode>\n<playDuration>10</playDuration>\n<playTimes>1</playTimes>\n<onOff>1</onOff>\n</audioPlayInfo>\n</body>\n", cam.Channel)
-	status, err := baichuan.WriteConfig(ctx, conn, 263, []byte(doc))
+	status, err := baichuan.WriteConfig(ctx, conn, baichuan.MsgIDPlayStopAudio, baichuan.SirenXML(cam.Channel))
 	if err != nil || status != 200 {
 		json.NewEncoder(w).Encode(map[string]any{"ok": false, "detail": fmt.Sprintf("%v %s", err, baichuan.ExplainStatus(status))})
 		return

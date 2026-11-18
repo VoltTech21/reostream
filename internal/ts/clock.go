@@ -35,9 +35,107 @@ type Clock struct {
 	lastPTS uint64 // previous return value, for the monotonic clamp below
 	offset  uint64 // where the current camera timeline joins the PTS timeline, see Resume
 	held    uint64 // frames given lastPTS because the camera's time went backwards
+
+	// Arrival time, for a camera whose own clock cannot be trusted (#33).
+	// See UseArrival.
+	now         func() time.Time // nil: camera time only, as before
+	adj         int64            // ticks added to the camera's timeline after following arrival
+	prevElapsed int64            // previous frame's elapsed camera microseconds
+	prevAt      time.Time        // previous frame's arrival
+	creep       int64            // microseconds arrival has gained on camera time, frame by frame
+	follow      bool             // PTS follows arrival time, not the camera's
+	winCam      int64            // camera microseconds in the current agreement window
+	winArr      int64            // arrival microseconds in the same window
+	followed    uint64           // times the clock has switched to following arrival
 }
 
 func NewClock() *Clock { return &Clock{} }
+
+// UseArrival gives the clock the wall clock, read once per frame as that
+// frame's arrival, so a camera whose own timestamps run off from real time
+// can be followed by arrival instead.
+//
+// The case that needs it is an RLC-823S2 at night (#33): it sends about 13
+// frames a second but stamps each one 40 ms after the last, as if it were
+// still sending 25. Its clock falls behind real time by about half a
+// second every second, and every 12 s or so it jumps forward 5 to 6 s to
+// catch up. Through camera time alone each jump is a 5 to 6 s hole in
+// both outputs, and in between the picture plays at nearly twice speed.
+//
+// The signature is a single frame on which the camera's time steps
+// forward by more than jumpAhead while its arrival came only a frame
+// later, after arrival time had been gaining on camera time steadily,
+// frame by frame (creep). A network stall is the opposite shape: arrival
+// leaps while camera time steps a frame, so it neither counts as creep
+// nor looks like a jump, and the timeline keeps the camera's own timing
+// through it, as before. A camera whose clock keeps real time never trips
+// this, and its PTS is exactly what camera time alone gives.
+//
+// Once tripped, PTS advances by arrival for as long as the camera's time
+// and arrival keep disagreeing, and goes back to the camera's own timing,
+// carrying on from where arrival left it, after agreeWindow in which the
+// two agreed to within agreeSlack: the same camera keeps proper time by
+// day. Audio needs nothing of its own here: AudioClock anchors to this
+// clock's LastPTS, so it follows whichever timing video is on.
+//
+// Without it (nil, the default) the clock is camera time only, which is
+// what a muxer replaying frames faster than real time needs.
+func (c *Clock) UseArrival(now func() time.Time) { c.now = now }
+
+const (
+	// jumpAhead is how far a camera's time must step ahead of arrival on
+	// one frame to count as a jump. A real frame interval is tens of
+	// milliseconds; the jumps seen on #33 were 5.2 to 6.2 s.
+	jumpAhead = int64(time.Second / time.Microsecond)
+	// creepStep bounds the frame-to-frame disagreement that counts toward
+	// creep. Anything bigger is a stall or a jump, not the steady slip of a
+	// mis-stamping camera, and starts the count over.
+	creepStep = int64(250 * time.Millisecond / time.Microsecond)
+	// agreeWindow and agreeSlack decide when following arrival can stop:
+	// 30 s of arrival in which camera time moved within half a second of it,
+	// which a camera running at half speed misses by 15 s.
+	agreeWindow = int64(30 * time.Second / time.Microsecond)
+	agreeSlack  = int64(500 * time.Millisecond / time.Microsecond)
+)
+
+// Followed reports how many times the clock switched from the camera's
+// own time to arrival time. The stream logs a rise.
+func (c *Clock) Followed() uint64 { return c.followed }
+
+// followArrival reports whether this frame's PTS comes from arrival, given
+// how far camera time and arrival moved since the previous frame.
+func (c *Clock) followArrival(camStep, arrStep int64) bool {
+	ahead := camStep - arrStep
+	if !c.follow {
+		if ahead > jumpAhead && 2*c.creep >= ahead {
+			c.follow = true
+			c.followed++
+			c.creep, c.winCam, c.winArr = 0, 0, 0
+			return true
+		}
+		if ahead > -creepStep && ahead < creepStep {
+			c.creep -= ahead
+		} else {
+			c.creep = 0
+		}
+		return false
+	}
+	if ahead > jumpAhead || ahead < -jumpAhead {
+		c.winCam, c.winArr = 0, 0
+		return true
+	}
+	c.winCam += camStep
+	c.winArr += arrStep
+	if c.winArr >= agreeWindow {
+		d := c.winCam - c.winArr
+		c.winCam, c.winArr = 0, 0
+		if d <= agreeSlack && d >= -agreeSlack {
+			c.follow = false
+			return false
+		}
+	}
+	return true
+}
 
 // wrapThreshold is how far backwards the camera clock may appear to move
 // before it is treated as a wrap rather than as frames arriving out of order.
@@ -48,12 +146,18 @@ const wrapThreshold = 1 << 31
 // PTS returns the 90 kHz presentation timestamp for a frame captured at the
 // given camera time.
 func (c *Clock) PTS(micros uint32) uint64 {
+	var at time.Time
+	if c.now != nil {
+		at = c.now()
+	}
 	if !c.started {
 		c.started = true
 		c.base = micros
 		c.last = micros
 		c.wraps = 0
 		c.lastPTS = c.offset
+		c.adj, c.prevElapsed, c.prevAt = 0, 0, at
+		c.creep, c.follow, c.winCam, c.winArr = 0, false, 0, 0
 		return c.offset
 	}
 	if micros < c.last && c.last-micros > wrapThreshold {
@@ -69,15 +173,38 @@ func (c *Clock) PTS(micros uint32) uint64 {
 	// garbage PTS; computed as signed, it comes out negative and is caught by
 	// the clamp below instead.
 	elapsed := int64(c.wraps<<32) + int64(micros) - int64(c.base)
-
-	pts := c.offset
+	var ticks int64
 	if elapsed > 0 {
 		// Microseconds to 90 kHz ticks: multiply by 9, divide by 100. Done in
 		// this order so the division does not throw away resolution.
-		pts += uint64(elapsed) * 9 / 100
+		ticks = elapsed * 9 / 100
+	}
+	camStep := elapsed - c.prevElapsed
+	c.prevElapsed = elapsed
+
+	if !at.IsZero() {
+		arrStep := int64(-1)
+		if !c.prevAt.IsZero() {
+			arrStep = int64(at.Sub(c.prevAt) / time.Microsecond)
+		}
+		c.prevAt = at
+		if arrStep >= 0 && c.followArrival(camStep, arrStep) {
+			// At least a tick, so frames that arrive together still
+			// count forward rather than reading as duplicates.
+			step := arrStep * 9 / 100
+			if step < 1 {
+				step = 1
+			}
+			pts := c.lastPTS + uint64(step)
+			// Camera time picks up from here when it is trusted again.
+			c.adj = int64(pts) - int64(c.offset) - ticks
+			c.lastPTS = pts
+			return pts
+		}
 	}
 
-	if pts < c.lastPTS {
+	pts := int64(c.offset) + ticks + c.adj
+	if pts < int64(c.lastPTS) {
 		// A repeated timestamp reads to a decoder as a duplicate frame, which
 		// is harmless. A timestamp that jumps backwards or forwards reads as
 		// a stall or a seek, which is what an unnoticed underflow or a stray
@@ -85,8 +212,8 @@ func (c *Clock) PTS(micros uint32) uint64 {
 		c.held++
 		return c.lastPTS
 	}
-	c.lastPTS = pts
-	return pts
+	c.lastPTS = uint64(pts)
+	return uint64(pts)
 }
 
 // Resume tells the clock the camera connection was re-established and the

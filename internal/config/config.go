@@ -419,6 +419,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("camera %q has no streams", cam.Name)
 		}
 		seenStreams := make(map[string]bool, len(cam.Streams))
+		if len(cam.Streams) == 0 && cam.UID != "" {
+			// What a battery camera that lists none runs, on demand.
+			seenStreams["sub"], seenStreams["main"] = true, true
+		}
 		for _, s := range cam.Streams {
 			if !validStreamNames[s] {
 				return fmt.Errorf("camera %q: unknown stream %q", cam.Name, s)

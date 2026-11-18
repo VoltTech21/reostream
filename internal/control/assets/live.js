@@ -342,6 +342,20 @@
         .then(function () { flood.disabled = false; });
     });
   }
+  // Siren: one press sounds it once, for about 3 seconds; it stops by
+  // itself.
+  var siren = document.getElementById('live-siren');
+  if (siren) {
+    siren.addEventListener('click', function () {
+      if (!askFirst('Sound the siren on the camera? It is loud.')) return;
+      siren.disabled = true;
+      fetch(pageBase + '/cameras/' + encodeURIComponent(siren.dataset.camera) + '/siren/sound', {method: 'POST', credentials: 'same-origin'})
+        .then(function (r) { return r.json(); })
+        .then(function (res) { alertNote(res.ok ? 'Siren sounded.' : 'Siren: ' + res.detail); })
+        .catch(function (e) { alertNote('Siren: ' + e.message); })
+        .then(function () { siren.disabled = false; });
+    });
+  }
   function alertNote(t) {
     var n = document.getElementById('live-msg');
     if (n) n.textContent = t;

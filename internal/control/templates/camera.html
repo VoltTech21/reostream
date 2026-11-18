@@ -116,6 +116,9 @@
 {{if .HasFloodlight}}<button type="button" class="quick-btn" id="live-flood" data-camera="{{.Camera.Name}}" aria-pressed="{{if eq .FloodlightCurrent "on"}}true{{else}}false{{end}}" data-was="{{if eq .FloodlightCurrent "on"}}off{{else}}{{.FloodlightCurrent}}{{end}}">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/></svg>
 <span>Floodlight</span></button>{{end}}
+{{if .HasSiren}}<button type="button" class="quick-btn" id="live-siren" data-camera="{{.Camera.Name}}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 18v-5a6 6 0 0 1 12 0v5M4 18h16M12 3v2M4.5 6.5 6 8M19.5 6.5 18 8"/></svg>
+<span>Siren</span></button>{{end}}
 </div>
 <p class="hint live-msg" id="live-msg" aria-live="polite"></p>
 <div class="live-urls" id="live-urls" hidden>
@@ -677,7 +680,9 @@ function netConfirm(f) {
 {{if and (eq $group.Title "Lights") $.HasFloodlight}}
 {{if $.FloodlightErr}}<p class="outcome-refused">{{$.FloodlightErr}}</p>{{end}}
 <div class="setting">
-<p><span class="tier tier-{{$group.Tier}}" title="{{$group.TierLabel}}"></span>Floodlight{{template "info" "Motion: on when something moves. Schedule: on at the hours set in the Reolink app."}}</p>
+{{if $.FloodlightBC}}<p><span class="tier tier-{{$group.Tier}}" title="{{$group.TierLabel}}"></span>Floodlight now{{template "info" "This camera has no web API, so the light is switched over its media port: on or off now. What it does by itself is set below."}}</p>
+{{if $.FloodlightMode}}<p class="hint">By itself: {{$.FloodlightMode}}.</p>{{end}}
+{{else}}<p><span class="tier tier-{{$group.Tier}}" title="{{$group.TierLabel}}"></span>Floodlight{{template "info" "Motion: on when something moves. Schedule: on at the hours set in the Reolink app."}}</p>{{end}}
 <form class="control autosave" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/floodlight" onsubmit="return confirm('{{$.FloodlightConfirm}}')">
 <div class="segmented" role="radiogroup" aria-label="Floodlight">
 {{$currentFloodlight := $.FloodlightCurrent}}

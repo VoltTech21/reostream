@@ -853,8 +853,8 @@ func set(conn *baichuan.Conn, args []string) error {
 
 // floodlight reads or drives the white light over the camera's HTTP API.
 //
-// The Baichuan path (288, FloodlightManual) answers 200 for any well formed
-// body and does nothing observable, so this is the one shown to work.
+// This sets the light's mode too. Lighting it now without touching the mode
+// is message 288 over Baichuan (docs/control.md, "Without a web API").
 //
 // mode and state are separate: mode is what the light does, state is whether
 // it is lit right now. Mapped against the Baichuan FloodlightTask on a live

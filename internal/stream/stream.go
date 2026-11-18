@@ -342,6 +342,9 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	// Frames whose timestamp was held because the camera's time went
 	// backwards, logged at most once a minute.
 	var reportedHeld uint64
+	// Times the video clock switched to following arrival (#33), logged
+	// once per switch: a camera that does it at all does it all night.
+	var reportedFollowed uint64
 	var heldLogged time.Time
 	lastPing := time.Now()
 
@@ -451,6 +454,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 							mux = nm
 							reportedDroppedAudio = mux.DroppedAudio()
 							reportedHeld = mux.HeldFrames()
+							reportedFollowed = mux.FollowedArrival()
 							// Set the header before the first Publish. A client
 							// that subscribes between Publish and SetHeader gets
 							// no PAT/PMT and stalls until the next table repeat.
@@ -540,6 +544,10 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						if held := mux.HeldFrames(); held > reportedHeld && time.Since(heldLogged) >= time.Minute {
 							log.Printf("stream: %s: the camera's clock went backwards; %d frames kept the previous timestamp, which a player can show as a frozen picture", cfg.Name, held-reportedHeld)
 							reportedHeld, heldLogged = held, time.Now()
+						}
+						if followed := mux.FollowedArrival(); followed > reportedFollowed {
+							log.Printf("stream: %s: the camera's clock jumped ahead of real time; timestamps follow when frames arrive until it keeps time again", cfg.Name)
+							reportedFollowed = followed
 						}
 					}
 				}
