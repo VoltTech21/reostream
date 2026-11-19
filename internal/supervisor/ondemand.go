@@ -63,10 +63,38 @@ func (s *Supervisor) Motion(camera string, on bool) bool {
 	return false
 }
 
+// RTSPReaders adds delta to the RTSP readers of camera's presence stream
+// (its main path). For a battery camera with wake_on_rtsp they count as
+// viewers: the camera wakes while one plays and sleeps after the last
+// leaves. It reports whether camera is such a camera.
+func (s *Supervisor) RTSPReaders(camera string, delta int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.entries {
+		if e.onDemand && e.cfg.WakeOnRTSP && e.cfg.Name == camera && e.cfg.Stream == "main" {
+			// A reload replaces the entry and its count, so a reader that
+			// played before it can leave after: never below zero.
+			if n := e.rtspReaders.Add(int64(delta)); n < 0 {
+				e.rtspReaders.Store(0)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// rtspWanted is whether an RTSP reader of the presence stream asks for the
+// camera (wake_on_rtsp).
+func rtspWanted(e *entry) bool {
+	return e.cfg.WakeOnRTSP && e.rtspReaders.Load() > 0
+}
+
 // wanted is whether an on-demand stream should be awake: it is always on,
-// someone is watching, or the camera reports motion.
+// someone is watching (here or over RTSP with wake_on_rtsp), or the
+// camera reports motion.
 func wanted(e *entry) bool {
-	return e.alwaysOn || e.h.Clients() > 0 || time.Now().UnixNano() < e.motionUntil.Load()
+	return e.alwaysOn || e.h.Clients() > 0 || rtspWanted(e) ||
+		time.Now().UnixNano() < e.motionUntil.Load()
 }
 
 // runOnDemand owns a battery camera's stream: asleep until a viewer
@@ -172,6 +200,8 @@ func (s *Supervisor) wakeSession(ctx context.Context, e *entry) (string, error) 
 	switch {
 	case e.alwaysOn:
 		why = "always on"
+	case e.h.Clients() == 0 && rtspWanted(e):
+		why = "an RTSP reader"
 	case e.h.Clients() == 0:
 		why = "motion"
 	}

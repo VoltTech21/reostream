@@ -305,6 +305,12 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 			c, ok := sup.CameraConfig(camera)
 			return ok && c.Sleeps
 		})
+		// wake_on_rtsp: a reader of /<camera>, the presence stream, wakes
+		// the camera like a viewer. Other paths are not served for a
+		// battery camera, and a wired camera's are ignored.
+		rtspSrv.SetReaders(func(path string, delta int) {
+			sup.RTSPReaders(path, delta)
+		})
 		sup.AttachPresence(func(camera string, h *hub.Hub) stream.FrameSink {
 			if p := presence.Lookup(camera); p != nil {
 				return p

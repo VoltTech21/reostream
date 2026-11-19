@@ -362,3 +362,20 @@ func TestHubBatteryCameraIsOnDemand(t *testing.T) {
 		t.Fatal("a hub channel without battery = true went on demand")
 	}
 }
+
+// With wake_on_rtsp an RTSP reader of the presence stream asks for the
+// camera; without it, or with no reader left, it does not.
+func TestRTSPReaderWantsTheCameraOnlyWithWakeOnRTSP(t *testing.T) {
+	e := &entry{cfg: stream.Config{Name: "doorbell", Stream: "main", WakeOnRTSP: true}}
+	if rtspWanted(e) {
+		t.Fatal("no reader, yet the camera is wanted")
+	}
+	e.rtspReaders.Store(1)
+	if !rtspWanted(e) {
+		t.Fatal("a reader with wake_on_rtsp does not want the camera")
+	}
+	e.cfg.WakeOnRTSP = false
+	if rtspWanted(e) {
+		t.Fatal("a reader without wake_on_rtsp wants the camera")
+	}
+}

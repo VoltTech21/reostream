@@ -274,6 +274,15 @@ it: a battery doorbell drains in days. The camera's own UDP search does not reac
 behind the hub, so its motion is not seen on its own; give it a `motion_topic` (fed for
 instance by Home Assistant's Reolink integration on the hub) to wake it for motion.
 
+To let a viewer outside reostream wake it, add `wake_on_rtsp = true`. A reader of its
+presence stream `rtsp://<host>:8561/<camera>` then counts as a viewer: the stream
+answers at once with the last picture, the camera wakes, the picture turns live, and the
+camera sleeps again 10 s after the last reader leaves. go2rtc opens a source only while
+someone watches it, so pointed at the presence stream it wakes the camera exactly when a
+dashboard shows it. A session still ends after 5 minutes, and a reader still there wakes
+the camera again. Never set it for a camera a recorder (Frigate) reads around the clock:
+it would never sleep.
+
 #### Connections to the recorder
 
 A recorder limits connections, not streams: one user's RLN8-410 held about ten and reset

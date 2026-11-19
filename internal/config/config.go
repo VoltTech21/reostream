@@ -62,6 +62,15 @@ type Camera struct {
 	// it in days. A camera with a UID is a battery camera already.
 	Battery bool `toml:"battery"`
 
+	// WakeOnRTSP lets an RTSP reader of a battery camera's presence stream
+	// (/<camera>) wake it, as a viewer on the control page does: go2rtc
+	// opens the stream only while someone watches, so the camera wakes
+	// for that viewer and sleeps again after. wake_max still ends each
+	// session after 5 minutes; a reader still there wakes it again. Never
+	// for a recorder that holds the stream open around the clock (Frigate):
+	// the camera would never sleep. Off by default.
+	WakeOnRTSP bool `toml:"wake_on_rtsp"`
+
 	// Rotate turns this camera's picture: 90, 180 or 270 degrees
 	// anticlockwise, in reostream's own player and written into the H.265
 	// stream as a display orientation note rather than re-encoded, which
@@ -429,6 +438,9 @@ func (c *Config) Validate() error {
 
 		// A battery camera may list no streams: reostream then only reaches
 		// it on demand (settings, recordings) and never holds it awake.
+		if cam.WakeOnRTSP && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: wake_on_rtsp is for a battery camera, one with a uid or battery = true", cam.Name)
+		}
 		if len(cam.Streams) == 0 && !cam.Sleeps() {
 			return fmt.Errorf("camera %q has no streams", cam.Name)
 		}

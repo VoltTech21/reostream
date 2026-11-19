@@ -123,6 +123,10 @@ type Config struct {
 	// over RTSP.
 	Sleeps bool
 
+	// WakeOnRTSP lets an RTSP reader of the presence stream wake a
+	// sleeping camera (config Camera.WakeOnRTSP).
+	WakeOnRTSP bool
+
 	// IdleTimeout overrides baichuan.DefaultIdleTimeout. A battery camera
 	// that is awake sends within a couple of seconds, so one that does not
 	// is holding a session and is quicker to retry than to wait out.
