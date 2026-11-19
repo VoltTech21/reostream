@@ -346,3 +346,36 @@ func TestBatteryCameraListingOnlySubKeepsMain(t *testing.T) {
 		t.Fatalf("cameraStreams changed the camera's own list: %v", cam.Streams)
 	}
 }
+
+// A battery camera behind a Home Hub or NVR is a channel with no UID.
+// battery = true puts its streams on demand, whatever streams lists, so
+// the hub is not asked to keep it awake around the clock.
+func TestHubBatteryCameraIsOnDemand(t *testing.T) {
+	cam := config.Camera{Name: "doorbell", Address: "1.1.1.1", Channel: 1, Battery: true,
+		Streams: []string{"main", "sub"}}
+	streams, onDemand := cameraStreams(cam)
+	if !onDemand || !slices.Equal(streams, []string{"main", "sub"}) {
+		t.Fatalf("got %v on demand %v, want [main sub] on demand", streams, onDemand)
+	}
+	cam.Battery = false
+	if _, onDemand := cameraStreams(cam); onDemand {
+		t.Fatal("a hub channel without battery = true went on demand")
+	}
+}
+
+// With wake_on_rtsp an RTSP reader of the presence stream asks for the
+// camera; without it, or with no reader left, it does not.
+func TestRTSPReaderWantsTheCameraOnlyWithWakeOnRTSP(t *testing.T) {
+	e := &entry{cfg: stream.Config{Name: "doorbell", Stream: "main", WakeOnRTSP: true}}
+	if rtspWanted(e) {
+		t.Fatal("no reader, yet the camera is wanted")
+	}
+	e.rtspReaders.Store(1)
+	if !rtspWanted(e) {
+		t.Fatal("a reader with wake_on_rtsp does not want the camera")
+	}
+	e.cfg.WakeOnRTSP = false
+	if rtspWanted(e) {
+		t.Fatal("a reader without wake_on_rtsp wants the camera")
+	}
+}

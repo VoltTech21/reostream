@@ -118,6 +118,15 @@ type Config struct {
 	// leaves it to what the camera says at login.
 	Rotate *int
 
+	// Sleeps is a battery camera's stream, with a UID or behind a Home
+	// Hub or NVR (config Camera.Sleeps): on demand, presence stream only
+	// over RTSP.
+	Sleeps bool
+
+	// WakeOnRTSP lets an RTSP reader of the presence stream wake a
+	// sleeping camera (config Camera.WakeOnRTSP).
+	WakeOnRTSP bool
+
 	// IdleTimeout overrides baichuan.DefaultIdleTimeout. A battery camera
 	// that is awake sends within a couple of seconds, so one that does not
 	// is holding a session and is quicker to retry than to wait out.

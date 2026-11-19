@@ -111,6 +111,10 @@ type entry struct {
 	// motionUntil (Unix nanoseconds) keeps an on-demand stream awake with
 	// nobody watching while the camera reports motion. See Motion.
 	motionUntil atomic.Int64
+	// rtspReaders counts RTSP readers playing the presence stream of a
+	// camera with wake_on_rtsp, which keep it awake like viewers. See
+	// RTSPReaders.
+	rtspReaders atomic.Int64
 
 	// cancel stops just this stream, and done closes once its goroutine has
 	// fully returned. Both exist so one stream can be replaced without
@@ -233,7 +237,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 // main is always among them, listed or not: it is the stream the presence
 // stream and motion wakes hang off.
 func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
-	if cam.UID == "" {
+	if !cam.Sleeps() {
 		return cam.Streams, false
 	}
 	if len(cam.Streams) == 0 {
@@ -253,7 +257,7 @@ func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
 // reostream's page. The list is not refused, since a config written for
 // 0.2.8 (#38) would then stop reostream from starting.
 func warnBatteryRTSP(cam config.Camera) {
-	if cam.UID == "" {
+	if !cam.Sleeps() {
 		return
 	}
 	for _, st := range cam.RTSP {
@@ -278,6 +282,9 @@ func newEntry(cam config.Camera, st string) *entry {
 			Stream:   st,
 			Channel:  cam.Channel,
 			UID:      cam.UID,
+			Sleeps:   cam.Sleeps(),
+
+			WakeOnRTSP: cam.WakeOnRTSP,
 
 			HoldPicture: cam.HoldPicture,
 			Rotate:      cam.Rotate,
@@ -637,6 +644,7 @@ func sameStream(e *entry, cam config.Camera) bool {
 		e.cfg.Address == cam.Address &&
 		e.cfg.Channel == cam.Channel &&
 		e.cfg.UID == cam.UID &&
+		e.cfg.WakeOnRTSP == cam.WakeOnRTSP &&
 		e.cfg.Username == cam.Username &&
 		e.cfg.Password == cam.Password &&
 		slices.Contains(cam.RTSP, e.cfg.Stream) == slices.Contains(e.rtsp, e.cfg.Stream)

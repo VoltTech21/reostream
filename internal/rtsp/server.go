@@ -59,6 +59,20 @@ type Server struct {
 	// battery reports whether a camera name is a battery camera, whose
 	// other streams are never served here. See SetBattery.
 	battery func(camera string) bool
+
+	// readers, when set, hears each reader that starts playing a path
+	// (+1) and each that leaves (-1). playing holds the path of every
+	// session counted, so a session that set up and never played is not
+	// taken off. See SetReaders.
+	readers func(path string, delta int)
+	playing map[*gortsplib.ServerSession]string
+}
+
+// SetReaders reports readers starting and stopping a path, which is how a
+// battery camera with wake_on_rtsp is woken by go2rtc opening its presence
+// stream. Call before Start.
+func (s *Server) SetReaders(readers func(path string, delta int)) {
+	s.readers = readers
 }
 
 // SetBattery tells the server which cameras are battery cameras. Over RTSP
@@ -102,6 +116,7 @@ func New(listen string) *Server {
 		streams:  make(map[string]*Stream),
 		sessions: make(map[*gortsplib.ServerSession]*Stream),
 		talking:  make(map[*gortsplib.ServerSession]*backChannel),
+		playing:  make(map[*gortsplib.ServerSession]string),
 	}
 	s.srv = &gortsplib.Server{
 		Handler:        s,
@@ -407,6 +422,17 @@ func (s *Server) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, 
 	if st != nil {
 		st.addReader()
 		s.listenBackChannel(ctx.Session, st)
+		if s.readers != nil {
+			path := strings.Trim(ctx.Session.Path(), "/")
+			s.mu.Lock()
+			_, again := s.playing[ctx.Session]
+			s.playing[ctx.Session] = path
+			s.mu.Unlock()
+			// A PLAY after a PAUSE is the same reader.
+			if !again {
+				s.readers(path, 1)
+			}
+		}
 	}
 	return &base.Response{StatusCode: base.StatusOK}, nil
 }
@@ -455,7 +481,12 @@ func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	delete(s.sessions, ctx.Session)
 	bc := s.talking[ctx.Session]
 	delete(s.talking, ctx.Session)
+	path, played := s.playing[ctx.Session]
+	delete(s.playing, ctx.Session)
 	s.mu.Unlock()
+	if played && s.readers != nil {
+		s.readers(path, -1)
+	}
 	if st != nil {
 		st.removeReader()
 	}

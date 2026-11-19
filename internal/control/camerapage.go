@@ -410,7 +410,7 @@ func (s *Server) serveCamera(w http.ResponseWriter, r *http.Request) {
 	// floodlight and presets are not read unless asked for (?presets=1,
 	// the presets card's own link). A battery camera has no web API for
 	// the floodlight read in any case.
-	sleeper := cam.UID != ""
+	sleeper := cam.Sleeps()
 	id := s.identForView(r.Context(), cam)
 	page.Support = id.Support
 	page.ZoomOffer = s.zoomOffer(cam, id)

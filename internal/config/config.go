@@ -54,6 +54,23 @@ type Camera struct {
 	// it drains in days. Off by default.
 	AlwaysOn bool `toml:"always_on"`
 
+	// Battery marks a battery camera reached through a Reolink Home Hub
+	// or NVR, as a channel, rather than on its own by its UID. Such a
+	// camera sleeps like one with a UID: its streams run only on demand
+	// (a viewer, motion, always_on) instead of being held open around the
+	// clock, which through the hub would keep the camera awake and drain
+	// it in days. A camera with a UID is a battery camera already.
+	Battery bool `toml:"battery"`
+
+	// WakeOnRTSP lets an RTSP reader of a battery camera's presence stream
+	// (/<camera>) wake it, as a viewer on the control page does: go2rtc
+	// opens the stream only while someone watches, so the camera wakes
+	// for that viewer and sleeps again after. wake_max still ends each
+	// session after 5 minutes; a reader still there wakes it again. Never
+	// for a recorder that holds the stream open around the clock (Frigate):
+	// the camera would never sleep. Off by default.
+	WakeOnRTSP bool `toml:"wake_on_rtsp"`
+
 	// Rotate turns this camera's picture: 90, 180 or 270 degrees
 	// anticlockwise, in reostream's own player and written into the H.265
 	// stream as a display orientation note rather than re-encoded, which
@@ -100,6 +117,12 @@ func (r *RTSPConfig) Credentials() (user, pass string, ok bool) {
 // ControlConfig configures the operator page's listener. Its absence turns
 // the page off entirely, which is the default: a daemon that serves video
 // should not start serving a credential store because it was upgraded.
+// Sleeps reports whether c is a battery camera, on its own (UID) or
+// behind a Home Hub or NVR (battery): one whose streams run on demand.
+func (c Camera) Sleeps() bool {
+	return c.UID != "" || c.Battery
+}
+
 type ControlConfig struct {
 	Listen   string
 	Password string
@@ -402,8 +425,8 @@ func (c *Config) Validate() error {
 		if g := cam.TalkGainDB; g < -12 || g > 12 || g%3 != 0 {
 			return fmt.Errorf("camera %q: talk_gain_db is %d; use -12 to 12 in steps of 3", cam.Name, g)
 		}
-		if cam.AlwaysOn && cam.UID == "" {
-			return fmt.Errorf("camera %q: always_on is for a battery camera, one with a uid", cam.Name)
+		if cam.AlwaysOn && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: always_on is for a battery camera, one with a uid or battery = true", cam.Name)
 		}
 		if cam.Channel < 0 || cam.Channel > 63 {
 			return fmt.Errorf("camera %q: channel %d is out of range (0 to 63)", cam.Name, cam.Channel)
@@ -415,11 +438,14 @@ func (c *Config) Validate() error {
 
 		// A battery camera may list no streams: reostream then only reaches
 		// it on demand (settings, recordings) and never holds it awake.
-		if len(cam.Streams) == 0 && cam.UID == "" {
+		if cam.WakeOnRTSP && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: wake_on_rtsp is for a battery camera, one with a uid or battery = true", cam.Name)
+		}
+		if len(cam.Streams) == 0 && !cam.Sleeps() {
 			return fmt.Errorf("camera %q has no streams", cam.Name)
 		}
 		seenStreams := make(map[string]bool, len(cam.Streams))
-		if len(cam.Streams) == 0 && cam.UID != "" {
+		if len(cam.Streams) == 0 && cam.Sleeps() {
 			// What a battery camera that lists none runs, on demand.
 			seenStreams["sub"], seenStreams["main"] = true, true
 		}
