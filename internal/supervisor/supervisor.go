@@ -233,7 +233,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 // main is always among them, listed or not: it is the stream the presence
 // stream and motion wakes hang off.
 func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
-	if cam.UID == "" {
+	if !cam.Sleeps() {
 		return cam.Streams, false
 	}
 	if len(cam.Streams) == 0 {
@@ -253,7 +253,7 @@ func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
 // reostream's page. The list is not refused, since a config written for
 // 0.2.8 (#38) would then stop reostream from starting.
 func warnBatteryRTSP(cam config.Camera) {
-	if cam.UID == "" {
+	if !cam.Sleeps() {
 		return
 	}
 	for _, st := range cam.RTSP {
@@ -278,6 +278,7 @@ func newEntry(cam config.Camera, st string) *entry {
 			Stream:   st,
 			Channel:  cam.Channel,
 			UID:      cam.UID,
+			Sleeps:   cam.Sleeps(),
 
 			HoldPicture: cam.HoldPicture,
 			Rotate:      cam.Rotate,

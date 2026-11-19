@@ -346,3 +346,19 @@ func TestBatteryCameraListingOnlySubKeepsMain(t *testing.T) {
 		t.Fatalf("cameraStreams changed the camera's own list: %v", cam.Streams)
 	}
 }
+
+// A battery camera behind a Home Hub or NVR is a channel with no UID.
+// battery = true puts its streams on demand, whatever streams lists, so
+// the hub is not asked to keep it awake around the clock.
+func TestHubBatteryCameraIsOnDemand(t *testing.T) {
+	cam := config.Camera{Name: "doorbell", Address: "1.1.1.1", Channel: 1, Battery: true,
+		Streams: []string{"main", "sub"}}
+	streams, onDemand := cameraStreams(cam)
+	if !onDemand || !slices.Equal(streams, []string{"main", "sub"}) {
+		t.Fatalf("got %v on demand %v, want [main sub] on demand", streams, onDemand)
+	}
+	cam.Battery = false
+	if _, onDemand := cameraStreams(cam); onDemand {
+		t.Fatal("a hub channel without battery = true went on demand")
+	}
+}

@@ -136,6 +136,7 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		cam.HoldPicture = existing.HoldPicture
 		cam.MotionTopic = existing.MotionTopic
 		cam.AlwaysOn = existing.AlwaysOn
+		cam.Battery = existing.Battery
 		cam.Rotate = existing.Rotate
 		cam.TalkGainDB = existing.TalkGainDB
 		if cam.UID == "" {
@@ -317,6 +318,9 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	if cam.MotionTopic != "" {
 		fmt.Fprintf(&b, "motion_topic = %q\n", cam.MotionTopic)
+	}
+	if cam.Battery {
+		b.WriteString("battery = true\n")
 	}
 	if cam.AlwaysOn {
 		b.WriteString("always_on = true\n")

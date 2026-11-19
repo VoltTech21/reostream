@@ -476,3 +476,19 @@ func TestTalkGainIsMinusTwelveToTwelveInStepsOfThree(t *testing.T) {
 		}
 	}
 }
+
+// A battery camera behind a Home Hub has no UID: battery = true makes it
+// one, so it may list no streams and may be always_on.
+func TestHubBatteryCameraIsABatteryCamera(t *testing.T) {
+	c := &Config{Cameras: []Camera{{Name: "doorbell", Address: "1.1.1.1", Channel: 1, Battery: true}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want a hub battery camera with no streams accepted", err)
+	}
+	if !c.Cameras[0].Sleeps() {
+		t.Fatal("a camera with battery = true does not sleep")
+	}
+	c.Cameras[0].AlwaysOn = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want always_on accepted on a hub battery camera", err)
+	}
+}

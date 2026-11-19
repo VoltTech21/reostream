@@ -75,7 +75,9 @@ func wanted(e *entry) bool {
 func (s *Supervisor) runOnDemand(ctx context.Context, e *entry) {
 	defer e.h.Close()
 	// An always-on camera never sleeps, so its waking says nothing.
-	if e.cfg.Stream == "main" && !e.alwaysOn && e.cfg.Address != "" {
+	// It asks the camera over UDP, which a camera behind a Home Hub or
+	// NVR (no UID) does not answer: its motion comes from motion_topic.
+	if e.cfg.Stream == "main" && !e.alwaysOn && e.cfg.Address != "" && e.cfg.UID != "" {
 		// Waited for on the way out, so nothing of this camera's is still
 		// running once its stream has stopped.
 		wctx, stop := context.WithCancel(ctx)

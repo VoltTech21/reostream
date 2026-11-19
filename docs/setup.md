@@ -251,6 +251,29 @@ an RLN8-410 with a TrackMix PoE.
 A camera can be on an NVR and reostream at the same time. Each camera serves two main
 stream connections, so an NVR recording main plus reostream fits.
 
+#### Battery cameras behind a Home Hub or NVR
+
+A battery camera paired to a Home Hub (Argus, battery doorbell) is a channel like any
+other, and has no UID, so reostream cannot tell it sleeps. Mark it with `battery = true`:
+
+```toml
+[[camera]]
+name = "doorbell"
+address = "192.0.2.20"
+username = "admin"
+password = "$HUB_PASSWORD"
+channel = 1
+battery = true
+```
+
+It then runs like a [battery camera](#battery-cameras): its streams only while someone
+watches it on the control page or while it reports motion, over RTSP only its presence
+stream `/<camera>`, and `streams` may be left out. Without it, every listed stream is
+held open through the hub around the clock, and the hub keeps the camera awake to serve
+it: a battery doorbell drains in days. The camera's own UDP search does not reach it
+behind the hub, so its motion is not seen on its own; give it a `motion_topic` (fed for
+instance by Home Assistant's Reolink integration on the hub) to wake it for motion.
+
 #### Connections to the recorder
 
 A recorder limits connections, not streams: one user's RLN8-410 held about ten and reset

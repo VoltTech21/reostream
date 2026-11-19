@@ -107,7 +107,7 @@ func (s *Server) statusCards(urls RecorderURLs) []statusCard {
 	if cams, err := s.fleet(); err == nil {
 		for _, c := range cams {
 			address[c.Name] = c.Address
-			battery[c.Name] = c.UID != ""
+			battery[c.Name] = c.Sleeps()
 		}
 	}
 	// A fleet that will not load costs this page its addresses, not the
