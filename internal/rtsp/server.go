@@ -42,6 +42,10 @@ type Server struct {
 	mu       sync.RWMutex
 	streams  map[string]*Stream
 	sessions map[*gortsplib.ServerSession]*Stream
+	// playing holds the sessions counted as readers, so only those are
+	// released when they close: a session that set up and closed without
+	// playing used to take the count from a reader still playing.
+	playing map[*gortsplib.ServerSession]bool
 	// talking holds the back channel of each session that set one up.
 	talking map[*gortsplib.ServerSession]*backChannel
 	// drops counts packets dropped per path since they were last
@@ -101,6 +105,7 @@ func New(listen string) *Server {
 	s := &Server{
 		streams:  make(map[string]*Stream),
 		sessions: make(map[*gortsplib.ServerSession]*Stream),
+		playing:  make(map[*gortsplib.ServerSession]bool),
 		talking:  make(map[*gortsplib.ServerSession]*backChannel),
 	}
 	s.srv = &gortsplib.Server{
@@ -401,10 +406,14 @@ func (s *Server) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (*base.Response
 // OnPlay is where a reader starts counting. Packetization is gated on the
 // count, so a session that has set up but not played still costs nothing.
 func (s *Server) OnPlay(ctx *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
-	s.mu.RLock()
+	s.mu.Lock()
 	st := s.sessions[ctx.Session]
-	s.mu.RUnlock()
-	if st != nil {
+	first := st != nil && !s.playing[ctx.Session]
+	if first {
+		s.playing[ctx.Session] = true
+	}
+	s.mu.Unlock()
+	if first {
 		st.addReader()
 		s.listenBackChannel(ctx.Session, st)
 	}
@@ -453,15 +462,28 @@ func (s *Server) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	s.mu.Lock()
 	st := s.sessions[ctx.Session]
 	delete(s.sessions, ctx.Session)
+	played := s.playing[ctx.Session]
+	delete(s.playing, ctx.Session)
 	bc := s.talking[ctx.Session]
 	delete(s.talking, ctx.Session)
 	s.mu.Unlock()
-	if st != nil {
+	if st != nil && played {
 		st.removeReader()
 	}
 	if bc != nil {
 		bc.close()
 	}
+}
+
+// Readers is how many readers are playing path now.
+func (s *Server) Readers(path string) int {
+	s.mu.RLock()
+	st := s.streams[strings.Trim(path, "/")]
+	s.mu.RUnlock()
+	if st == nil {
+		return 0
+	}
+	return st.readerCount()
 }
 
 // Path returns the RTSP path for one camera stream.

@@ -147,7 +147,7 @@ func snapDialError(cam Camera, err error) (int, string) {
 	case errors.Is(err, errCameraSilent):
 		return http.StatusServiceUnavailable, fmt.Sprintf("%s: %v", cam.Name, err)
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded):
-		if cam.UID != "" {
+		if cam.Sleeps() {
 			return http.StatusGatewayTimeout, fmt.Sprintf("%s did not wake: no answer within %v. A battery camera out of Wi-Fi range or with a flat battery looks like this.", cam.Name, pageDialTimeoutBattery)
 		}
 		return http.StatusGatewayTimeout, fmt.Sprintf("%s did not answer within %v", cam.Name, pageDialTimeout)

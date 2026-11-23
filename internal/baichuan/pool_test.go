@@ -288,3 +288,67 @@ func waitFor(t *testing.T, ok func() bool, what string) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+// #49: behind an RLN8-410, a camera that dropped and came back had its
+// _sub path serve its main stream as well. The recorder had ended the
+// preview when the camera dropped, so the reader's stop named a handle it
+// no longer knew, and (as modelled here) it served that stop as a new
+// main preview tagged with the stop's sub-stream offset. Messages must be
+// matched to the request that asked for them, counter and all, so a
+// preview nobody asked for reaches no one.
+func TestPoolIgnoresAPreviewItDidNotAskFor(t *testing.T) {
+	nvr := fakenvr.New(t, h265Capture(t))
+	nvr.StopUnknownStartsMain = true
+	p := baichuan.NewPool()
+	// Another camera keeps the shared connection open throughout.
+	other := openSub(t, p, nvr.Addr(), 1, baichuan.StreamMain)
+	sub := openSub(t, p, nvr.Addr(), 7, baichuan.StreamSub)
+	frames(t, sub, 7, baichuan.StreamSub, 3)
+
+	nvr.Forget(7)
+	sub.Close()
+	waitFor(t, func() bool { return len(nvr.Stops()) == 1 }, "the stop for channel 7")
+	time.Sleep(20 * time.Millisecond)
+	sub = openSub(t, p, nvr.Addr(), 7, baichuan.StreamSub)
+
+	// The reader's own counter is the one its first keyframe-led run of
+	// messages carries; until the first of those arrives the stray may
+	// still get through (see Shared), after it never.
+	var got []byte
+	timeout := time.After(5 * time.Second)
+	for n := 0; n < 200; n++ {
+		select {
+		case m := <-sub.Messages():
+			got = append(got, byte(m.Header.EncOffset>>16))
+		case <-timeout:
+			t.Fatalf("only %d messages", n)
+		}
+	}
+	own := got[len(got)-1]
+	first := -1
+	for i, c := range got {
+		if c == own {
+			first = i
+			break
+		}
+	}
+	for i := first; i < len(got); i++ {
+		if got[i] != own {
+			t.Fatalf("message %d of 200 came from another preview (counter %d, ours %d), after ours had started", i, got[i], own)
+		}
+	}
+	if first > 5 {
+		t.Fatalf("%d stray messages before the reader's own preview started", first)
+	}
+	frames(t, other, 1, baichuan.StreamMain, 3)
+}
+
+// The counter echo that #49's fix relies on is proven on a camera; a
+// recorder or hub that echoes something else there must still stream.
+func TestPoolStreamsFromARecorderThatDoesNotEchoTheCounter(t *testing.T) {
+	nvr := fakenvr.New(t, h265Capture(t))
+	nvr.NoCounterEcho = true
+	p := baichuan.NewPool()
+	sub := openSub(t, p, nvr.Addr(), 3, baichuan.StreamSub)
+	frames(t, sub, 3, baichuan.StreamSub, 5)
+}

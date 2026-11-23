@@ -85,7 +85,7 @@ func (s *Server) dial(ctx context.Context, cam Camera) (*baichuan.Conn, error) {
 		// A wired camera answers a login in well under a second; a
 		// battery camera may first have to wake.
 		wait := pageDialTimeout
-		if cam.UID != "" {
+		if cam.Sleeps() {
 			wait = pageDialTimeoutBattery
 		}
 		var cancel context.CancelFunc

@@ -350,3 +350,27 @@ func TestBackChannelTakes16kPCM(t *testing.T) {
 		t.Errorf("first sample %d, want 4096 exactly: L16 is lossless", first)
 	}
 }
+
+// go2rtc (and so Frigate's talk button) uses only the first format of an
+// RTSP back channel and cannot send L16 (AlexxIT/go2rtc#696), so G.711 has
+// to lead or the mic disappears (#50). L16 stays offered after it for
+// clients that pick a format themselves.
+func TestBackChannelLeadsWithG711(t *testing.T) {
+	m := backChannelMedia()
+	g, ok := m.Formats[0].(*format.G711)
+	if !ok || !g.MULaw || g.PayloadTyp != 0 {
+		t.Fatalf("first back channel format is %T %+v, want G.711 mu-law PT 0", m.Formats[0], m.Formats[0])
+	}
+	if g, ok := m.Formats[1].(*format.G711); !ok || g.MULaw || g.PayloadTyp != 8 {
+		t.Fatalf("second back channel format is %T, want G.711 A-law PT 8", m.Formats[1])
+	}
+	var l16 bool
+	for _, f := range m.Formats {
+		if _, ok := f.(*format.LPCM); ok {
+			l16 = true
+		}
+	}
+	if !l16 {
+		t.Fatal("16 kHz L16 is no longer offered")
+	}
+}

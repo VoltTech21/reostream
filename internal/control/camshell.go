@@ -114,7 +114,7 @@ func (s *Server) identFor(ctx context.Context, cam Camera) camIdent {
 	}
 	// A battery camera spends part of this waking up.
 	wait := 8 * time.Second
-	if cam.UID != "" {
+	if cam.Sleeps() {
 		wait = pageDialTimeoutBattery
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
@@ -267,7 +267,7 @@ func identCached(cam Camera) camIdent {
 // battery camera's Live tab shows what was read last; the camera is only
 // talked to once someone acts on it (plays it, opens Settings).
 func (s *Server) identForView(ctx context.Context, cam Camera) camIdent {
-	if cam.UID != "" {
+	if cam.Sleeps() {
 		return identCached(cam)
 	}
 	return s.identFor(ctx, cam)

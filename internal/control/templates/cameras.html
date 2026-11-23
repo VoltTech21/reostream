@@ -25,6 +25,12 @@
 {{$cam := .}}
 {{range .Streams}}<label><input type="checkbox" name="streams" value="{{.}}"{{if $cam.HasStream .}} checked{{end}}> {{.}}</label>{{end}}
 </div>
+{{if .HubCam}}<div class="camlist-streams" role="group" aria-label="Battery camera">
+<span class="label">Battery</span>
+<input type="hidden" name="battery_field" value="1">
+<label><input type="checkbox" name="battery" value="1"{{if .Battery}} checked{{end}}> sleeps until watched</label>
+<label><input type="checkbox" name="wake_on_rtsp" value="1"{{if .WakeOnRTSP}} checked{{end}}> RTSP readers wake it</label>
+</div>{{end}}
 <button type="submit">Save and apply</button>
 </form>
 </section>

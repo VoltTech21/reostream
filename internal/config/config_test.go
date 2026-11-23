@@ -476,3 +476,62 @@ func TestTalkGainIsMinusTwelveToTwelveInStepsOfThree(t *testing.T) {
 		}
 	}
 }
+
+// #43: a battery camera behind a Home Hub has no UID; battery = true is
+// what lets it sleep, and with it streams may be left out.
+func TestBatteryCameraBehindAHub(t *testing.T) {
+	cam := Camera{Name: "doorbell", Address: "192.0.2.20", Channel: 1, Battery: true}
+	if !cam.Sleeps() {
+		t.Fatal("battery = true does not sleep")
+	}
+	c := &Config{Cameras: []Camera{cam}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a hub battery camera with no streams: %v", err)
+	}
+	cam.AlwaysOn, cam.WakeOnRTSP = true, true
+	c = &Config{Cameras: []Camera{cam}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("always_on and wake_on_rtsp on a hub battery camera: %v", err)
+	}
+}
+
+func TestWakeOnRTSPNeedsABatteryCamera(t *testing.T) {
+	c := &Config{Cameras: []Camera{{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}, WakeOnRTSP: true}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "wake_on_rtsp") {
+		t.Fatalf("Validate = %v, want a wake_on_rtsp refusal", err)
+	}
+}
+
+func TestBatteryAndWakeOnRTSPLoadFromTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n[[camera]]\nname = \"d\"\naddress = \"192.0.2.20\"\nchannel = 1\nbattery = true\nwake_on_rtsp = true\n"), 0o600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Cameras[0]; !c.Battery || !c.WakeOnRTSP {
+		t.Fatalf("loaded %+v", c)
+	}
+}
+
+// #48: motion_wake defaults on, loads off from the file, and is only for a
+// battery camera.
+func TestMotionWake(t *testing.T) {
+	if !(Camera{UID: "x"}).WakesForMotion() {
+		t.Fatal("motion_wake left out is not on")
+	}
+	path := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(path, []byte("listen = \"0.0.0.0:8560\"\n[[camera]]\nname = \"d\"\naddress = \"192.0.2.20\"\nuid = \"95270000TESTUID1\"\nmotion_wake = false\n"), 0o600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Cameras[0].WakesForMotion() {
+		t.Fatal("motion_wake = false loaded as on")
+	}
+	off := false
+	c := &Config{Cameras: []Camera{{Name: "a", Address: "1.1.1.1", Streams: []string{"main"}, MotionWake: &off}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "motion_wake") {
+		t.Fatalf("Validate = %v, want a motion_wake refusal", err)
+	}
+}

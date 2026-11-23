@@ -293,6 +293,56 @@ func (m *Muxer) FrameWithKey(f baichuan.Frame) (chunk []byte, startsKeyframe boo
 	return out, isKey
 }
 
+// Skip moves the muxer past f exactly as Frame would, keeping its clocks,
+// table and PCR timing and audio counts, without building the transport
+// packets. internal/stream calls it while no HTTP reader is attached:
+// packing every frame of every stream into MPEG-TS that nobody reads was
+// the largest source of garbage in a profile of the work fleet, where the
+// recorder reads RTSP. ok says Frame would have returned packets, and n is
+// about how many bytes they would have been, for the bitrate figure.
+//
+// The continuity counters do not advance, which no reader can notice: a
+// reader that joins starts its own count at whatever comes next.
+func (m *Muxer) Skip(f baichuan.Frame) (n int, ok bool) {
+	if f.Kind == baichuan.FrameAAC || f.Kind == baichuan.FrameADPCM {
+		if m.audioType == 0 || !m.sentTables {
+			return 0, false
+		}
+		if f.Kind != baichuan.FrameAAC {
+			m.droppedAudio++
+			return 0, false
+		}
+		m.audioClock.PTS(m.clock.LastPTS(), f.Data)
+		return tsSize(len(f.Data)), true
+	}
+	if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
+		return 0, false
+	}
+	if !m.sawKeyframe {
+		if f.Kind != baichuan.FrameIFrame {
+			return 0, false
+		}
+		m.sawKeyframe = true
+	}
+	pts := m.clock.PTS(f.Micros)
+	if !m.sentTables || pts-m.lastTablesPTS >= tableRepeatTicks {
+		n += 2 * PacketSize
+		m.sentTables = true
+		m.lastTablesPTS = pts
+	}
+	if !m.sentPCR || pts-m.lastPCRPTS >= pcrIntervalTicks {
+		m.sentPCR = true
+		m.lastPCRPTS = pts
+	}
+	return n + tsSize(len(f.Data)), true
+}
+
+// tsSize is about how many bytes a PES of payload bytes takes in transport
+// packets: a 14 byte PES header, 184 payload bytes to a packet.
+func tsSize(payload int) int {
+	return (14 + payload + 183) / 184 * PacketSize
+}
+
 // audioFrame encodes one audio frame onto PIDAudio, or drops it.
 //
 // Unlike video, an audio frame has no GOP structure to wait on: any AAC

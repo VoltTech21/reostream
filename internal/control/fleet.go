@@ -20,6 +20,8 @@ type Camera struct {
 	Channel  int
 	// UID marks a battery camera, reached over UDP.
 	UID string
+	// Battery marks a battery camera behind a Home Hub or NVR (#43).
+	Battery bool
 	// TalkGainDB is the camera's talk_gain_db.
 	TalkGainDB int
 	// Rotate is the camera's rotate setting; nil leaves it to the camera.
@@ -62,7 +64,7 @@ func loadFleet(configPath string) ([]Camera, error) {
 		out = append(out, Camera{
 			Name: c.Name, Address: c.Address,
 			Username: c.Username, Password: c.Password,
-			Channel: c.Channel, UID: c.UID,
+			Channel: c.Channel, UID: c.UID, Battery: c.Battery,
 			TalkGainDB: c.TalkGainDB, Rotate: c.Rotate,
 		})
 	}
@@ -227,3 +229,7 @@ func (s *Server) applyAll(ctx context.Context, apply func(context.Context, Camer
 // that, and none of them gained the ability to be written to eight cameras
 // in one request just by having a form control. The next field that wants
 // one needs its own handler, on purpose, the way these two have theirs.
+
+// Sleeps reports whether c is a battery camera, one that sleeps between
+// viewers: it has a UID or is marked battery (config.Camera.Sleeps).
+func (c Camera) Sleeps() bool { return c.UID != "" || c.Battery }

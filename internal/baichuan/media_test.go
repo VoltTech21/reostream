@@ -306,3 +306,25 @@ func TestZoomLensAudioIsAudio(t *testing.T) {
 		t.Fatalf("got %v %v % x, want a 3-byte AAC frame", ok, f.Kind, f.Data)
 	}
 }
+
+// The buffer is reused from the start of its array for every packet, not
+// left walked forward by consume so the next packet has to grow a new one:
+// one allocation per frame, for the frame's own copy.
+func TestDepacketizerReusesItsBuffer(t *testing.T) {
+	pkt := buildFrame(magicPFrame, 24, "H265", 0, make([]byte, 20000))
+	d := NewDepacketizer()
+	feed := func() {
+		for off := 0; off < len(pkt); off += 4096 {
+			d.Write(pkt[off:min(off+4096, len(pkt))], off == 0)
+		}
+		if _, ok := d.Next(); !ok {
+			t.Fatal("no frame")
+		}
+	}
+	for i := 0; i < 5; i++ {
+		feed()
+	}
+	if allocs := testing.AllocsPerRun(50, feed); allocs > 1 {
+		t.Fatalf("%.1f allocations per frame, want 1 (the frame's copy)", allocs)
+	}
+}

@@ -39,6 +39,18 @@ var (
 	// ended; the next motion after that is the next wake.
 	wakeMotionHold = 30 * time.Second
 
+	// wakeBurstMax wakes inside wakeBurstWindow pause the waking (#48):
+	// an Argus PT Ultra in a field woke every 1 to 3 minutes all night
+	// and recorded none of it, and waking its main stream for each one
+	// took half its battery. The camera's own recording does not depend
+	// on us, so a pause only costs the live picture of the motion; it
+	// starts at wakePauseBase and doubles, up to wakePauseMax, for each
+	// burst that follows straight on from the last pause.
+	wakeBurstMax    = 3
+	wakeBurstWindow = 10 * time.Minute
+	wakePauseBase   = 15 * time.Minute
+	wakePauseMax    = time.Hour
+
 	wakeSearch = bcudp.Search
 	wakeOurs   = bcudp.Ours
 )
@@ -163,6 +175,46 @@ func (w *pirWatch) see(now time.Time, info bcudp.Info, err error, ours bool) wak
 	return verdict
 }
 
+// wakeGuard limits how often a battery camera's sensor wakes may wake its
+// stream (see wakeBurstMax).
+type wakeGuard struct {
+	recent  []time.Time   // wakes let through inside the window
+	until   time.Time     // the end of the pause going on, if any
+	lastEnd time.Time     // the end of the last pause
+	pause   time.Duration // the length of the last pause
+	skipped int           // wakes refused in this pause
+}
+
+// allow says whether a wake at now may wake the stream. When it starts a
+// pause it says for how long; refusals inside a pause say 0.
+func (g *wakeGuard) allow(now time.Time) (ok bool, pause time.Duration) {
+	if now.Before(g.until) {
+		g.skipped++
+		return false, 0
+	}
+	keep := g.recent[:0]
+	for _, t := range g.recent {
+		if now.Sub(t) < wakeBurstWindow {
+			keep = append(keep, t)
+		}
+	}
+	g.recent = keep
+	if len(g.recent) < wakeBurstMax {
+		g.recent = append(g.recent, now)
+		return true, 0
+	}
+	if !g.lastEnd.IsZero() && now.Sub(g.lastEnd) < wakeBurstWindow {
+		g.pause = min(2*g.pause, wakePauseMax)
+	} else {
+		g.pause = wakePauseBase
+	}
+	g.until = now.Add(g.pause)
+	g.lastEnd = g.until
+	g.recent = g.recent[:0]
+	g.skipped = 1
+	return false, g.pause
+}
+
 // SetMotionHook has f told when a battery camera's wake turns motion on
 // (on) and when that motion ends, so it can go out like a wired camera's
 // own alerts. f must not block.
@@ -190,6 +242,7 @@ func (s *Supervisor) watchWakes(ctx context.Context, e *entry) {
 	tick := time.NewTicker(wakeWatchEvery)
 	defer tick.Stop()
 	var w pirWatch
+	var guard wakeGuard
 	var until time.Time // when the motion from the last wake ends; zero when none
 	defer func() {
 		if !until.IsZero() {
@@ -228,6 +281,17 @@ func (s *Supervisor) watchWakes(ctx context.Context, e *entry) {
 		case wakeMotion:
 		default:
 			continue
+		}
+		if ok, pause := guard.allow(now); !ok {
+			if pause > 0 {
+				log.Printf("reostream: %s: motion: woke to record %d times in %v (searches answered in %s); not waking it for motion for %v, to save its battery. If its sensor wakes it this often for nothing, motion_wake = false turns this off",
+					name, wakeBurstMax+1, wakeBurstWindow, msList(w.recent), pause)
+			}
+			continue
+		}
+		if guard.skipped > 0 {
+			log.Printf("reostream: %s: motion: waking for motion again (%d wakes skipped in the pause)", name, guard.skipped)
+			guard.skipped = 0
 		}
 		log.Printf("reostream: %s: motion: woke to record (searches answered in %s)", name, msList(w.recent))
 		if until.IsZero() {

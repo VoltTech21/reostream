@@ -215,6 +215,7 @@ var (
 // buffered until a whole packet is present.
 type Depacketizer struct {
 	buf     []byte
+	store   []byte // buf's backing array, reused from its start (see Write)
 	filler  int
 	skipped int
 	lost    int
@@ -246,8 +247,21 @@ func (d *Depacketizer) Write(b []byte, startsPacket bool) {
 		} else {
 			d.filler += len(d.buf)
 		}
-		d.buf = d.buf[:0]
+		d.buf = d.store[:0]
 		d.pad = 0
+	}
+	// consume takes bytes off the front, so buf creeps along its array and
+	// a plain append would soon find no room past it and copy the whole
+	// buffer somewhere new, once or more per frame. Moving what is left
+	// back to the start of the array keeps one array per stream instead.
+	if cap(d.buf)-len(d.buf) < len(b) && cap(d.store) >= len(d.buf)+len(b) {
+		d.buf = d.store[:copy(d.store[:cap(d.store)], d.buf)]
+	}
+	if cap(d.buf)-len(d.buf) < len(b) {
+		// Growing: append starts a new array, from its first byte.
+		d.buf = append(d.buf, b...)
+		d.store = d.buf[:0]
+		return
 	}
 	d.buf = append(d.buf, b...)
 }
@@ -437,7 +451,7 @@ func (d *Depacketizer) Next() (Frame, bool) {
 			// only the last macroblock rows were missing, which is why this
 			// showed up as "error while decoding MB x 141..159" rather than
 			// as a stream that failed outright.
-			codec := string(trimNul(d.buf[4:8]))
+			codec := codecName(trimNul(d.buf[4:8]))
 			// The header says how long the metadata is, so the picture's
 			// first byte is a fact to read rather than a pattern to hunt
 			// for. Prefer that; see statedPrefix.
@@ -567,6 +581,18 @@ func isPacketMagic(b []byte) bool {
 func (d *Depacketizer) consume(n int) {
 	d.buf = d.buf[n:]
 	d.pad = (8 - n%8) % 8
+}
+
+// codecName is string(b) without allocating for the two codecs every
+// camera sends, once per frame.
+func codecName(b []byte) string {
+	switch string(b) {
+	case "H264":
+		return "H264"
+	case "H265":
+		return "H265"
+	}
+	return string(b)
 }
 
 func trimNul(b []byte) []byte {

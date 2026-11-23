@@ -139,7 +139,8 @@ Also on port 8560:
 - Recordings from the camera's SD card, and a small FTP receiver that keeps a copy of each
   clip the camera uploads.
 - Battery cameras: found by their own UDP search, woken only while someone is watching,
-  battery level shown without waking them.
+  battery level shown without waking them. Ones paired to a Home Hub sleep too, with
+  `battery = true`.
 - Sessions are closed cleanly. A camera left with an open session refuses connections
   for minutes.
 - A web page on port 8562 for status, live view, config, logs and camera settings.
@@ -159,7 +160,7 @@ On my own cameras:
 | Argus PT Ultra (battery, Wi-Fi) | 1 | v3.0.0.5808_26041006 |
 
 reostream has been the only video path for this fleet's Frigate since September: 23
-streams, 69 Mbps, about 60% of one CPU core, 29-59 MB of memory. Numbers in
+streams, 82 Mbps, about 65% of one core of a 2012 Xeon (E5-1650), about 70 MB of memory. Numbers in
 `docs/measurements.md`.
 
 Reported working by users (thank you!):
@@ -178,7 +179,7 @@ Reported working by users (thank you!):
 | Duo Floodlight Wi-Fi v2 | video | Reddit |
 | Duo 4K Wi-Fi (3 cameras) | video | Reddit |
 | RLC-811A (v3.1.0.4695) | video, audio | Reddit |
-| Lumus Pro | video (Frigate: NVIDIA decoding works; on Intel, hardware decoding off for it) | GitHub #17, Reddit |
+| Lumus Pro (v3.2.0.4243) | video, audio, two-way talk (Frigate: NVIDIA decoding works; on Intel, hardware decoding off for it) | GitHub #17, Reddit |
 | RLC-410-5MP | video (Frigate) | Reddit |
 | RLC-420 | video (Frigate) | Reddit |
 | RLC-420-5MP | video (Frigate) | Reddit |
@@ -191,12 +192,18 @@ Reported working by users (thank you!):
 | E1 Outdoor | video (Frigate) | Reddit |
 | FE-W | video (Frigate) | Reddit |
 | CX810 (v3.1.0.6126) | video, audio | Reddit |
-| RLC-522 (v3.0.0.757) | video | GitHub #35 |
+| RLC-522 (v3.0.0.757, 4 cameras) | video (main and sub, Frigate) | GitHub #35, #40 |
 | RLC-820A | video | Reddit |
 | RLC-510WA (Wi-Fi) | video | Reddit |
 | RLC-823S2 (v3.1.0.5714) | video (Frigate) | GitHub #33 |
 | Elite Floodlight (Wi-Fi) | video (main and sub, Frigate) | Reddit |
 | Solar Floodlight Cam (battery, Wi-Fi; v3.0.0.6133) | video on demand, live motion from waking, Frigate | GitHub #36 |
+| Duo 3 PoE (v3.2.0.5770) | video (main, sub, extern), audio | Reddit |
+| RLC-1224A (12 MP, 3 cameras) | video at full resolution (Frigate) | Reddit |
+| RLC-410W | video | GitHub Discussion #11 |
+| D800 (v3.0.0.82) | video (main; it allows one connection at a time) | GitHub Discussion #11 |
+| Omvi X16 PoE (v3.2.0.7318) | video (main, sub, zoom, zoom sub), audio on sub and zoom, Frigate | GitHub #42 |
+| Omvi 2i PoE (v3.2.0.7034) | video (all four streams), audio, Frigate | GitHub #42 |
 
 Your camera not here? Open an issue with the model, firmware and what worked,
 and it goes on the list.

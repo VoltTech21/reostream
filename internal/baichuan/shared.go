@@ -3,6 +3,7 @@ package baichuan
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -27,6 +28,16 @@ import (
 // it: a TrackMix's main and zoom streams behind an NVR are the same
 // channel 1 main stream, and are fetched once.
 //
+// Once a preview has had one message carrying its own request's counter
+// byte, so the device is known to echo it, a message is handed on only if
+// it carries that counter. A recorder can send a preview that
+// no reader asked for, or no longer does: behind an RLN8-410 (#49) a
+// camera that dropped and came back had its sub stream's readers handed
+// its main stream as well, at once, in the same channel and stream bytes.
+// Matching the channel and stream alone let that through. The echo is
+// proven on cameras (testdata/stream_s2c.bin); a device that does not echo
+// it never matches, and is read by channel and stream alone as before.
+//
 // Shared pings the connection itself; a reader's own Ping does nothing.
 type Shared struct {
 	conn *Conn
@@ -37,8 +48,11 @@ type Shared struct {
 	mu       sync.Mutex
 	previews map[previewKey]*preview
 	handle   int
-	closed   bool
-	err      error
+	// strays are the offsets of previews nobody here asked for that have
+	// been logged, so each is logged once.
+	strays map[uint32]bool
+	closed bool
+	err    error
 
 	done chan struct{}
 
@@ -53,14 +67,21 @@ type previewKey struct{ channel, stream byte }
 
 type preview struct {
 	channel, handle int
-	stream          string
-	readers         map[*Sub]bool
+	// counter is the counter byte of the request that started it, and
+	// echoed whether a message carrying it has arrived.
+	counter byte
+	echoed  bool
+	stream  string
+	readers map[*Sub]bool
 	// info is the stream's last info packet. The recorder sends one when
 	// a preview starts and not again, and it carries the picture size
 	// that a sink configures a decoder with, so a reader that joins a
 	// preview already running is handed this one first.
 	info *Message
 }
+
+// maxStrays bounds how many stray previews one connection logs.
+const maxStrays = 64
 
 // sharedQueue is each reader's buffer, the same depth Conn gives its one
 // reader.
@@ -94,6 +115,7 @@ func NewShared(conn *Conn, sup Support, supErr error) *Shared {
 		sup:      sup,
 		supErr:   supErr,
 		previews: map[previewKey]*preview{},
+		strays:   map[uint32]bool{},
 		done:     make(chan struct{}),
 	}
 	go s.demux()
@@ -146,9 +168,11 @@ func (s *Shared) Subscribe(channel int, stream string) (*Sub, error) {
 		// stop message names the one its start used.
 		s.handle++
 		p = &preview{channel: channel, handle: s.handle, stream: stream, readers: map[*Sub]bool{}}
-		if err := s.conn.StartVideoOn(channel, p.handle, stream); err != nil {
+		counter, err := s.conn.startVideoOn(channel, p.handle, stream)
+		if err != nil {
 			return nil, fmt.Errorf("baichuan: start channel %d %s: %w", channel, stream, err)
 		}
+		p.counter = counter
 		s.previews[key] = p
 		// The first reader sees the preview from its first message.
 		sub.synced = true
@@ -246,6 +270,19 @@ func (s *Shared) demux() {
 		p := s.previews[key]
 		if p == nil {
 			// The tail of a stream just stopped.
+			s.mu.Unlock()
+			continue
+		}
+		if counter := byte(m.Header.EncOffset >> 16); counter == p.counter {
+			p.echoed = true
+		} else if p.echoed {
+			// Not this preview's request: see the type's comment.
+			off := m.Header.EncOffset &^ 0xff000000
+			if !s.strays[off] && len(s.strays) < maxStrays {
+				s.strays[off] = true
+				log.Printf("baichuan: the recorder is sending channel %d %s for a request that is not this stream's (counter %d, ours %d); ignoring it",
+					p.channel, p.stream, counter, p.counter)
+			}
 			s.mu.Unlock()
 			continue
 		}

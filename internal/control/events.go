@@ -219,7 +219,7 @@ func (s *Server) syncRelay() {
 	}
 	var names []string
 	for _, c := range cfg.Cameras {
-		if c.UID == "" && c.Channel == 0 && len(c.Streams) > 0 {
+		if !c.Sleeps() && c.Channel == 0 && len(c.Streams) > 0 {
 			names = append(names, c.Name)
 		}
 	}

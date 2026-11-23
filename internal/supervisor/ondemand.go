@@ -64,9 +64,16 @@ func (s *Supervisor) Motion(camera string, on bool) bool {
 }
 
 // wanted is whether an on-demand stream should be awake: it is always on,
-// someone is watching, or the camera reports motion.
+// someone is watching (on the page, or over RTSP with wake_on_rtsp), or
+// the camera reports motion.
 func wanted(e *entry) bool {
-	return e.alwaysOn || e.h.Clients() > 0 || time.Now().UnixNano() < e.motionUntil.Load()
+	return e.alwaysOn || e.h.Clients() > 0 || rtspWatching(e) || time.Now().UnixNano() < e.motionUntil.Load()
+}
+
+// rtspWatching is whether a reader of the presence stream counts as a
+// viewer and one is there.
+func rtspWatching(e *entry) bool {
+	return e.wakeOnRTSP && e.rtspReaders != nil && e.rtspReaders() > 0
 }
 
 // runOnDemand owns a battery camera's stream: asleep until a viewer
@@ -74,8 +81,11 @@ func wanted(e *entry) bool {
 // or when the session reaches wakeMax.
 func (s *Supervisor) runOnDemand(ctx context.Context, e *entry) {
 	defer e.h.Close()
-	// An always-on camera never sleeps, so its waking says nothing.
-	if e.cfg.Stream == "main" && !e.alwaysOn && e.cfg.Address != "" {
+	// An always-on camera never sleeps, so its waking says nothing. One
+	// behind a Home Hub (no UID) is not searched: the address is the hub's,
+	// and the hub answers for itself, not the camera. Its motion comes
+	// from motion_topic. motion_wake = false turns the watching off (#48).
+	if e.cfg.Stream == "main" && !e.alwaysOn && e.cfg.Address != "" && e.cfg.UID != "" && e.motionWake {
 		// Waited for on the way out, so nothing of this camera's is still
 		// running once its stream has stopped.
 		wctx, stop := context.WithCancel(ctx)
@@ -170,7 +180,10 @@ func (s *Supervisor) wakeSession(ctx context.Context, e *entry) (string, error) 
 	switch {
 	case e.alwaysOn:
 		why = "always on"
-	case e.h.Clients() == 0:
+	case e.h.Clients() > 0:
+	case rtspWatching(e):
+		why = "an RTSP reader"
+	default:
 		why = "motion"
 	}
 	// Not repeated while the camera is failing: an always-on camera that

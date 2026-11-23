@@ -110,6 +110,9 @@ type Config struct {
 	Stream   string // "main", "sub" or "extern"
 	Channel  int    // the camera's channel on a hub or NVR; 0 on its own
 	UID      string // a battery camera's UID; empty for one on TCP
+	// Sleeps is a battery camera, with a UID or behind a Home Hub (see
+	// config.Camera.Sleeps): woken only on demand.
+	Sleeps bool
 
 	// HoldPicture is the camera's hold_picture setting (see config.Camera).
 	HoldPicture bool
@@ -367,7 +370,14 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			return ctx.Err()
 		case <-watch:
 			if time.Since(lastMedia) >= mediaTimeout {
-				return fmt.Errorf("stream: %s: no video frame in %s: the recorder is sending other channels but not this one", cfg.Name, mediaTimeout)
+				// A battery camera paired to a Home Hub looks just like
+				// this while it sleeps, and is retried, and so woken, in a
+				// loop until it is marked one (#43).
+				hint := ""
+				if !cfg.Sleeps {
+					hint = " (a battery camera on a Home Hub does this while asleep: set battery = true for it)"
+				}
+				return fmt.Errorf("stream: %s: no video frame in %s: the recorder is sending other channels but not this one%s", cfg.Name, mediaTimeout, hint)
 			}
 		case msg, open := <-src.Messages():
 			if !open {
@@ -498,10 +508,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						if cfg.Sink != nil {
 							cfg.Sink.Frame(f)
 						}
-						if pkt, key := mux.FrameWithKey(f); pkt != nil {
-							h.PublishKey(pkt, key)
-							h.RecordFrame(len(pkt))
-						}
+						publishVideo(h, mux, f)
 						if f.Kind == baichuan.FrameIFrame {
 							// Kept for the snapshot endpoint, which serves
 							// this raw elementary stream directly rather
@@ -533,10 +540,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 						if cfg.Sink != nil {
 							cfg.Sink.Frame(f)
 						}
-						if pkt := mux.Frame(f); pkt != nil {
-							h.Publish(pkt)
-							h.AddAudioFrames(1)
-						}
+						publishAudio(h, mux, f)
 						if dropped := mux.DroppedAudio(); dropped > reportedDroppedAudio {
 							h.AddDroppedAudio(dropped - reportedDroppedAudio)
 							reportedDroppedAudio = dropped

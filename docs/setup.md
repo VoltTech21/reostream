@@ -573,6 +573,14 @@ Reolink app, or another reostream showing it, is not motion: reostream logs that
 client connected. Its own sessions (a viewer, the camera page) are not motion either. Motion
 that happens while any client is connected cannot be seen this way.
 
+Some cameras' sensors wake them far more often than anything happens: wind in a field, the
+sun on a hot surface. The camera then records nothing, but each wake used to keep it awake
+for us for 30 seconds more. So after 3 wakes in 10 minutes reostream stops waking the stream
+for motion for 15 minutes, longer (up to an hour) if the wakes go on straight after, and logs
+when it stops and starts again. The camera's own recording carries on either way. To stop
+watching a camera's wakes for good, add `motion_wake = false` to it; motion from
+`motion_topic` still works.
+
 To keep the clips themselves, turn on **Auto-save motion clips** on the camera's page. The
 camera then uploads each motion clip to reostream, which saves it on your disk and plays it
 into the presence stream. A clip arrives some seconds after the motion starts, once the
@@ -592,6 +600,47 @@ always_on = true
 ```
 
 Off by default. On a battery, even with solar, it drains the camera in days.
+
+#### Waking it from Home Assistant (`wake_on_rtsp`)
+
+The presence stream never wakes the camera, so a dashboard showing it through go2rtc shows
+the last picture. Add `wake_on_rtsp = true` and a reader of the presence stream wakes the
+camera like a viewer on the control page: go2rtc opens the stream only while someone is
+looking, so the camera wakes when the dashboard shows it and sleeps 10 seconds after it
+closes. The last picture shows right away while the camera wakes. The 5-minute limit still
+applies; a reader still there wakes it again.
+
+```toml
+[[camera]]
+name = "backyard"
+uid = "9527000N031XXXXX"
+wake_on_rtsp = true
+```
+
+Not with a recorder reading the stream around the clock (Frigate recording it, for one):
+the camera would never sleep.
+
+### Battery cameras behind a Home Hub or NVR
+
+A battery camera paired to a Reolink Home Hub or NVR is reached as a channel of the hub,
+with the hub's address and no UID, so reostream cannot tell it from a wired camera. Mark it
+`battery = true`, or tick **Battery: sleeps until watched** for it under Settings > Camera
+list. Without it, every stream it lists is held open through the hub around the clock and
+the hub keeps the camera awake, which drains it in days.
+
+```toml
+[[camera]]
+name = "doorbell"
+address = "192.0.2.30"   # the Home Hub
+channel = 1
+battery = true
+rtsp = ["main"]
+```
+
+It then behaves like a battery camera with a UID: on demand, the presence stream over
+RTSP, `always_on` and `wake_on_rtsp` if wanted. Two differences: live motion from the
+camera's search does not reach it through the hub, so its motion comes from a
+`motion_topic`, and its battery level is not read.
 
 #### A battery camera that will not add
 

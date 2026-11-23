@@ -128,10 +128,7 @@ func runNative(ctx context.Context, cfg Config, h *hub.Hub, path string) (err er
 			if cfg.Sink != nil {
 				cfg.Sink.Frame(f)
 			}
-			if pkt, key := mux.FrameWithKey(f); pkt != nil {
-				h.PublishKey(pkt, key)
-				h.RecordFrame(len(pkt))
-			}
+			publishVideo(h, mux, f)
 			if f.Kind == baichuan.FrameIFrame {
 				h.SetKeyframe(f.Codec, f.Video())
 			}

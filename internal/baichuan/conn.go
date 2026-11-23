@@ -466,22 +466,31 @@ type alsoStream struct {
 // video only on a connection that is also streaming channel 0 (the Reolink
 // app opens both on one connection; captured 2026-10-24).
 func (c *Conn) StartVideoOn(channel, handle int, stream string) error {
+	_, err := c.startVideoOn(channel, handle, stream)
+	return err
+}
+
+// startVideoOn is StartVideoOn, also saying the request's counter: the
+// third byte of its encryption offset, which the camera or recorder echoes
+// on every media message of that request and of no other.
+func (c *Conn) startVideoOn(channel, handle int, stream string) (counter byte, err error) {
 	body, err := previewXML(channel, handle, stream)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	counter = c.nextCounter()
 	h := Header{
 		MsgID:     MsgIDVideo,
 		Class:     ClassModern24,
-		EncOffset: EncOffsetFor(byte(channel), StreamID(stream), c.nextCounter(), 0),
+		EncOffset: EncOffsetFor(byte(channel), StreamID(stream), counter, 0),
 	}
 	if err := c.w.Write(h, body); err != nil {
-		return err
+		return 0, err
 	}
 	c.mu.Lock()
 	c.also = append(c.also, alsoStream{channel, handle, stream})
 	c.mu.Unlock()
-	return nil
+	return counter, nil
 }
 
 // StopVideoOn stops one stream StartVideoOn opened, leaving the connection

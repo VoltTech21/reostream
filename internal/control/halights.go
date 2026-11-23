@@ -69,7 +69,7 @@ func (s *Server) learnControls(ctx context.Context, mq *mqtt.Client, prefix, ver
 						log.Printf("control: home assistant: %v", err)
 					}
 				}
-				if cam.UID != "" || stated[cam.Name+"/"+kind] {
+				if cam.Sleeps() || stated[cam.Name+"/"+kind] {
 					continue
 				}
 				if s.publishControlState(ctx, mq, prefix, cam, kind) {

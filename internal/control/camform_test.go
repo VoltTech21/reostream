@@ -477,3 +477,70 @@ func TestUpsertNeverAppendsADuplicateName(t *testing.T) {
 		t.Fatal("appended a second block for a name the file already has")
 	}
 }
+
+// #43: the battery row on a hub camera saves battery and wake_on_rtsp, an
+// edit without the row keeps them, and a battery camera serves only its
+// presence stream over RTSP.
+func TestFormBatteryRowOnAHubCamera(t *testing.T) {
+	cfg := &config.Config{
+		RTSP: &config.RTSPConfig{Listen: ":8561"},
+		Cameras: []config.Camera{
+			{Name: "doorbell", Address: "192.0.2.20", Channel: 1, Streams: []string{"main", "sub"}, RTSP: []string{"main", "sub"}},
+		},
+	}
+	form := url.Values{
+		"name": {"doorbell"}, "address": {"192.0.2.20"}, "username": {"admin"},
+		"password": {passwordUnchanged}, "streams": {"main", "sub"},
+		"battery_field": {"1"}, "battery": {"1"}, "wake_on_rtsp": {"1"},
+	}
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatal(err)
+	}
+	c := cfg.Cameras[0]
+	if !c.Battery || !c.WakeOnRTSP || c.Channel != 1 {
+		t.Fatalf("saved %+v", c)
+	}
+	if len(c.RTSP) != 1 || c.RTSP[0] != "main" {
+		t.Fatalf("rtsp = %v, want [main]", c.RTSP)
+	}
+	text := cameraBlockText(c)
+	if !strings.Contains(text, "battery = true\n") || !strings.Contains(text, "wake_on_rtsp = true\n") {
+		t.Fatalf("block text:\n%s", text)
+	}
+
+	// An edit from a form without the row keeps both.
+	delete(form, "battery_field")
+	delete(form, "battery")
+	delete(form, "wake_on_rtsp")
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Cameras[0]; !c.Battery || !c.WakeOnRTSP {
+		t.Fatalf("an edit without the battery row dropped it: %+v", c)
+	}
+
+	// Unticking battery turns wake_on_rtsp off with it.
+	form.Set("battery_field", "1")
+	form.Set("wake_on_rtsp", "1")
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Cameras[0]; c.Battery || c.WakeOnRTSP {
+		t.Fatalf("unticked battery saved %+v", c)
+	}
+}
+
+// #48: motion_wake = false survives an edit on the Cameras page.
+func TestFormEditKeepsMotionWakeOff(t *testing.T) {
+	off := false
+	cfg := &config.Config{Cameras: []config.Camera{
+		{Name: "porch", Address: "1.1.1.1", UID: "95270000TESTUID1", Password: "x", MotionWake: &off},
+	}}
+	form := url.Values{"name": {"porch"}, "address": {"1.1.1.1"}, "uid": {"95270000TESTUID1"}, "password": {passwordUnchanged}}
+	if err := applyCameraForm(cfg, form); err != nil {
+		t.Fatal(err)
+	}
+	if block := cameraBlockText(cfg.Cameras[0]); !strings.Contains(block, "motion_wake = false\n") {
+		t.Fatalf("block lost motion_wake = false:\n%s", block)
+	}
+}

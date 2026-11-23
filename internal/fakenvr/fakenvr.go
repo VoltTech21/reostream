@@ -64,21 +64,36 @@ type Recorder struct {
 	// Gap is the pause between two media messages of one preview.
 	Gap time.Duration
 
-	mu       sync.Mutex
-	accepts  int
-	open     int
-	starts   []Preview
-	stops    []Preview
-	silent   map[int]bool
-	conns    map[net.Conn]bool
-	maxConns int
+	mu      sync.Mutex
+	accepts int
+	open    int
+	starts  []Preview
+	stops   []Preview
+	silent  map[int]bool
+	conns   map[net.Conn]bool
+	// running is each connection's previews by [channel, handle].
+	running map[net.Conn]map[[2]int]chan struct{}
+
+	// StopUnknownStartsMain models what #49 points at on an RLN8-410: a
+	// stop naming a handle the recorder no longer has (its camera
+	// dropped, see Forget) is taken as a new request with no stream type,
+	// so the main stream, and is served tagged with the stop's own offset,
+	// whose stream byte may be the sub stream's.
+	StopUnknownStartsMain bool
+
+	// NoCounterEcho clears the counter byte of every media message's
+	// offset, for a recorder that does not echo it: a client must still
+	// tell its previews apart by channel and stream.
+	NoCounterEcho bool
+	maxConns      int
 }
 
 // New starts a fake recorder serving the media in capture, a server-side
 // capture from internal/baichuan/testdata that begins with a login.
 func New(t testing.TB, capture []byte) *Recorder {
 	t.Helper()
-	r := &Recorder{Gap: time.Millisecond, silent: map[int]bool{}, conns: map[net.Conn]bool{}}
+	r := &Recorder{Gap: time.Millisecond, silent: map[int]bool{}, conns: map[net.Conn]bool{},
+		running: map[net.Conn]map[[2]int]chan struct{}{}}
 	off, n := 0, 0
 	for off < len(capture) {
 		h, hl, err := baichuan.DecodeHeader(capture[off:])
@@ -187,6 +202,21 @@ func (r *Recorder) Silence(channel int, on bool) {
 	r.mu.Unlock()
 }
 
+// Forget ends every preview of channel on every connection without a word
+// to the client, as a recorder does when that channel's camera drops.
+func (r *Recorder) Forget(channel int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, running := range r.running {
+		for key, stop := range running {
+			if key[0] == channel {
+				close(stop)
+				delete(running, key)
+			}
+		}
+	}
+}
+
 // DropAll closes every open connection, as a recorder rebooting would.
 func (r *Recorder) DropAll() {
 	r.mu.Lock()
@@ -257,6 +287,14 @@ func (r *Recorder) serve(c net.Conn) {
 	done := make(chan struct{})
 	defer close(done)
 	running := map[[2]int]chan struct{}{}
+	r.mu.Lock()
+	r.running[c] = running
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.running, c)
+		r.mu.Unlock()
+	}()
 	for {
 		m, err := in.Next()
 		if err != nil {
@@ -288,18 +326,27 @@ func (r *Recorder) serve(c net.Conn) {
 		if req.Preview.StreamType == "" {
 			r.mu.Lock()
 			r.stops = append(r.stops, p)
-			r.mu.Unlock()
-			if stop := running[key]; stop != nil {
+			stop := running[key]
+			if stop != nil {
 				close(stop)
 				delete(running, key)
+			}
+			phantom := stop == nil && r.StopUnknownStartsMain
+			if phantom {
+				stop = make(chan struct{})
+				running[key] = stop
+			}
+			r.mu.Unlock()
+			if phantom {
+				go r.send(c, m.Header.EncOffset, p.Channel, stop, done)
 			}
 			continue
 		}
 		r.mu.Lock()
 		r.starts = append(r.starts, p)
-		r.mu.Unlock()
 		stop := make(chan struct{})
 		running[key] = stop
+		r.mu.Unlock()
 		// The reply carries the request's own offset, which is how a
 		// client tells which preview a message belongs to.
 		go r.send(c, m.Header.EncOffset, p.Channel, stop, done)
@@ -322,6 +369,11 @@ func (r *Recorder) send(c net.Conn, offset uint32, channel int, stop, done <-cha
 		}
 		msg := append([]byte(nil), r.media[i]...)
 		msg[12], msg[13], msg[14], msg[15] = byte(offset), byte(offset>>8), byte(offset>>16), byte(offset>>24)
+		r.mu.Lock()
+		if r.NoCounterEcho {
+			msg[14] = 0
+		}
+		r.mu.Unlock()
 		if _, err := c.Write(msg); err != nil {
 			return
 		}

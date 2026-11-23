@@ -31,6 +31,20 @@ type Camera struct {
 	// TCP port 9000.
 	UID string
 
+	// Battery marks a battery camera reached without a UID: one paired to
+	// a Home Hub or NVR, reached as a channel of it (#43). It sleeps
+	// between viewers and motion like a camera with a UID; without it the
+	// hub would be asked for its streams around the clock and keep it
+	// awake, draining it in days. See Sleeps.
+	Battery bool `toml:"battery"`
+
+	// WakeOnRTSP lets a reader of a battery camera's RTSP presence stream
+	// wake it, as a viewer on reostream's page does: a dashboard opening
+	// it through go2rtc then shows it live. Off by default, and not for a
+	// recorder that reads the stream around the clock, which would keep
+	// the camera awake.
+	WakeOnRTSP bool `toml:"wake_on_rtsp"`
+
 	// RTSP names which of this camera's streams to serve over RTSP. Absent
 	// means none, and every stream still reaches the HTTP output either way.
 	RTSP []string
@@ -48,11 +62,19 @@ type Camera struct {
 	// wakes it for the motion so its presence stream carries it live.
 	MotionTopic string `toml:"motion_topic"`
 
-	// AlwaysOn keeps a battery camera (one with a UID) streaming around the
+	// AlwaysOn keeps a battery camera (see Sleeps) streaming around the
 	// clock, like a wired camera, instead of sleeping between viewers and
 	// motion. Only for a battery camera on constant power: on its battery
 	// it drains in days. Off by default.
 	AlwaysOn bool `toml:"always_on"`
+
+	// MotionWake set to false stops reostream watching a battery camera
+	// for its sensor's wakes: no searches, no live motion, and its main
+	// stream is never woken for motion. For a camera whose sensor wakes
+	// it far more often than anything happens (#48: every 1 to 3 minutes
+	// on an Argus PT Ultra in a field, with nothing recorded), where even
+	// the paused waking costs too much battery. On when left out.
+	MotionWake *bool `toml:"motion_wake"`
 
 	// Rotate turns this camera's picture: 90, 180 or 270 degrees
 	// anticlockwise, in reostream's own player and written into the H.265
@@ -71,6 +93,15 @@ type Camera struct {
 	// Zoom's speaker and -12 dB was clear and plenty loud.
 	TalkGainDB int `toml:"talk_gain_db"`
 }
+
+// Sleeps reports whether c is a battery camera, one that sleeps between
+// viewers and so is only ever woken on demand: it has a UID, or it is
+// marked battery (one behind a Home Hub or NVR).
+func (c Camera) Sleeps() bool { return c.UID != "" || c.Battery }
+
+// WakesForMotion says whether a battery camera's sensor wakes are watched
+// and wake its stream: motion_wake, on when left out.
+func (c Camera) WakesForMotion() bool { return c.MotionWake == nil || *c.MotionWake }
 
 // RTSPConfig configures the RTSP listener. Its absence turns RTSP off
 // entirely, which is the default: HTTP MPEG-TS is what this daemon has
@@ -402,8 +433,14 @@ func (c *Config) Validate() error {
 		if g := cam.TalkGainDB; g < -12 || g > 12 || g%3 != 0 {
 			return fmt.Errorf("camera %q: talk_gain_db is %d; use -12 to 12 in steps of 3", cam.Name, g)
 		}
-		if cam.AlwaysOn && cam.UID == "" {
-			return fmt.Errorf("camera %q: always_on is for a battery camera, one with a uid", cam.Name)
+		if cam.AlwaysOn && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: always_on is for a battery camera, one with a uid or battery = true", cam.Name)
+		}
+		if cam.MotionWake != nil && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: motion_wake is for a battery camera, one with a uid or battery = true", cam.Name)
+		}
+		if cam.WakeOnRTSP && !cam.Sleeps() {
+			return fmt.Errorf("camera %q: wake_on_rtsp is for a battery camera, one with a uid or battery = true", cam.Name)
 		}
 		if cam.Channel < 0 || cam.Channel > 63 {
 			return fmt.Errorf("camera %q: channel %d is out of range (0 to 63)", cam.Name, cam.Channel)
@@ -415,11 +452,11 @@ func (c *Config) Validate() error {
 
 		// A battery camera may list no streams: reostream then only reaches
 		// it on demand (settings, recordings) and never holds it awake.
-		if len(cam.Streams) == 0 && cam.UID == "" {
+		if len(cam.Streams) == 0 && !cam.Sleeps() {
 			return fmt.Errorf("camera %q has no streams", cam.Name)
 		}
 		seenStreams := make(map[string]bool, len(cam.Streams))
-		if len(cam.Streams) == 0 && cam.UID != "" {
+		if len(cam.Streams) == 0 && cam.Sleeps() {
 			// What a battery camera that lists none runs, on demand.
 			seenStreams["sub"], seenStreams["main"] = true, true
 		}

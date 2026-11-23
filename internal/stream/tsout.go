@@ -3,6 +3,8 @@ package stream
 import (
 	"time"
 
+	"github.com/VoltTech21/reostream/internal/baichuan"
+
 	"github.com/VoltTech21/reostream/internal/hub"
 	"github.com/VoltTech21/reostream/internal/ts"
 )
@@ -64,4 +66,36 @@ func (o *tsOutput) muxer(codec string, audio bool, now time.Time) (m *ts.Muxer, 
 	}
 	o.mux, o.resume, o.lastVideo = m, false, now
 	return m, changed, nil
+}
+
+// publishVideo hands a video frame to the stream's HTTP readers. With none
+// attached it only moves the muxer past the frame (ts.Muxer.Skip): the
+// recorder reads RTSP on most setups, and packing MPEG-TS for nobody was
+// the largest source of garbage in a profile. A reader that subscribes
+// between the check and the next frame waits for a keyframe either way.
+func publishVideo(h *hub.Hub, mux *ts.Muxer, f baichuan.Frame) {
+	if h.Clients() == 0 {
+		if n, ok := mux.Skip(f); ok {
+			h.RecordFrame(n)
+		}
+		return
+	}
+	if pkt, key := mux.FrameWithKey(f); pkt != nil {
+		h.PublishKey(pkt, key)
+		h.RecordFrame(len(pkt))
+	}
+}
+
+// publishAudio is publishVideo for an audio frame.
+func publishAudio(h *hub.Hub, mux *ts.Muxer, f baichuan.Frame) {
+	if h.Clients() == 0 {
+		if _, ok := mux.Skip(f); ok {
+			h.AddAudioFrames(1)
+		}
+		return
+	}
+	if pkt := mux.Frame(f); pkt != nil {
+		h.Publish(pkt)
+		h.AddAudioFrames(1)
+	}
 }

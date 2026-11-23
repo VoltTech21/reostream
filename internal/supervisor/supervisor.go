@@ -106,6 +106,15 @@ type entry struct {
 	// alwaysOn keeps an on-demand stream awake around the clock: a battery
 	// camera on constant power (config always_on).
 	alwaysOn bool
+	// motionWake: the camera's sensor wakes are watched (motion_wake).
+	motionWake bool
+	// wakeOnRTSP counts readers of the camera's RTSP presence stream as
+	// viewers (config wake_on_rtsp). Only on main, the stream that feeds
+	// the presence stream.
+	wakeOnRTSP bool
+	// rtspReaders, when set, is how many RTSP readers the presence stream
+	// has now. See AttachRTSPReaders.
+	rtspReaders func() int
 	// privacyKick ends a privacy-mode wait early (PrivacyOff).
 	privacyKick chan struct{}
 	// motionUntil (Unix nanoseconds) keeps an on-demand stream awake with
@@ -150,6 +159,10 @@ type Supervisor struct {
 	// the presence stream, which a recorder reads without waking the
 	// camera. See AttachPresence.
 	presenceFor func(camera string, h *hub.Hub) stream.FrameSink
+
+	// rtspReaders counts the readers of a camera's RTSP presence stream,
+	// for the cameras set to wake for them. See AttachRTSPReaders.
+	rtspReaders func(camera string) int
 
 	// stillDir keeps battery cameras' last pictures across restarts.
 	stillDir string
@@ -233,7 +246,7 @@ func New(cams []config.Camera, run Runner) *Supervisor {
 // main is always among them, listed or not: it is the stream the presence
 // stream and motion wakes hang off.
 func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
-	if cam.UID == "" {
+	if !cam.Sleeps() {
 		return cam.Streams, false
 	}
 	if len(cam.Streams) == 0 {
@@ -253,7 +266,7 @@ func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
 // reostream's page. The list is not refused, since a config written for
 // 0.2.8 (#38) would then stop reostream from starting.
 func warnBatteryRTSP(cam config.Camera) {
-	if cam.UID == "" {
+	if !cam.Sleeps() {
 		return
 	}
 	for _, st := range cam.RTSP {
@@ -278,14 +291,17 @@ func newEntry(cam config.Camera, st string) *entry {
 			Stream:   st,
 			Channel:  cam.Channel,
 			UID:      cam.UID,
+			Sleeps:   cam.Sleeps(),
 
 			HoldPicture: cam.HoldPicture,
 			Rotate:      cam.Rotate,
 		},
-		h:        h,
-		stat:     StreamStat{Camera: cam.Name, Stream: st, OnDemand: onDemand},
-		onDemand: onDemand,
-		alwaysOn: onDemand && cam.AlwaysOn,
+		h:          h,
+		stat:       StreamStat{Camera: cam.Name, Stream: st, OnDemand: onDemand},
+		onDemand:   onDemand,
+		alwaysOn:   onDemand && cam.AlwaysOn,
+		motionWake: cam.WakesForMotion(),
+		wakeOnRTSP: onDemand && cam.WakeOnRTSP && st == "main",
 	}
 }
 
@@ -347,9 +363,28 @@ func (s *Supervisor) AttachPresence(presenceFor func(camera string, h *hub.Hub) 
 	s.mu.Unlock()
 }
 
+// AttachRTSPReaders tells the supervisor how many RTSP readers a camera's
+// presence stream has, so a battery camera with wake_on_rtsp wakes for
+// them as for a viewer on the page. Call before Run, like AttachSinks.
+func (s *Supervisor) AttachRTSPReaders(readers func(camera string) int) {
+	if s.started.Load() {
+		panic("supervisor: AttachRTSPReaders called after Run")
+	}
+	s.mu.Lock()
+	s.rtspReaders = readers
+	for _, e := range s.entries {
+		s.applySinkLocked(e)
+	}
+	s.mu.Unlock()
+}
+
 // applySinkLocked gives e a frame sink if its camera asked for this stream
 // over RTSP. Caller holds s.mu.
 func (s *Supervisor) applySinkLocked(e *entry) {
+	if e.wakeOnRTSP && s.rtspReaders != nil {
+		name, readers := e.cfg.Name, s.rtspReaders
+		e.rtspReaders = func() int { return readers(name) }
+	}
 	// A battery camera's on-demand stream never feeds RTSP directly: a
 	// recorder pulling it would hold the camera awake around the clock.
 	// Its main stream feeds the presence stream instead, which a recorder
@@ -634,6 +669,9 @@ func sameStream(e *entry, cam config.Camera) bool {
 	_, onDemand := cameraStreams(cam)
 	return e.onDemand == onDemand &&
 		e.alwaysOn == (onDemand && cam.AlwaysOn) &&
+		e.motionWake == cam.WakesForMotion() &&
+		e.wakeOnRTSP == (onDemand && cam.WakeOnRTSP && e.cfg.Stream == "main") &&
+		e.cfg.Sleeps == cam.Sleeps() &&
 		e.cfg.Address == cam.Address &&
 		e.cfg.Channel == cam.Channel &&
 		e.cfg.UID == cam.UID &&

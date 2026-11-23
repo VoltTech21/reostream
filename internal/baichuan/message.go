@@ -2,11 +2,14 @@ package baichuan
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 )
 
 // MaxMessageSize bounds a single message body.
@@ -224,10 +227,143 @@ func parseExtension(x []byte) (extensionHeader, bool) {
 	if len(x) == 0 {
 		return ext, false
 	}
+	if ext, ok := scanExtension(x); ok {
+		return ext, true
+	}
 	if err := xml.Unmarshal(x, &ext); err != nil {
 		return extensionHeader{}, false
 	}
 	return ext, true
+}
+
+// scanExtension reads the plain form of an extension header that cameras
+// send, an Extension element holding only elements of text, and reports
+// false for anything else, which then goes through encoding/xml. It gives
+// the same answer encoding/xml does for what it accepts
+// (TestScanExtensionAgreesWithXML). The header comes with every media
+// message, and on the pano and fisheye with every continuation too, so
+// encoding/xml here was a tenth of reostream's CPU in a profile.
+func scanExtension(x []byte) (ext extensionHeader, ok bool) {
+	s := trimXMLSpace(x)
+	if bytes.HasPrefix(s, []byte("<?xml")) {
+		// Only the declarations seen from cameras: encoding/xml refuses
+		// other versions and encodings, and this must refuse the same.
+		i := bytes.Index(s, []byte("?>"))
+		if i < 0 || !knownXMLDecl[string(s[:i+2])] {
+			return ext, false
+		}
+		s = trimXMLSpace(s[i+2:])
+	}
+	if !bytes.HasPrefix(s, []byte("<Extension")) {
+		return ext, false
+	}
+	s = s[len("<Extension"):]
+	i := bytes.IndexByte(s, '>')
+	if i < 0 || (i > 0 && !isXMLSpace(s[0])) {
+		return ext, false
+	}
+	// No attributes, or the version the cameras send: anything else is
+	// left to encoding/xml to judge.
+	if attrs := trimXMLSpace(s[:i]); len(attrs) > 0 && !knownExtensionAttrs(attrs) {
+		return ext, false
+	}
+	s = s[i+1:]
+	var seenBinary, seenEncrypt bool
+	for {
+		s = trimXMLSpace(s)
+		if bytes.HasPrefix(s, []byte("</Extension>")) {
+			if len(trimXMLSpace(s[len("</Extension>"):])) != 0 {
+				return ext, false
+			}
+			return ext, true
+		}
+		if len(s) < 2 || s[0] != '<' {
+			return ext, false
+		}
+		j := bytes.IndexByte(s, '>')
+		if j < 2 {
+			return ext, false
+		}
+		name := s[1:j]
+		for _, c := range name {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+				return ext, false
+			}
+		}
+		s = s[j+1:]
+		k := bytes.IndexByte(s, '<')
+		if k < 0 {
+			return ext, false
+		}
+		text := s[:k]
+		for _, c := range text {
+			// Plain ASCII only: entities, CDATA ends, control bytes and
+			// anything that may not be valid UTF-8 go to encoding/xml.
+			if c == '&' || c == ']' || c > '~' || c < ' ' && !isXMLSpace(c) {
+				return ext, false
+			}
+		}
+		s = s[k:]
+		if len(s) < len(name)+3 || s[1] != '/' || !bytes.Equal(s[2:2+len(name)], name) || s[2+len(name)] != '>' {
+			return ext, false
+		}
+		s = s[len(name)+3:]
+		var dst *int
+		switch string(name) {
+		case "binaryData":
+			if seenBinary {
+				return ext, false
+			}
+			seenBinary, dst = true, &ext.BinaryData
+		case "encryptLen":
+			if seenEncrypt {
+				return ext, false
+			}
+			seenEncrypt, dst = true, &ext.EncryptLen
+		default:
+			continue
+		}
+		if len(text) == 0 {
+			*dst = 0 // as encoding/xml reads an empty element
+			continue
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(string(text)), 10, strconv.IntSize)
+		if err != nil {
+			return ext, false
+		}
+		*dst = int(v)
+	}
+}
+
+func knownExtensionAttrs(a []byte) bool {
+	v, ok := bytes.CutPrefix(a, []byte(`version="`))
+	if !ok || len(v) < 2 || v[len(v)-1] != '"' {
+		return false
+	}
+	for _, c := range v[:len(v)-1] {
+		if !(c >= '0' && c <= '9' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+var knownXMLDecl = map[string]bool{
+	`<?xml version="1.0" encoding="UTF-8" ?>`: true,
+	`<?xml version="1.0" encoding="UTF-8"?>`:  true,
+	`<?xml version="1.0"?>`:                   true,
+}
+
+func isXMLSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+func trimXMLSpace(b []byte) []byte {
+	for len(b) > 0 && isXMLSpace(b[0]) {
+		b = b[1:]
+	}
+	for len(b) > 0 && isXMLSpace(b[len(b)-1]) {
+		b = b[:len(b)-1]
+	}
+	return b
 }
 
 // decryptPayload decrypts the leading, encrypted part of a media payload.

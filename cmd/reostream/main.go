@@ -290,7 +290,7 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 		// for this instead.
 		go rs.Hold(supCtx, func() bool {
 			c, ok := sup.CameraConfig(camera)
-			return ok && c.HoldPicture && c.UID == ""
+			return ok && c.HoldPicture && !c.Sleeps
 		})
 		return multiSink{rs, fs}
 	})
@@ -303,7 +303,11 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 	if rtspSrv != nil {
 		rtspSrv.SetBattery(func(camera string) bool {
 			c, ok := sup.CameraConfig(camera)
-			return ok && c.UID != ""
+			return ok && c.Sleeps
+		})
+		// wake_on_rtsp: a reader of the presence stream wakes the camera.
+		sup.AttachRTSPReaders(func(camera string) int {
+			return rtspSrv.Readers(rtsp.Path(camera, "main"))
 		})
 		sup.AttachPresence(func(camera string, h *hub.Hub) stream.FrameSink {
 			if p := presence.Lookup(camera); p != nil {

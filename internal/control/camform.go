@@ -97,26 +97,42 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		}
 		cam.Channel = ch
 	}
+	existing, isEdit := cameraNamed(cfg, cam.Name)
+	// The battery row is on the form only for a camera behind a Home Hub
+	// or NVR (#43); without it an edit keeps what the file has.
+	if form.Get("battery_field") != "" {
+		cam.Battery = form.Get("battery") != ""
+		cam.WakeOnRTSP = form.Get("wake_on_rtsp") != ""
+	} else if isEdit {
+		cam.Battery = existing.Battery
+		cam.WakeOnRTSP = existing.WakeOnRTSP
+	}
+	// The form has no uid field, so an edit of a battery camera arrives
+	// with none: take it from the camera being edited.
+	if cam.UID == "" && isEdit {
+		cam.UID = existing.UID
+	}
+	if !cam.Sleeps() {
+		cam.WakeOnRTSP = false
+	}
+
 	// The page has no RTSP field. With RTSP on, serve every stream the
 	// camera pulls; reading the missing field as "none" dropped the
-	// camera from RTSP on every edit.
+	// camera from RTSP on every edit. A battery camera serves only its
+	// presence stream, /<camera>, so main is all it lists.
 	if _, ok := form["rtsp"]; !ok && cfg.RTSP != nil {
 		cam.RTSP = append([]string(nil), cam.Streams...)
+		if cam.Sleeps() {
+			cam.RTSP = []string{"main"}
+		}
 	}
 
 	// A camera with no stream ticked saves without error and then pulls
 	// nothing -- the one mistake this form could make that looks like
 	// success. Refuse it with a message that says what to do.
-	// A battery camera (a UID) is the exception: with no streams reostream
-	// only reaches it on demand and never holds it awake.
-	// The form has no uid field, so an edit of a battery camera arrives
-	// with none: take it from the camera being edited before judging.
-	if cam.UID == "" {
-		if existing, ok := cameraNamed(cfg, cam.Name); ok {
-			cam.UID = existing.UID
-		}
-	}
-	if len(cam.Streams) == 0 && cam.UID == "" {
+	// A battery camera is the exception: with no streams reostream only
+	// reaches it on demand and never holds it awake.
+	if len(cam.Streams) == 0 && !cam.Sleeps() {
 		return fmt.Errorf("pick at least one stream to pull (main, sub or extern): a camera with none set up records nothing")
 	}
 
@@ -136,11 +152,9 @@ func applyCameraForm(cfg *config.Config, form url.Values) error {
 		cam.HoldPicture = existing.HoldPicture
 		cam.MotionTopic = existing.MotionTopic
 		cam.AlwaysOn = existing.AlwaysOn
+		cam.MotionWake = existing.MotionWake
 		cam.Rotate = existing.Rotate
 		cam.TalkGainDB = existing.TalkGainDB
-		if cam.UID == "" {
-			cam.UID = existing.UID
-		}
 		cfg.Cameras[i] = cam
 		// cfg.Validate: the daemon's own validation runs over the whole
 		// config, so a form submission is held to exactly the rules
@@ -196,6 +210,9 @@ type cameraListEntry struct {
 	// Streams is the toggles this camera gets: the ones it has, plus any
 	// already set so they can be turned off.
 	Streams []string
+	// HubCam is a camera reached through a Home Hub or NVR, without a UID,
+	// which gets the battery row: whether it sleeps (#43).
+	HubCam bool
 }
 
 type camerasPage struct {
@@ -229,6 +246,13 @@ func (s *Server) camerasPage(ctx context.Context) camerasPage {
 		go func(i int, cam config.Camera) {
 			defer wg.Done()
 			entries[i].Streams = s.availableStreams(ctx, cam)
+			// After availableStreams, whose read has already told the
+			// server whether this address is a recorder.
+			if cam.UID == "" {
+				if c, err := s.byName(cam.Name); err == nil {
+					entries[i].HubCam = s.behindRecorder(ctx, c)
+				}
+			}
 		}(i, cam)
 	}
 	wg.Wait()
@@ -310,6 +334,12 @@ func cameraBlockText(cam config.Camera) string {
 	if cam.UID != "" {
 		fmt.Fprintf(&b, "uid = %q\n", cam.UID)
 	}
+	if cam.Battery {
+		b.WriteString("battery = true\n")
+	}
+	if cam.WakeOnRTSP {
+		b.WriteString("wake_on_rtsp = true\n")
+	}
 	writeList("streams", cam.Streams)
 	writeList("rtsp", cam.RTSP)
 	if cam.HoldPicture {
@@ -320,6 +350,9 @@ func cameraBlockText(cam config.Camera) string {
 	}
 	if cam.AlwaysOn {
 		b.WriteString("always_on = true\n")
+	}
+	if cam.MotionWake != nil {
+		fmt.Fprintf(&b, "motion_wake = %t\n", *cam.MotionWake)
 	}
 	if cam.Rotate != nil {
 		fmt.Fprintf(&b, "rotate = %d\n", *cam.Rotate)

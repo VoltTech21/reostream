@@ -85,6 +85,10 @@ func haEntities(c config.Camera) []haEntity {
 	case c.UID != "":
 		out = append(out, motion, haEntity{component: "sensor", object: "battery", name: "Battery",
 			deviceClass: "battery", unit: "%", diagnostic: true})
+	case c.Battery:
+		// Behind a hub: its motion comes from motion_topic, and its
+		// alarms are not read, which would hold the hub's session for it.
+		out = append(out, motion)
 	case c.Channel == 0 && len(c.Streams) > 0:
 		out = append(out, motion,
 			haEntity{component: "binary_sensor", object: "person", name: "Person", deviceClass: "occupancy"},
@@ -112,7 +116,9 @@ var haLearned = map[string]haEntity{
 
 // haLearns reports whether a camera can learn entities: one with an alert
 // connection of its own, the only kind that reports these.
-func haLearns(c config.Camera) bool { return c.UID == "" && c.Channel == 0 && len(c.Streams) > 0 }
+func haLearns(c config.Camera) bool {
+	return !c.Sleeps() && c.Channel == 0 && len(c.Streams) > 0
+}
 
 // haNodeID makes a camera name safe as a discovery topic level and a
 // unique_id, which Home Assistant limits to letters, digits, "_" and "-".

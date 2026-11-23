@@ -26,20 +26,20 @@ type TalkSession interface {
 }
 
 // backChannelMedia is what a stream offers a client that asks for an ONVIF
-// back channel. 16 bit PCM at 16 kHz comes first: it is the camera's own
-// talk rate, so nothing is lost on the way, and go2rtc sends it ("PCM")
-// when asked. G.711 at 8 kHz, in both laws, follows for clients that only
-// speak that, which is what Frigate's talk button sends by default since
-// browsers speak it natively over WebRTC; going through 8 kHz is what made
-// talk sound a little rough (a tester's E1 Zoom report, 10-27).
+// back channel. G.711 at 8 kHz, in both laws, comes first: go2rtc, and so
+// Frigate's talk button, takes only the first format of a back channel and
+// cannot send L16 (AlexxIT/go2rtc#696), so with L16 in front the mic button
+// disappeared (#50, v0.2.4 to v0.2.9). 16 bit PCM at 16 kHz, the camera's
+// own talk rate, follows for clients that choose a format themselves; it
+// sounds better than going through 8 kHz (a tester's E1 Zoom report, 10-27).
 func backChannelMedia() *description.Media {
 	return &description.Media{
 		Type:          description.MediaTypeAudio,
 		IsBackChannel: true,
 		Formats: []format.Format{
-			&format.LPCM{PayloadTyp: 96, BitDepth: 16, SampleRate: 16000, ChannelCount: 1},
 			&format.G711{PayloadTyp: 0, MULaw: true, SampleRate: 8000, ChannelCount: 1},
 			&format.G711{PayloadTyp: 8, MULaw: false, SampleRate: 8000, ChannelCount: 1},
+			&format.LPCM{PayloadTyp: 96, BitDepth: 16, SampleRate: 16000, ChannelCount: 1},
 		},
 	}
 }

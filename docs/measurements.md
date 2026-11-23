@@ -343,3 +343,36 @@ Across both reloads, not one stream other than the one being changed was restart
 interrupted. The restored stream reconnecting immediately, rather than the camera refusing
 it for minutes, is also the confirmation that its session was released cleanly rather than
 left held.
+
+## The work fleet again, 2026-11-19
+
+Same eight cameras and 23 streams as above, now on v0.2.9 with snapshots, motion,
+audio and the control pages, after 28 hours up.
+
+| measure | value |
+|---|---|
+| streams | 23 of 23 |
+| aggregate | 77.5 Mbps |
+| reostream CPU | 72-76% of one core (Xeon E5-1650, 2012), same over the whole 28 hours |
+| reostream RSS | 95 MB |
+
+Up from 53% and 37 MB. Part of that is 2 Mbps more video; the rest has not been
+profiled yet.
+
+## The work fleet on v0.2.10, 2026-11-19
+
+The same fleet after v0.2.10 stopped packing MPEG-TS for streams with no HTTP reader
+(the recorder reads RTSP), read the extension header without encoding/xml and reused
+the depacketizer's buffer. One hour up, no restarts.
+
+| measure | v0.2.9 | v0.2.10 |
+|---|---|---|
+| streams | 23 of 23 | 23 of 23 |
+| aggregate | 77.5 Mbps | 82.2 Mbps |
+| reostream CPU | 76% of one core | 64% of one core |
+| per Mbps | 0.98% | 0.78% |
+| reostream RSS | 95 MB | 68 MB |
+
+Most of what is left is reading from the cameras' sockets. On two cameras on a newer
+CPU the same change measured 10.0% of a core down to 5.6%, and 83% less memory
+allocated.
