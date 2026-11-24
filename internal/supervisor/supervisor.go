@@ -249,6 +249,13 @@ func cameraStreams(cam config.Camera) (streams []string, onDemand bool) {
 	if !cam.Sleeps() {
 		return cam.Streams, false
 	}
+	// A camera kept always on never sleeps, so it streams like a powered
+	// camera: straight through, with its own sound. Through the presence
+	// stream its live audio is replaced by generated silence (a powered
+	// Video Doorbell reached by UID, 0.2.9 on; 0.2.8 streamed it directly).
+	if cam.AlwaysOn && len(cam.Streams) > 0 {
+		return cam.Streams, false
+	}
 	if len(cam.Streams) == 0 {
 		return []string{"sub", "main"}, true
 	}
