@@ -436,7 +436,11 @@ func (c *Conn) Err() error {
 
 // StartVideo requests a stream: StreamMain, StreamSub or StreamExtern.
 func (c *Conn) StartVideo(stream string) error {
-	c.handle++
+	if stream == StreamExtern && IsRecorder(c.DeviceInfo()) {
+		c.handle = recorderExternHandle(c.opts.Channel)
+	} else {
+		c.handle++
+	}
 	c.stream = stream
 	body, err := previewXML(c.opts.Channel, c.handle, stream)
 	if err != nil {
@@ -449,6 +453,10 @@ func (c *Conn) StartVideo(stream string) error {
 	}
 	return c.w.Write(h, body)
 }
+
+// recorderExternHandle is the handle used by Reolink's app for a recorder
+// camera's second lens: the extern stream on that camera's recorder channel.
+func recorderExternHandle(channel int) int { return 1024 + channel }
 
 type alsoStream struct {
 	channel, handle int

@@ -214,17 +214,19 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	var conn *baichuan.Conn
 	var sub *baichuan.Sub
 	var src source
-	if p := currentPool(); p != nil {
+	// A sleeping camera's recorder-hosted second lens gets a disposable
+	// connection. Some recorders acknowledge StopVideo(externStream) on a
+	// shared connection but keep the child camera awake until TCP closes.
+	// The connection exists only while an on-demand viewer is present.
+	if p := currentPool(); p != nil && !(zoom && cfg.Sleeps) {
 		channel, want := cfg.Channel, kind
 		if zoom {
-			// A recorder offers no lens of its own to unlock: the zoom
-			// is asked for as the channel it has always been asked for,
-			// without channel 0's sub stream, which on a recorder is
-			// another camera's picture.
-			channel = zoomChannel
-			if cfg.Stream == "zoom_sub" {
-				want = baichuan.StreamSub
-			}
+			// A camera on its own ignores these values and startZoom below
+			// asks for its second lens on channel 1. A recorder instead
+			// serves that lens as externStream on the camera's own recorder
+			// channel (#27). Recorders expose one such stream, so zoom and
+			// zoom_sub share it rather than opening another camera on channel 1.
+			want = baichuan.StreamExtern
 		}
 		sub, conn, err = p.Open(ctx, cfg.Address, opts, channel, want)
 	} else {
@@ -293,9 +295,20 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 		}
 	}
 
+	// A zoom requested on a recorder connection of its own is still the
+	// recorder's extern stream, not a direct camera's channel-1 lens.
+	recorderZoom := zoom && sub == nil && baichuan.IsRecorder(conn.DeviceInfo())
+
 	switch {
 	case sub != nil:
 		// Subscribing already asked for the stream.
+	case recorderZoom:
+		// Sharing may be disabled, but a recorder still serves the second
+		// lens as externStream on opts.Channel. Do not fall through to
+		// startZoom: channel 1 there is the lens inside a direct camera.
+		if err := conn.StartVideo(baichuan.StreamExtern); err != nil {
+			return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
+		}
 	case zoom:
 		if err := startZoom(conn, cfg.Stream); err != nil {
 			return fmt.Errorf("stream: %s: start video: %w", cfg.Name, err)
@@ -395,7 +408,7 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 			// time, so skipping them with it left a zoom that sent nothing
 			// at 0 fps for 12 minutes (cam-19, 2026-11-03) instead of
 			// trying RTSP after mediaTimeout.
-			unlock := zoom && sub == nil && msg.Header.MsgID == baichuan.MsgIDVideo && byte(msg.Header.EncOffset) != zoomChannel
+			unlock := zoom && sub == nil && !recorderZoom && msg.Header.MsgID == baichuan.MsgIDVideo && byte(msg.Header.EncOffset) != zoomChannel
 			if len(msg.Payload) > 0 && !unlock {
 				d.Write(msg.Payload, msg.StartsPacket)
 				if d.TakeGap() && !waitKey {

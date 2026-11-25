@@ -50,6 +50,7 @@ const support = `<?xml version="1.0" encoding="UTF-8" ?>
 // Preview names one stream a client asked for.
 type Preview struct {
 	Channel int
+	Handle  int
 	Stream  string
 }
 
@@ -322,7 +323,7 @@ func (r *Recorder) serve(c net.Conn) {
 			continue
 		}
 		key := [2]int{req.Preview.ChannelID, req.Preview.Handle}
-		p := Preview{Channel: req.Preview.ChannelID, Stream: req.Preview.StreamType}
+		p := Preview{Channel: req.Preview.ChannelID, Handle: req.Preview.Handle, Stream: req.Preview.StreamType}
 		if req.Preview.StreamType == "" {
 			r.mu.Lock()
 			r.stops = append(r.stops, p)

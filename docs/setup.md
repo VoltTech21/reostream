@@ -242,8 +242,11 @@ streams = ["main", "sub"]
 ```
 
 Channels are added by hand in the config for now; the Setup page does not ask for one.
-Every stream works through the recorder (main, sub, extern, and a TrackMix's zoom), and so
-does the camera's settings page: each setting is read and written on that camera's channel.
+Every stream works through the recorder. A two-lens camera's second lens is the recorder's
+`extern` stream on that camera's own channel; reostream publishes it as `zoom`. Recorders
+seen so far expose one such second-lens stream rather than separate `zoom` and `zoom_sub`
+qualities, so configure `zoom` only. The camera's settings page also uses that camera's
+channel: each setting is read and written there.
 The pages that set the whole device (date and time, network ports) are refused for a
 channel camera, because behind a recorder they would change the recorder itself. Tested on
 an RLN8-410 with a TrackMix PoE.
@@ -353,6 +356,9 @@ and its zoom lens is served as two more streams: `zoom`, at full size, and `zoom
   the camera's `streams` (and its `rtsp` list, when it has one) and reostream reloads.
   Nothing is added until you ask.
 - By hand: add `"zoom"` and/or `"zoom_sub"` to the camera's `streams` and `rtsp` lists.
+- Behind an NVR or Home Hub, add `"zoom"` only. The recorder serves the second lens as its
+  `extern` stream on the camera's own recorder channel and has only one second-lens quality;
+  `zoom_sub` is an alias of that same preview for compatibility, not a smaller stream.
 
 A recorder asking for a stream that is not turned on gets a 404, and the log says which
 streams that camera does serve and how to turn the missing one on. A stream that is on but

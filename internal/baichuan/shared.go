@@ -47,7 +47,6 @@ type Shared struct {
 
 	mu       sync.Mutex
 	previews map[previewKey]*preview
-	handle   int
 	// strays are the offsets of previews nobody here asked for that have
 	// been logged, so each is logged once.
 	strays map[uint32]bool
@@ -164,10 +163,12 @@ func (s *Shared) Subscribe(channel int, stream string) (*Sub, error) {
 	}
 	p := s.previews[key]
 	if p == nil {
-		// Handles only have to be distinct within the connection; the
-		// stop message names the one its start used.
-		s.handle++
-		p = &preview{channel: channel, handle: s.handle, stream: stream, readers: map[*Sub]bool{}}
+		// Recorder clients assign disjoint handle ranges to main, sub and
+		// extern previews. extern's 1024 + channel is the important second-
+		// lens contract from the Reolink app (#27); using the same scheme for
+		// every preview also prevents collisions after long connection churn.
+		handle := recorderSharedHandle(channel, stream)
+		p = &preview{channel: channel, handle: handle, stream: stream, readers: map[*Sub]bool{}}
 		counter, err := s.conn.startVideoOn(channel, p.handle, stream)
 		if err != nil {
 			return nil, fmt.Errorf("baichuan: start channel %d %s: %w", channel, stream, err)
@@ -183,6 +184,20 @@ func (s *Shared) Subscribe(channel int, stream string) (*Sub, error) {
 	}
 	p.readers[sub] = true
 	return sub, nil
+}
+
+// recorderSharedHandle keeps channel/stream pairs in disjoint ranges used by
+// Reolink clients. Recorder channels fit in one byte, so the ranges cannot
+// overlap: main 0..255, sub 256..511, extern 1024..1279.
+func recorderSharedHandle(channel int, stream string) int {
+	switch stream {
+	case StreamSub:
+		return 256 + channel
+	case StreamExtern:
+		return recorderExternHandle(channel)
+	default:
+		return channel
+	}
 }
 
 // unsubscribe removes sub, stopping its stream if nobody else reads it.

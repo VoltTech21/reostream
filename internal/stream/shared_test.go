@@ -19,9 +19,11 @@ func waitForChunk(t *testing.T, name string, ch <-chan []byte) {
 	}
 }
 
-// A TrackMix on an NVR's channel 1, with all four of its streams, as
-// cam-19 runs: one connection, and two previews, since behind a recorder
-// the zoom streams are channel 1's own main and sub.
+// A dual-lens camera on an NVR's channel 6 serves its second lens as the
+// extern stream on that same recorder channel. The Reolink app asks for it
+// this way; asking channel 1 instead serves whichever camera occupies the
+// recorder's channel 1 (#27). A recorder exposes only one second-lens stream,
+// so zoom and zoom_sub share that extern preview.
 func TestRunAllOfACamerasStreamsBehindAnNVROnOneConnection(t *testing.T) {
 	nvr := fakenvr.New(t, h265Fixture(t))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -31,24 +33,43 @@ func TestRunAllOfACamerasStreamsBehindAnNVROnOneConnection(t *testing.T) {
 		h := hub.New(64)
 		ch, cancelSub := h.Subscribe()
 		defer cancelSub()
-		go Run(ctx, Config{Name: "behind-nvr", Address: nvr.Addr(), Channel: 1, Stream: st}, h)
+		go Run(ctx, Config{Name: "behind-nvr", Address: nvr.Addr(), Channel: 6, Stream: st}, h)
 		waitForChunk(t, st, ch)
 	}
 	if n := nvr.Accepts(); n != 1 {
 		t.Fatalf("recorder accepted %d connections for four streams, want 1", n)
 	}
 	want := map[fakenvr.Preview]bool{
-		{Channel: 1, Stream: baichuan.StreamMain}: true,
-		{Channel: 1, Stream: baichuan.StreamSub}:  true,
+		{Channel: 6, Handle: 6, Stream: baichuan.StreamMain}:          true,
+		{Channel: 6, Handle: 256 + 6, Stream: baichuan.StreamSub}:     true,
+		{Channel: 6, Handle: 1024 + 6, Stream: baichuan.StreamExtern}: true,
 	}
 	got := nvr.Starts()
 	if len(got) != len(want) {
-		t.Fatalf("previews asked for = %v, want channel 1 main and sub once each", got)
+		t.Fatalf("previews asked for = %v, want channel 6 main, sub and extern once each", got)
 	}
 	for _, p := range got {
 		if !want[p] {
-			t.Fatalf("previews asked for = %v, want channel 1 main and sub once each", got)
+			t.Fatalf("previews asked for = %v, want channel 6 main, sub and extern once each", got)
 		}
+	}
+
+	cancel()
+	for deadline := time.Now().Add(2 * time.Second); len(nvr.Stops()) < 3 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stops := nvr.Stops()
+	if len(stops) != 3 {
+		t.Fatalf("preview stops = %v, want three", stops)
+	}
+	foundExtern := false
+	for _, p := range stops {
+		if p.Channel == 6 && p.Handle == 1024+6 {
+			foundExtern = true
+		}
+	}
+	if !foundExtern {
+		t.Fatalf("preview stops = %v, want channel 6 handle %d for extern", stops, 1024+6)
 	}
 }
 
@@ -97,21 +118,36 @@ func TestRunOneDarkChannelBehindAnNVRLeavesTheOthers(t *testing.T) {
 	}
 }
 
-// With sharing turned off every stream dials its own connection again.
+// With sharing turned off every stream dials its own connection again, but a
+// recorder's second lens still uses externStream on the configured channel.
 func TestRunRecorderSharingOff(t *testing.T) {
 	SetRecorderSharing(0)
 	defer SetRecorderSharing(baichuan.DefaultMaxPreviews)
 	nvr := fakenvr.New(t, h265Fixture(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	for _, st := range []string{"main", "sub"} {
+	for _, st := range []string{"main", "sub", "zoom"} {
 		h := hub.New(64)
 		ch, cancelSub := h.Subscribe()
 		defer cancelSub()
-		go Run(ctx, Config{Name: "unshared", Address: nvr.Addr(), Channel: 1, Stream: st}, h)
+		go Run(ctx, Config{Name: "unshared", Address: nvr.Addr(), Channel: 6, Stream: st}, h)
 		waitForChunk(t, st, ch)
 	}
-	if n := nvr.Accepts(); n != 2 {
-		t.Fatalf("recorder accepted %d connections, want 2", n)
+	if n := nvr.Accepts(); n != 3 {
+		t.Fatalf("recorder accepted %d connections, want 3", n)
+	}
+	want := map[fakenvr.Preview]bool{
+		{Channel: 6, Handle: 1, Stream: baichuan.StreamMain}:          true,
+		{Channel: 6, Handle: 1, Stream: baichuan.StreamSub}:           true,
+		{Channel: 6, Handle: 1024 + 6, Stream: baichuan.StreamExtern}: true,
+	}
+	got := nvr.Starts()
+	if len(got) != len(want) {
+		t.Fatalf("previews asked for = %v, want %v", got, want)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Fatalf("previews asked for = %v, want %v", got, want)
+		}
 	}
 }
