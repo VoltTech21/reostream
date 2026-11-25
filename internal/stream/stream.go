@@ -217,13 +217,17 @@ func Run(ctx context.Context, cfg Config, h *hub.Hub) (err error) {
 	if p := currentPool(); p != nil {
 		channel, want := cfg.Channel, kind
 		if zoom {
-			// A recorder offers no lens of its own to unlock: the zoom
-			// is asked for as the channel it has always been asked for,
-			// without channel 0's sub stream, which on a recorder is
-			// another camera's picture.
-			channel = zoomChannel
+			// Behind a recorder the second lens is the camera's own
+			// channel's extern stream. That is what the Reolink app asks a
+			// Home Hub for (#27: a capture of the app opening a TrackMix's
+			// zoom view on hub channel 3 asked externStream on channel 3,
+			// and never channel 1). Channel 1, asked before, was another
+			// camera's picture on any other channel, and on channel 1 the
+			// wide lens again. The recorder has one stream for the lens,
+			// so zoom_sub reads that same one.
+			want = baichuan.StreamExtern
 			if cfg.Stream == "zoom_sub" {
-				want = baichuan.StreamSub
+				zoomSubOnce(cfg.Name)
 			}
 		}
 		sub, conn, err = p.Open(ctx, cfg.Address, opts, channel, want)
@@ -623,6 +627,16 @@ func droppedEarlyAudio(kind baichuan.FrameKind) bool {
 // sub stream is channel 1 sub on handle 257 (256 + channel, as for
 // channel 0).
 const zoomChannel = 1
+
+// zoomSubOnce says, once per camera, that behind a recorder zoom_sub is
+// the same picture as zoom.
+var zoomSubSaid sync.Map
+
+func zoomSubOnce(name string) {
+	if _, said := zoomSubSaid.LoadOrStore(name, true); !said {
+		log.Printf("stream: %s: behind a recorder the second lens has one stream, so zoom_sub is the same picture as zoom", name)
+	}
+}
 
 // isZoom reports whether stream is one of the zoom lens's two streams.
 func isZoom(stream string) bool {

@@ -166,6 +166,10 @@ func (s *Server) serveApplyPtz(w http.ResponseWriter, r *http.Request) {
 // Same fetch contract as serveApplyPtz.
 func (s *Server) serveApplyPreset(w http.ResponseWriter, r *http.Request) {
 	op := r.FormValue("op")
+	if op == "delete" {
+		s.deletePreset(w, r)
+		return
+	}
 	cmd := map[string]string{"goto": "toPos", "save": "setPos"}[op]
 	if cmd == "" {
 		http.Error(w, "unknown preset operation", http.StatusBadRequest)
@@ -195,6 +199,69 @@ func (s *Server) serveApplyPreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deletePreset clears a saved view (#54). The camera protocol has no delete
+// that any capture shows, so it goes over the camera's web API: SetPtzPreset
+// with enable 0 empties the slot. On the emulated TrackMix (11-24) that put
+// the slot back to its unused default ("pos4", enable 0) and the camera
+// protocol's own preset list, which the Live tab shows, dropped it too.
+// The slot is read back afterwards, so a camera that answers OK and keeps
+// the preset is not reported as done.
+func (s *Server) deletePreset(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.FormValue("id"))
+	if err != nil || id < 0 || id > 255 {
+		http.Error(w, "bad preset id", http.StatusBadRequest)
+		return
+	}
+	cam, ctx, cancel, ok := s.ptzCam(w, r)
+	if !ok {
+		return
+	}
+	defer cancel()
+	c, err := s.cgiDial(cam)
+	if err != nil {
+		http.Error(w, "deleting a saved view goes through the camera's web API (HTTP), which did not answer ("+err.Error()+"). Turn HTTP on under Settings > Network, or delete the view in the Reolink app.", http.StatusBadGateway)
+		return
+	}
+	defer c.Close()
+	if err := c.Set(ctx, "SetPtzPreset", map[string]any{"PtzPreset": map[string]any{
+		"channel": cam.Channel, "enable": 0, "id": id,
+	}}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if on, err := presetEnabledCGI(ctx, c, cam.Channel, id); err != nil {
+		http.Error(w, "the camera took the delete, but reading it back failed: "+err.Error(), http.StatusBadGateway)
+		return
+	} else if on {
+		http.Error(w, "the camera answered OK but still has the view saved", http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// presetEnabledCGI reports whether preset id is saved, by the web API.
+func presetEnabledCGI(ctx context.Context, c *cgi.Client, channel, id int) (bool, error) {
+	value, _, _, err := c.Get(ctx, "GetPtzPreset", channel)
+	if err != nil {
+		return false, err
+	}
+	var v struct {
+		PtzPreset []struct {
+			ID     int `json:"id"`
+			Enable int `json:"enable"`
+		} `json:"PtzPreset"`
+	}
+	if err := json.Unmarshal(value, &v); err != nil {
+		return false, fmt.Errorf("control: parsing GetPtzPreset: %w", err)
+	}
+	for _, p := range v.PtzPreset {
+		if p.ID == id {
+			return p.Enable == 1, nil
+		}
+	}
+	return false, nil
 }
 
 // notThroughRecorder is why auto return and calibrate are not offered for a

@@ -73,6 +73,18 @@
     ptz.querySelectorAll('.ptz-preset').forEach(function (b) {
       b.addEventListener('click', function () { post(base + '/preset', {op: 'goto', id: b.dataset.id}); });
     });
+    // Delete goes over the camera's web API (ptz.go deletePreset); the page
+    // reloads to show the list the camera now has.
+    ptz.querySelectorAll('.ptz-preset-del').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (!askFirst('Delete the saved view "' + b.dataset.name + '"?')) return;
+        enqueue(function () {
+          return fetch(base + '/preset', {method: 'POST', body: new URLSearchParams({op: 'delete', id: b.dataset.id})})
+            .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t); }); location.reload(); })
+            .catch(function (e) { note.textContent = 'Not deleted: ' + e.message; });
+        });
+      });
+    });
     var save = ptz.querySelector('.ptz-save');
     if (save) {
       save.addEventListener('submit', function (e) {

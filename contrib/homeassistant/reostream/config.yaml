@@ -2,7 +2,7 @@
 name: reostream
 # The image this add-on is built from is the reostream release of the same
 # version; see Dockerfile. Bump them together.
-version: "0.2.9"
+version: "0.2.11"
 slug: reostream
 description: Reolink cameras, battery ones included, as RTSP and HTTP streams for Frigate and Home Assistant
 url: https://github.com/VoltTech21/reostream
@@ -28,3 +28,11 @@ ingress_port: 8562
 panel_icon: mdi:cctv
 panel_title: Cameras
 watchdog: tcp://[HOST]:8562
+# Clips the cameras upload, kept under /data/clips/<camera>/ unless the page
+# says elsewhere, would otherwise go into every Home Assistant backup and make
+# it gigabytes. The config, passwords included, and the battery cameras' last
+# pictures are still backed up. The patterns match the end of a path, so they
+# hold whatever the Supervisor matches them against.
+backup_exclude:
+  - "clips/*"
+  - "clips/*/*"

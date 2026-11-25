@@ -50,10 +50,17 @@ address.
 
 reostream relays the cameras' own detections over MQTT, and can announce each camera to
 Home Assistant as a device with its sensors. Under **Settings > Events** on reostream's
-page, set the MQTT broker Home Assistant uses -- with the Mosquitto broker add-on, the Home
-Assistant host's address and port 1883, and a Home Assistant user for the login -- and tick
+page, set the MQTT broker Home Assistant uses -- with the Mosquitto broker add-on,
+`127.0.0.1:1883` (the add-on shares the host's network, so this keeps working if the
+host's address changes) and a Home Assistant user for the login -- and tick
 **Add the cameras to Home Assistant**. A wired camera gets Motion, Person, Vehicle and
 Animal sensors; a battery camera gets Motion and its Battery level.
+
+## Talking through a camera
+
+The talk button on a camera's page needs the microphone, and browsers only give a page
+the microphone over HTTPS. Open Home Assistant over HTTPS (Nabu Casa, or your own
+certificate) to use it; over plain `http://` the button says the browser will not allow it.
 
 ## Ports
 
@@ -74,7 +81,8 @@ networks you do not trust, firewall 8560 and 8561 there.
 
 Everything reostream keeps, its `config.toml` included, is in the add-on's `/data`
 directory, which survives updates and is part of Home Assistant backups. That file holds
-your cameras' passwords, so encrypt backups you store elsewhere.
+your cameras' passwords, so encrypt backups you store elsewhere. Clips the cameras upload
+(in `/data/clips`) are left out of backups, since they would make every backup huge.
 
 ## More
 

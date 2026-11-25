@@ -81,7 +81,7 @@
 <input type="range" id="ptz-speed" min="{{.PTZ.SpeedMin}}" max="{{.PTZ.SpeedMax}}" value="{{.PTZ.Speed}}">
 <output for="ptz-speed" class="mono">{{.PTZ.Speed}}</output></label>
 <div class="ptz-presets">
-{{range .PTZ.Presets}}<button type="button" class="ptz-preset" data-id="{{.ID}}"><span>{{.Name}}</span><span class="mono">#{{.ID}}</span></button>{{end}}
+{{range .PTZ.Presets}}<div class="ptz-preset-row"><button type="button" class="ptz-preset" data-id="{{.ID}}"><span>{{.Name}}</span><span class="mono">#{{.ID}}</span></button><button type="button" class="ptz-preset-del" data-id="{{.ID}}" data-name="{{.Name}}" aria-label="Delete {{.Name}}" title="Delete {{.Name}}">&#215;</button></div>{{end}}
 {{if .PTZ.PresetErr}}<p class="hint">Presets: {{.PTZ.PresetErr}}</p>{{end}}
 {{if .PTZ.Unread}}<p class="hint">Presets are not read when this page opens, so the camera can sleep. <a href="?presets=1">Show presets</a> (wakes it).</p>
 {{else}}<form class="ptz-save" data-id="{{.PTZ.NextPresetID}}">
@@ -747,7 +747,7 @@ window.addEventListener("load", function () {
 <section class="zone">
 <div class="sec-head"><h2>Detection zone</h2><span class="sec-where">on camera</span></div>
 <p class="hint">Paint out the places to ignore, like a road or a tree that moves in the wind.{{if $z.HasAI}} Applies to motion, people, vehicles and animals.{{end}}</p>
-<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/zone">
+<form class="control" method="post" action="{{base}}/cameras/{{$.Camera.Name}}/zone" data-keep>
 <input type="hidden" name="return" value="/cameras/{{$.Camera.Name}}/settings/{{$.Cat}}">
 <input type="hidden" name="mask" value="{{$z.Mask}}">
 <div class="zone-wrap" data-w="{{$z.W}}" data-h="{{$z.H}}" style="aspect-ratio: {{$z.W}} / {{$z.H}}">
@@ -755,7 +755,7 @@ window.addEventListener("load", function () {
 <canvas class="zone-canvas" aria-label="Detection zone, {{$z.W}} by {{$z.H}} cells"></canvas>
 </div>
 <div class="zone-actions">
-<div class="segmented zone-tool" role="radiogroup" aria-label="Brush">
+<div class="segmented zone-tool" role="radiogroup" aria-label="Brush" data-tool>
 <label><input type="radio" name="zone-tool" value="0" checked><span>Ignore</span></label>
 <label><input type="radio" name="zone-tool" value="1"><span>Detect</span></label>
 </div>

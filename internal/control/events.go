@@ -515,6 +515,10 @@ func (s *Server) saveEventsPage(w http.ResponseWriter, r *http.Request) {
 		FrigateMotion: r.FormValue("frigate_motion") == "1",
 		HADiscovery:   r.FormValue("ha_discovery") == "1",
 	}
+	if r.FormValue("update_check") != "1" {
+		off := false
+		ev.UpdateCheck = &off
+	}
 	if ev.MQTTPassword == "" {
 		if cfg, err := config.LoadRaw(s.opts.ConfigPath); err == nil && cfg.Events != nil {
 			ev.MQTTPassword = cfg.Events.MQTTPassword // the box is blank, not cleared
@@ -535,6 +539,9 @@ func (s *Server) saveEventsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if ev.HADiscovery {
 		b.WriteString("ha_discovery = true\n")
+	}
+	if !ev.ChecksForUpdates() {
+		b.WriteString("update_check = false\n")
 	}
 	text, err := loadRawConfig(s.opts.ConfigPath)
 	if err == nil {

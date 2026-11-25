@@ -66,7 +66,10 @@
       if (refused && undo) undo();
       var text = flash ? flash.querySelector('.flash-text').textContent.trim() : 'Saved';
       say(refused || unconfirmed || form.hasAttribute('data-report') ? text : 'Saved', refused || unconfirmed);
-      if (!refused) refresh(form, doc);
+      // data-keep: the form already shows what was saved and holds a
+      // player and a painter this file did not wire, which a swapped-in
+      // copy would lose (the zone editor, #47).
+      if (!refused && !form.hasAttribute('data-keep')) refresh(form, doc);
       governs();
     }).catch(function (err) {
       if (undo) undo();
@@ -96,12 +99,16 @@
   // was saved, so its changed-from-factory dot and reset button say what
   // is true after the save, not before it. The reply to a save is the
   // settings page read fresh from the camera; the same form is found in it
-  // by its action and its position among forms sharing that action.
+  // by its action and its position among forms sharing that action. A
+  // flash's undo form posts to the same action and comes first in the
+  // reply, so it is never counted: counted, it took the saved control's
+  // place, and the floodlight's four stops turned into a lone undo (#56).
   function refresh(form, doc) {
     var action = form.getAttribute('action');
     if (!action) return;
-    var mine = Array.prototype.indexOf.call(document.querySelectorAll('form[action="' + action + '"]'), form);
-    var fresh = doc.querySelectorAll('form[action="' + action + '"]')[mine];
+    var sel = 'form[action="' + action + '"]:not(.flash-undo)';
+    var mine = Array.prototype.indexOf.call(document.querySelectorAll(sel), form);
+    var fresh = doc.querySelectorAll(sel)[mine];
     if (mine < 0 || !fresh) return;
     var node = document.importNode(fresh, true);
     form.replaceWith(node);
@@ -131,7 +138,11 @@
     });
 
     // Stops (an overlay's corner, the floodlight): choosing one saves it.
-    root.querySelectorAll('.segmented').forEach(function (group) {
+    // A data-tool group only picks how the page behaves (the zone editor's
+    // brush) and saves nothing: wired like a setting, picking Detect to
+    // clear an ignored area saved the zone on the spot and swapped the
+    // editor out from under the pointer, playing nothing (#47).
+    root.querySelectorAll('.segmented:not([data-tool])').forEach(function (group) {
       var was = group.querySelector('input:checked');
       group.querySelectorAll('input[type=radio]').forEach(function (radio) {
         radio.addEventListener('change', function () {

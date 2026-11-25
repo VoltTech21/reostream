@@ -1471,6 +1471,10 @@ button.danger-btn:hover { background: color-mix(in oklab, var(--bad) 14%, transp
   background: none; border: none; color: var(--text); padding: 8px 10px; border-radius: 6px; font: 500 13px/1 var(--sans);
 }
 .ptz-preset:hover { background: var(--raise); filter: none; }
+.ptz-preset-row { display: flex; align-items: center; gap: 2px; }
+.ptz-preset-row .ptz-preset { flex: 1 1 auto; min-width: 0; }
+.ptz-preset-del { background: none; border: none; color: var(--faint); padding: 6px 9px; border-radius: 6px; font: 500 15px/1 var(--sans); }
+.ptz-preset-del:hover, .ptz-preset-del:focus-visible { color: var(--text); background: var(--raise); filter: none; }
 .ptz-preset .mono { color: var(--faint); font-size: 11px; }
 .ptz-save { display: flex; gap: 6px; margin-top: 6px; }
 .ptz-save input { flex: 1 1 auto; min-width: 0; }

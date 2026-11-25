@@ -9,8 +9,8 @@
 // real motion, so its own detection runs on the footage.
 //
 // The stream always has a sound track, AAC-LC at 16 kHz mono, which is
-// what these cameras record: a clip's own audio while it plays, silence
-// the rest of the time. See audioLocked.
+// what these cameras record: the camera's own sound while it is awake, a
+// clip's while one plays, silence the rest of the time. See audioLocked.
 package presence
 
 import (
@@ -38,6 +38,16 @@ var (
 	// so the RTSP output has a run of pictures (and the sound beside them)
 	// to describe the stream from straight away.
 	primeFrames = 32
+)
+
+const (
+	// liveLag is how far behind the picture the silence is written while
+	// the camera's own sound is coming in, so that sound, which arrives
+	// beside its picture rather than ahead of it, has slots to go in.
+	// liveAhead is how far ahead of the picture that sound may run before
+	// a frame is dropped to bring it back.
+	liveLag   = 4 * audioFrameMicros
+	liveAhead = 4 * audioFrameMicros
 )
 
 // The sound track. RTSP describes a stream once, and a reader holds it on
@@ -83,6 +93,10 @@ type Player struct {
 	audioOn bool
 	clip    *clipAudio
 	shown   time.Time
+	// heard is when the camera's own sound last came in; misheard is set
+	// once its format has been logged as one the track cannot carry.
+	heard    time.Time
+	misheard bool
 
 	clips chan string
 }
@@ -149,7 +163,7 @@ func (p *Player) Run(ctx context.Context) {
 			p.mu.Lock()
 			if p.audioOn {
 				ahead := min(time.Since(p.shown), idleEvery)
-				p.audioLocked(p.clock + uint32(ahead/time.Microsecond))
+				p.audioLocked(p.silenceUntilLocked(p.clock + uint32(ahead/time.Microsecond)))
 			}
 			p.mu.Unlock()
 		}
@@ -160,6 +174,10 @@ func (p *Player) Run(ctx context.Context) {
 // is watching it), on the stream's own clock. It is the sink the camera's
 // on-demand main stream writes to.
 func (p *Player) Frame(f baichuan.Frame) {
+	if f.Kind == baichuan.FrameAAC {
+		p.liveSound(f.Data)
+		return
+	}
 	if f.Kind != baichuan.FrameIFrame && f.Kind != baichuan.FramePFrame {
 		return
 	}
@@ -406,5 +424,68 @@ func (p *Player) emitLocked(kind baichuan.FrameKind, codec string, data []byte, 
 	p.shown = time.Now()
 	// The sound catches up with the picture: a still or a clip's first
 	// picture can be stamped ahead of where it had got to.
-	p.audioLocked(p.clock)
+	p.audioLocked(p.silenceUntilLocked(p.clock))
+}
+
+// liveSound puts a frame of the awake camera's own sound in the next slot
+// (#51: it used to be dropped, so a camera kept awake with always_on, a
+// powered doorbell, was silent to a recorder). The camera sends it in step
+// with its pictures, so it goes in where the sound has got to, which the
+// silence keeps within liveLag behind the picture. Sound running further
+// than liveAhead in front loses a frame. One piece of the camera's sound
+// may hold several frames, each a slot of its own. A format the track is
+// not described as is dropped and logged once.
+func (p *Player) liveSound(data []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.playing || !p.audioOn {
+		return // a clip has the stream, or it has no picture yet
+	}
+	frames := splitADTS(data)
+	if frames == nil {
+		if !p.misheard {
+			p.misheard = true
+			log.Printf("presence: %s: the camera's live sound is not 16 kHz mono AAC-LC, the stream's track; it plays silent", p.camera)
+		}
+		return
+	}
+	p.heard = time.Now()
+	for _, f := range frames {
+		if int32(p.audioAt-p.clock) > int32(liveAhead) {
+			return
+		}
+		p.sink.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Data: f, Micros: p.audioAt})
+		p.audioAt += audioFrameMicros
+	}
+}
+
+// silenceUntilLocked is how far silence may fill the sound towards until:
+// all the way, unless the camera's own sound is coming in, which needs the
+// slots beside the latest picture left for it.
+func (p *Player) silenceUntilLocked(until uint32) uint32 {
+	if !p.playing && time.Since(p.heard) < liveGrace {
+		return until - liveLag
+	}
+	return until
+}
+
+// splitADTS splits data into its ADTS frames, each one frame of AAC-LC,
+// 16 kHz, mono: what the stream's sound track is described as. It is nil
+// if any is not that, or data is not ADTS throughout.
+func splitADTS(data []byte) [][]byte {
+	var out [][]byte
+	for len(data) > 0 {
+		if len(data) < 7 || data[0] != 0xff || data[1]&0xf6 != 0xf0 {
+			return nil
+		}
+		profile, freq := data[2]>>6, data[2]>>2&0xf
+		channels := data[2]&1<<2 | data[3]>>6
+		n := int(data[3]&3)<<11 | int(data[4])<<3 | int(data[5])>>5
+		if profile != 1 || freq != 8 || channels != 1 || data[6]&3 != 0 || n < 7 || n > len(data) {
+			return nil
+		}
+		out = append(out, data[:n:n])
+		data = data[n:]
+	}
+	return out
 }

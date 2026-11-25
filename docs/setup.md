@@ -242,8 +242,10 @@ streams = ["main", "sub"]
 ```
 
 Channels are added by hand in the config for now; the Setup page does not ask for one.
-Every stream works through the recorder (main, sub, extern, and a TrackMix's zoom), and so
-does the camera's settings page: each setting is read and written on that camera's channel.
+Every stream works through the recorder (main, sub, extern, and a TrackMix's zoom). Behind a
+recorder the second lens has a single stream, so `zoom_sub` is the same picture as `zoom`
+there. The camera's settings page works too: each setting is read and written on that
+camera's channel.
 The pages that set the whole device (date and time, network ports) are refused for a
 channel camera, because behind a recorder they would change the recorder itself. Tested on
 an RLN8-410 with a TrackMix PoE.
@@ -501,6 +503,13 @@ reostream's MQTT connection is up (`<prefix>/status`, online or offline, with a 
 Removing a camera, or turning discovery off, removes its entities, as long as the broker
 is still set.
 
+reostream also appears as a device of its own with an update entity, so a new release shows
+under Settings > Updates in Home Assistant with the start of its notes and a link. It reports
+versions only; update reostream the way you installed it. To know the latest version it reads
+GitHub's latest release four times a day, the only call reostream makes to the internet.
+`update_check = false` under `[events]` (or unticking **Show new reostream versions in Home
+Assistant**) stops that; the entity then shows only the installed version.
+
 ## Battery cameras
 
 A battery camera (Argus and similar) keeps its TCP ports closed and is reached over UDP by
@@ -530,8 +539,9 @@ password = "$BACKYARD_PW"
 
 `rtsp://host:8561/<camera>` is a battery camera's presence stream: its last picture once a
 second, each motion clip played in as it arrives, and live video while someone watches it
-on the control page or while the camera sees motion. It never wakes the camera, so a recorder can hold it open around the
-clock. Point Frigate at it with detection off, and add `-fpsprobesize 0` to the input:
+on the control page or while the camera sees motion. Its sound is the camera's own while
+it is awake, a clip's while one plays, and silence otherwise. It never wakes the camera, so a
+recorder can hold it open around the clock. Point Frigate at it with detection off, and add `-fpsprobesize 0` to the input:
 at one frame a second, ffmpeg otherwise spends 20 seconds measuring the frame rate before
 it outputs anything, Frigate gives up at 20 seconds, and the camera never records.
 

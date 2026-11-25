@@ -12,6 +12,7 @@
 <label class="field"><span class="label">Topic prefix</span><input type="text" name="prefix" value="{{.Events.Prefix}}" placeholder="reostream"></label>
 </div>
 <label class="every"><input type="checkbox" name="ha_discovery" value="1"{{if .Events.HADiscovery}} checked{{end}}> Add the cameras to Home Assistant{{template "info" "MQTT discovery: each camera becomes a Home Assistant device with its motion, person, vehicle and animal sensors, or a battery camera's motion and battery level. Needs the MQTT broker above to be the one Home Assistant uses."}}</label>
+<label class="every"><input type="checkbox" name="update_check" value="1"{{if .Events.ChecksForUpdates}} checked{{end}}> Show new reostream versions in Home Assistant{{template "info" "reostream appears in Home Assistant with an update entity, so a new release shows under Settings > Updates with its notes. It reads the latest release from GitHub four times a day, the only call reostream makes to the internet. Untick to stop it."}}</label>
 <label class="field"><span class="label">Frigate{{template "info" "An object the camera sees becomes a Frigate event, with its recording, on the camera of the same name."}}</span><input type="text" name="frigate" value="{{.Events.Frigate}}" placeholder="http://192.168.1.10:5000"></label>
 <label class="every"><input type="checkbox" name="frigate_motion" value="1"{{if .Events.FrigateMotion}} checked{{end}}> Also send plain motion to Frigate</label>
 <div class="buttonrow"><button type="submit">Save</button></div>

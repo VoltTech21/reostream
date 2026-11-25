@@ -354,3 +354,131 @@ func TestAClipStartsWhereTheSoundHasGotTo(t *testing.T) {
 		t.Fatalf("%d of the clip's %d sound frames played", n, c.AudioFrames)
 	}
 }
+
+// adts frames a payload as one AAC-LC frame at the given sampling
+// frequency index (8 is 16 kHz) and channel count.
+func adts(freq, channels byte, payload []byte) []byte {
+	n := 7 + len(payload)
+	h := []byte{0xff, 0xf1, 1<<6 | freq<<2 | channels>>2, (channels&3)<<6 | byte(n>>11), byte(n >> 3), byte(n&7)<<5 | 0x1f, 0xfc}
+	return append(h, payload...)
+}
+
+// feedLive sends what an awake camera's main stream sends for secs
+// seconds: pictures every 40 ms and, if sound is set, a sound frame every
+// 64 ms, in the camera's time order.
+func feedLive(p *Player, secs int, sound func(i int) []byte) (sent [][]byte) {
+	const start = 5_000_000
+	v, a := 0, 0
+	for {
+		vt, at := start+v*40_000, start+a*audioFrameMicros
+		if vt > start+secs*1_000_000 {
+			return sent
+		}
+		if sound == nil || vt <= at {
+			kind := baichuan.FramePFrame
+			if v%25 == 0 {
+				kind = baichuan.FrameIFrame
+			}
+			p.Frame(baichuan.Frame{Kind: kind, Codec: "H265", Data: []byte{0, 0, 0, 1, 2, 1}, Micros: uint32(vt)})
+			v++
+			continue
+		}
+		if data := sound(a); data != nil {
+			p.Frame(baichuan.Frame{Kind: baichuan.FrameAAC, Data: data})
+			sent = append(sent, data)
+		}
+		a++
+	}
+}
+
+// An awake camera's own sound plays in the stream, back to back with the
+// silence before it and beside its pictures, rather than silence (#51: a
+// powered doorbell kept awake with always_on was silent over RTSP).
+func TestLiveSoundPlays(t *testing.T) {
+	s := &sink{}
+	p := New("doorbell", s)
+	p.Seed("../mp4read/testdata/h265.mp4")
+	sent := feedLive(p, 2, func(i int) []byte { return adts(8, 1, []byte{0x21, byte(i), byte(i >> 8)}) })
+
+	fs := s.snapshot()
+	increasing(t, fs)
+	as := audio(fs)
+	for i := 1; i < len(as); i++ {
+		if d := as[i].Micros - as[i-1].Micros; d != audioFrameMicros {
+			t.Fatalf("sound frame %d is %d after the one before; want back to back", i, d)
+		}
+	}
+	var live []baichuan.Frame
+	for _, f := range as {
+		if !bytes.Equal(f.Data, silence) {
+			live = append(live, f)
+		}
+	}
+	if len(live) != len(sent) {
+		t.Fatalf("%d of the camera's %d sound frames played", len(live), len(sent))
+	}
+	for i := range live {
+		if !bytes.Equal(live[i].Data, sent[i]) {
+			t.Fatalf("sound frame %d out of order", i)
+		}
+	}
+	// In step with the pictures: the last sound frame is within a couple
+	// of frames of the last picture, the camera having sent both together.
+	vs := video(fs)
+	gap := int64(int32(vs[len(vs)-1].Micros - live[len(live)-1].Micros))
+	if gap < -2*audioFrameMicros || gap > 2*audioFrameMicros {
+		t.Fatalf("the sound ends %d µs from the picture; want them together", gap)
+	}
+}
+
+// Live sound the track cannot carry as it is (it is described once, as 16
+// kHz mono AAC-LC) stays silence rather than going out mislabeled.
+func TestLiveSoundOfAnotherFormatIsNotPlayed(t *testing.T) {
+	for _, data := range [][]byte{
+		adts(3, 1, []byte{1, 2, 3}),                             // 48 kHz
+		adts(8, 2, []byte{1, 2, 3}),                             // stereo
+		{1, 2, 3, 4, 5, 6, 7, 8},                                // not ADTS
+		append(adts(8, 1, []byte{1}), adts(3, 1, []byte{2})...), // a 48 kHz one after a good one
+	} {
+		s := &sink{}
+		p := New("doorbell", s)
+		p.Seed("../mp4read/testdata/h265.mp4")
+		feedLive(p, 1, func(int) []byte { return data })
+		for _, f := range audio(s.snapshot()) {
+			if !bytes.Equal(f.Data, silence) {
+				t.Fatalf("% x went out on the 16 kHz mono track", data[:4])
+			}
+		}
+	}
+}
+
+// A piece of the camera's sound holding two frames plays as two, a slot
+// each, rather than both in one slot.
+func TestLiveSoundTwoFramesAPiece(t *testing.T) {
+	s := &sink{}
+	p := New("doorbell", s)
+	p.Seed("../mp4read/testdata/h265.mp4")
+	var sent [][]byte
+	feedLive(p, 2, func(i int) []byte {
+		if i%2 == 1 {
+			return nil
+		}
+		a, b := adts(8, 1, []byte{0x21, byte(i)}), adts(8, 1, []byte{0x21, byte(i + 1)})
+		sent = append(sent, a, b)
+		return append(a, b...)
+	})
+	var live []baichuan.Frame
+	for _, f := range audio(s.snapshot()) {
+		if !bytes.Equal(f.Data, silence) {
+			live = append(live, f)
+		}
+	}
+	if len(live) != len(sent) {
+		t.Fatalf("%d sound frames played, want the %d sent", len(live), len(sent))
+	}
+	for i := range live {
+		if !bytes.Equal(live[i].Data, sent[i]) || (i > 0 && live[i].Micros-live[i-1].Micros != audioFrameMicros) {
+			t.Fatalf("sound frame %d out of order or not back to back", i)
+		}
+	}
+}

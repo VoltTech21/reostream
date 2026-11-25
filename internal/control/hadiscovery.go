@@ -149,7 +149,10 @@ func haDiscoveryMessages(prefix, version string, cams []config.Camera) []discove
 			out = append(out, haEntityMessage(prefix, version, c.Name, e))
 		}
 	}
-	return out
+	// reostream itself, with its update entity (haupdate.go). Here, with
+	// the cameras', so it is announced, re-announced when Home Assistant
+	// restarts, and retracted when discovery is turned off, all with them.
+	return append(out, haUpdateConfig(prefix, version))
 }
 
 // haInitialStates is OFF for every binary sensor haDiscoveryMessages
@@ -361,6 +364,7 @@ func (s *Server) startDiscovery(ctx context.Context, mq *mqtt.Client, ev config.
 		}
 	})
 	go s.learnControls(ctx, mq, prefix, version, cams)
+	go publishUpdate(ctx, mq, prefix, version, ev.ChecksForUpdates())
 	var battery []config.Camera
 	for _, c := range cams {
 		if c.UID != "" && c.Address != "" {

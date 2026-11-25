@@ -20,8 +20,8 @@ func waitForChunk(t *testing.T, name string, ch <-chan []byte) {
 }
 
 // A TrackMix on an NVR's channel 1, with all four of its streams, as
-// cam-19 runs: one connection, and two previews, since behind a recorder
-// the zoom streams are channel 1's own main and sub.
+// cam-19 runs: one connection, and three previews, since behind a recorder
+// both zoom streams are the channel's own extern stream (#27).
 func TestRunAllOfACamerasStreamsBehindAnNVROnOneConnection(t *testing.T) {
 	nvr := fakenvr.New(t, h265Fixture(t))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -38,17 +38,38 @@ func TestRunAllOfACamerasStreamsBehindAnNVROnOneConnection(t *testing.T) {
 		t.Fatalf("recorder accepted %d connections for four streams, want 1", n)
 	}
 	want := map[fakenvr.Preview]bool{
-		{Channel: 1, Stream: baichuan.StreamMain}: true,
-		{Channel: 1, Stream: baichuan.StreamSub}:  true,
+		{Channel: 1, Stream: baichuan.StreamMain}:   true,
+		{Channel: 1, Stream: baichuan.StreamSub}:    true,
+		{Channel: 1, Stream: baichuan.StreamExtern}: true,
 	}
 	got := nvr.Starts()
 	if len(got) != len(want) {
-		t.Fatalf("previews asked for = %v, want channel 1 main and sub once each", got)
+		t.Fatalf("previews asked for = %v, want channel 1 main, sub and extern once each", got)
 	}
 	for _, p := range got {
 		if !want[p] {
-			t.Fatalf("previews asked for = %v, want channel 1 main and sub once each", got)
+			t.Fatalf("previews asked for = %v, want channel 1 main, sub and extern once each", got)
 		}
+	}
+}
+
+// A TrackMix on a Home Hub's channel 3, as in #27: the zoom is channel 3's
+// extern stream, as the Reolink app asks for it, and nothing is asked of
+// channel 1, which is another camera there.
+func TestRunZoomBehindARecorderIsTheChannelsOwnExtern(t *testing.T) {
+	nvr := fakenvr.New(t, h265Fixture(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, st := range []string{"zoom", "zoom_sub"} {
+		h := hub.New(64)
+		ch, cancelSub := h.Subscribe()
+		defer cancelSub()
+		go Run(ctx, Config{Name: "hub-trackmix", Address: nvr.Addr(), Channel: 3, Stream: st}, h)
+		waitForChunk(t, st, ch)
+	}
+	got := nvr.Starts()
+	if len(got) != 1 || got[0] != (fakenvr.Preview{Channel: 3, Stream: baichuan.StreamExtern}) {
+		t.Fatalf("previews asked for = %v, want only channel 3's extern", got)
 	}
 }
 

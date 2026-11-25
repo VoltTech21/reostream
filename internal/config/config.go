@@ -184,7 +184,15 @@ type EventsConfig struct {
 	// discovery, so it appears there as a device with its sensors. It
 	// needs MQTT set.
 	HADiscovery bool `toml:"ha_discovery"`
+	// UpdateCheck, on when left out, has discovery also announce reostream
+	// itself with an update entity fed from GitHub's latest release (#39).
+	// The release read is the only call reostream makes to the internet;
+	// false keeps it from making it.
+	UpdateCheck *bool `toml:"update_check"`
 }
+
+// ChecksForUpdates reports update_check: on unless set false.
+func (e EventsConfig) ChecksForUpdates() bool { return e.UpdateCheck == nil || *e.UpdateCheck }
 
 // FTPConfig is the clip receiver: cameras upload each recording here over
 // FTP, logging in with their own camera name and this password. Absent, no

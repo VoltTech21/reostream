@@ -22,6 +22,9 @@ func discoveryByTopic(t *testing.T, msgs []discoveryMessage) map[string]map[stri
 	t.Helper()
 	out := map[string]map[string]any{}
 	for _, m := range msgs {
+		if strings.HasPrefix(m.Topic, haDiscoveryPrefix+"/update/") {
+			continue // reostream's own update entity, not the camera's; see haupdate_test.go
+		}
 		var doc map[string]any
 		if err := json.Unmarshal(m.Payload, &doc); err != nil {
 			t.Fatalf("%s: payload is not JSON: %v", m.Topic, err)
@@ -104,10 +107,10 @@ func TestDiscoveryForABatteryCamera(t *testing.T) {
 // A camera behind an NVR has no alert connection, so it has nothing to
 // announce unless something else reports its motion.
 func TestDiscoveryForARecorderChannel(t *testing.T) {
-	if msgs := haDiscoveryMessages("reostream", "", []config.Camera{
+	if docs := discoveryByTopic(t, haDiscoveryMessages("reostream", "", []config.Camera{
 		{Name: "ch2", Address: "192.0.2.30", Channel: 2, Streams: []string{"main"}},
-	}); len(msgs) != 0 {
-		t.Fatalf("an NVR channel announced %d entities with nothing reporting them", len(msgs))
+	})); len(docs) != 0 {
+		t.Fatalf("an NVR channel announced %d entities with nothing reporting them", len(docs))
 	}
 	docs := discoveryByTopic(t, haDiscoveryMessages("reostream", "", []config.Camera{
 		{Name: "ch2", Address: "192.0.2.30", Channel: 2, Streams: []string{"main"}, MotionTopic: "frigate/ch2/motion"},
