@@ -16,7 +16,13 @@ window.reostreamPlayer = function (url, video) {
   // (The Live tab's own flood of those errors on a camera with a pan and
   // tilt pad was live.js never destroying the old player at all: see
   // stopMove there, 11-03.)
-  var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: url});
+  // Do not retain the default IO stash for a live view. It smooths bursty
+  // downloads, but on a low-latency camera feed it permanently keeps decoded
+  // playback behind the newest transport data.
+  var player = mpegts.createPlayer(
+    {type: 'mpegts', isLive: true, url: url},
+    {enableStashBuffer: false}
+  );
   if (video) {
     video.addEventListener('play', function () {
       try {
