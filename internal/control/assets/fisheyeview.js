@@ -33,7 +33,7 @@
       if (!window.mpegts || !mpegts.isSupported()) fail('This browser cannot play MPEG-TS.');
       return;
     }
-    player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: url });
+    player = reostreamPlayer(url);
     player.attachMediaElement(video);
     player.load();
     var p = video.play();

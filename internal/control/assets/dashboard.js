@@ -112,7 +112,7 @@
     // A battery camera with no picture yet has nothing to take a still
     // from, and its live stream would wake it.
     if (!t.src) return done();
-    var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: t.src});
+    var player = reostreamPlayer(t.src);
     var finished = false;
     snapping = {finish: finish};
 
@@ -164,7 +164,7 @@
     if (snapping) snapping.finish();
     stopLive();
     var url = t.live || t.extern || t.src;
-    var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: url});
+    var player = reostreamPlayer(url);
     player.attachMediaElement(t.video);
     player.load();
     // A battery camera's session ends when reostream puts it back to

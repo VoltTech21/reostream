@@ -44,7 +44,7 @@
       }
       return;
     }
-    player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: url });
+    player = reostreamPlayer(url);
     player.attachMediaElement(video);
     player.load();
     var p = video.play();
