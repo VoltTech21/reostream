@@ -229,7 +229,7 @@ func TestPositionWriteCarriesBothFieldsInOneWrite(t *testing.T) {
 		t.Fatalf("the camera received %d writes for one position change, want exactly 1", n)
 	}
 	key := baichuan.AESKey(testProbeNonce, "")
-	sent := decodedSetConfigBody(t, writeCam.Received(), pair.Set, key)
+	sent := sentSetConfigBody(t, writeCam, pair.Set, key)
 	if !strings.Contains(sent, "<topLeftX>65536</topLeftX>") {
 		t.Errorf("the document sent to the camera does not carry the new X: %s", sent)
 	}

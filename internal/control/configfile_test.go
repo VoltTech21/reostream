@@ -433,3 +433,23 @@ func TestSaveConfigWritesLFLineEndings(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, validTOML)
 	}
 }
+
+// A data directory that does not exist yet is created by the first save, so
+// it only warns when the folder it would be made in is not writable (#57).
+func TestDataDirWritableForAFolderNotMadeYet(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	if err := DataDirWritable(filepath.Join(t.TempDir(), "reostream-data", "x")); err != nil {
+		t.Fatalf("a folder that can be made = %v, want nil", err)
+	}
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(ro, 0o700)
+	err := DataDirWritable(filepath.Join(ro, "data"))
+	if err == nil || !strings.Contains(err.Error(), "-data") {
+		t.Fatalf("a folder that cannot be made = %v, want advice naming -data", err)
+	}
+}

@@ -76,7 +76,7 @@ const headerTimeout = 10 * time.Second
 
 func main() {
 	configFlag := flag.String("config", "", "path to the TOML config file (default: <data>/config.toml)")
-	dataDir := flag.String("data", "/data", "data directory; holds config.toml when -config is not set")
+	dataDir := flag.String("data", defaultDataDir(), "data directory; holds config.toml when -config is not set (default /data if it exists, else ./reostream-data)")
 	listenOverride := flag.String("listen", "", "HTTP listen address, overriding the config file's")
 	rtspListenOverride := flag.String("rtsp-listen", "", "RTSP listen address, overriding the config file's [rtsp].listen; turns RTSP on if the config has no [rtsp] section")
 	controlListenOverride := flag.String("control-listen", "", "address for the page, overriding the config file's [control].listen. Symmetric with -listen; mostly useful for moving the page off 8562 without editing the config")
@@ -192,6 +192,12 @@ func startup(configFlag, dataDir, listenOverride, rtspListenOverride, controlLis
 	// when the daemon shuts down, so the first-run logging loop below can
 	// use it instead of inventing its own lifecycle.
 	supCtx, cancelSup := context.WithCancel(context.Background())
+
+	// Every start, claimed or not: the claim itself works on a folder in
+	// memory, and is only lost at the host's next restart (#46).
+	if w := control.DataDirWarning(filepath.Dir(configPath)); w != "" {
+		log.Printf("reostream: WARNING: %s", w)
+	}
 
 	var cfg *config.Config
 	// firstRun defers the "not yet claimed" logging until after the control
@@ -621,6 +627,26 @@ func runShutdown(cancel context.CancelFunc, runDone <-chan error, srv httpShutdo
 // <data>/config.toml, so starting the container with just -data (or its
 // default, /data) set is enough to find or create a config without anyone
 // having to know the flag exists.
+// containerData is the data directory every image and package of
+// reostream passes or mounts. A var so a test can point it elsewhere.
+var containerData = "/data"
+
+// defaultDataDir is where config.toml lives when -data is not given. In the
+// image, and in any setup that made the folder, that is /data as it always
+// was. A plain binary on a desktop or server usually has no /data and no
+// right to make one, so the claim failed to save there (#57); it gets
+// reostream-data in the folder it was started from instead, absolute so the
+// first-run message says exactly where.
+func defaultDataDir() string {
+	if fi, err := os.Stat(containerData); err == nil && fi.IsDir() {
+		return containerData
+	}
+	if abs, err := filepath.Abs("reostream-data"); err == nil {
+		return abs
+	}
+	return "reostream-data"
+}
+
 func resolveConfigPath(dataDir, override string) string {
 	if override != "" {
 		return override

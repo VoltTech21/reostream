@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/VoltTech21/reostream/internal/baichuan"
@@ -144,6 +146,9 @@ type CameraReport struct {
 	// DeviceName is the camera's own name (what the Reolink app shows), so
 	// reostream can take it rather than inventing one.
 	DeviceName string
+	// OneConnection is set when the camera turned out to allow a single
+	// connection, so only its main stream is offered (#44).
+	OneConnection bool
 	// NotReolink is set when whatever answered on the port replied in
 	// something other than Reolink's protocol: a Google speaker or a
 	// dashcam can have port 9000 open too.
@@ -444,6 +449,7 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 	}
 
 	anyPresent := false
+	var streamErrs []error
 	for _, name := range []string{"main", "sub", "extern"} {
 		if name == "extern" && !sup.HasExternStream() {
 			// Support says outright that this model has no balanced
@@ -453,12 +459,23 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 			rep.Streams = append(rep.Streams, externAbsentReport())
 			continue
 		}
-		info, err := baichuan.GetStreamInfo(ctx, addr, opts, streamKinds[name])
+		info, err := streamInfo(ctx, addr, opts, streamKinds[name])
 		sr := streamReport(name, info, err)
 		if !sr.Undetermined {
 			anyPresent = true
 		}
+		streamErrs = append(streamErrs, err)
 		rep.Streams = append(rep.Streams, sr)
+	}
+	// Each stream above is read on a connection of its own, opened while
+	// this probe's login is still up. A D800 V2 on firmware 3.1 allows one
+	// connection at a time and resets every other one at negotiation, so
+	// all of them failed and the camera could not be added, though main
+	// alone works (#44). Close the login and read main by itself; if that
+	// works, offer main only, since running sub or extern beside it would
+	// be reset the same way.
+	if !anyPresent && allRefused(streamErrs) {
+		anyPresent = retryMainAlone(ctx, conn, addr, opts, &rep)
 	}
 	// A second lens (the TrackMix zoom): zoom and zoom_sub are offered,
 	// ticked, whenever the login reply says the camera has one. They used
@@ -486,6 +503,63 @@ func probeCamera(ctx context.Context, addr, user, pass string) CameraReport {
 		}
 	}
 	return rep
+}
+
+// retryMainAlone closes the probe's login and reads main by itself, for a
+// camera that reset every stream read while the login was up. When main
+// answers, it is offered and the camera's other streams are marked as not
+// usable beside it. It reports whether main answered.
+func retryMainAlone(ctx context.Context, login io.Closer, addr string, opts baichuan.Options, rep *CameraReport) bool {
+	login.Close()
+	for try := 0; try < 2; try++ {
+		if try > 0 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(time.Second):
+			}
+		}
+		info, err := streamInfo(ctx, addr, opts, streamKinds["main"])
+		if err != nil {
+			continue
+		}
+		for i, sr := range rep.Streams {
+			switch {
+			case sr.Name == "main":
+				rep.Streams[i] = streamReport("main", info, nil)
+			case !sr.Absent:
+				rep.Streams[i] = StreamReport{Name: sr.Name, Undetermined: true, Reason: oneConnectionReason}
+			}
+		}
+		rep.OneConnection = true
+		return true
+	}
+	return false
+}
+
+// streamInfo is baichuan.GetStreamInfo, a var so a test can play a camera
+// that allows one connection.
+var streamInfo = baichuan.GetStreamInfo
+
+const oneConnectionReason = "this camera allows one connection at a time and each stream needs its own, so only main is offered"
+
+// allRefused reports whether every stream read failed because the camera
+// closed or reset the connection, the way a camera that already has its one
+// connection answers another.
+func allRefused(errs []error) bool {
+	if len(errs) == 0 {
+		return false
+	}
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) &&
+			!strings.Contains(err.Error(), "connection reset by peer") {
+			return false
+		}
+	}
+	return true
 }
 
 // streamReport turns one GetStreamInfo call's outcome into a StreamReport.
@@ -589,6 +663,7 @@ type probeJSON struct {
 	Error           string            `json:"error,omitempty"`
 	Streams         []probeJSONStream `json:"streams"`
 	ServicesEnabled bool              `json:"services_enabled,omitempty"`
+	Note            string            `json:"note,omitempty"`
 }
 
 type probeJSONStream struct {
@@ -598,6 +673,9 @@ type probeJSONStream struct {
 
 func writeProbeJSON(w http.ResponseWriter, rep CameraReport) {
 	out := probeJSON{Streams: []probeJSONStream{}, ServicesEnabled: rep.ServicesEnabled}
+	if rep.OneConnection {
+		out.Note = "This camera allows one connection at a time, and each stream needs its own, so only main is offered."
+	}
 	var skipped []string
 	for _, st := range rep.Streams {
 		switch {

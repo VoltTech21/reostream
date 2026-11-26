@@ -148,7 +148,7 @@ func TestAutoReturnOverBaichuanFailsFastWhenTheCameraDoesNotAnswer(t *testing.T)
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("took %s", d)
 	}
-	if !strings.Contains(decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDPtzGuard, key), "<benable>1</benable>") {
+	if !strings.Contains(sentSetConfigBody(t, cam, baichuan.MsgIDPtzGuard, key), "<benable>1</benable>") {
 		t.Error("the Baichuan write did not go out with benable 1")
 	}
 }

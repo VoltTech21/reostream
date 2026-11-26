@@ -71,7 +71,7 @@ func TestFloodlightWithNoWebAPIGoesOverBaichuan(t *testing.T) {
 	if banner := takenFlash(t, s, resp); banner.Outcome != "confirmed" {
 		t.Fatalf("banner %+v, want confirmed", banner)
 	}
-	sent := decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDFloodlightSet, baichuan.AESKey(testProbeNonce, ""))
+	sent := sentSetConfigBody(t, cam, baichuan.MsgIDFloodlightSet, baichuan.AESKey(testProbeNonce, ""))
 	if sent != string(baichuan.FloodlightManualXML(0, true)) {
 		t.Fatalf("camera received:\n%s", sent)
 	}
@@ -176,7 +176,7 @@ func TestMQTTLightCommandGoesOverBaichuan(t *testing.T) {
 	if cgiUsed {
 		t.Error("the MQTT light went through the web API")
 	}
-	sent := decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDFloodlightSet, baichuan.AESKey(testProbeNonce, ""))
+	sent := sentSetConfigBody(t, cam, baichuan.MsgIDFloodlightSet, baichuan.AESKey(testProbeNonce, ""))
 	if !strings.Contains(sent, "<status>1</status>") {
 		t.Fatalf("camera received:\n%s", sent)
 	}
@@ -202,7 +202,7 @@ func TestSirenButtonSoundsTheSirenOnce(t *testing.T) {
 	if !got.OK {
 		t.Fatalf("status %d, not ok", resp.StatusCode)
 	}
-	if sent := decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDPlayStopAudio, key); sent != string(baichuan.SirenXML(0)) {
+	if sent := sentSetConfigBody(t, cam, baichuan.MsgIDPlayStopAudio, key); sent != string(baichuan.SirenXML(0)) {
 		t.Fatalf("camera received:\n%s", sent)
 	}
 }

@@ -44,7 +44,7 @@
       }
       return;
     }
-    player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: url });
+    player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: url }, {enableStashBuffer: false}); // live, as reostreamLive in snapshot.js, which this page does not load
     player.attachMediaElement(video);
     player.load();
     var p = video.play();

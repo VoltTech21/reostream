@@ -274,6 +274,31 @@ func buildApplySettingFixtures(t *testing.T, pair baichuan.ConfigPair, before, a
 // wire rather than trusting that a 200 or a "confirmed" outcome implies it.
 func decodedSetConfigBody(t *testing.T, received []byte, id uint32, key []byte) string {
 	t.Helper()
+	found := findSetConfig(received, id, key)
+	if found == nil {
+		t.Fatalf("no two-section SetConfig message %d reached the camera", id)
+	}
+	return string(found)
+}
+
+// sentSetConfigBody is decodedSetConfigBody on what cam has received,
+// waiting for it: fakecam records on its own goroutine, so the reply can
+// reach the page before the request is in the recording, which a long
+// -race run showed for the floodlight and the siren.
+func sentSetConfigBody(t *testing.T, cam *fakecam.Camera, id uint32, key []byte) string {
+	t.Helper()
+	for end := time.Now().Add(2 * time.Second); ; {
+		if found := findSetConfig(cam.Received(), id, key); found != nil {
+			return string(found)
+		}
+		if time.Now().After(end) {
+			t.Fatalf("no two-section SetConfig message %d reached the camera", id)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func findSetConfig(received []byte, id uint32, key []byte) []byte {
 	var found []byte
 	off := 0
 	for off+20 <= len(received) {
@@ -293,10 +318,7 @@ func decodedSetConfigBody(t *testing.T, received []byte, id uint32, key []byte) 
 		}
 		off = end
 	}
-	if found == nil {
-		t.Fatalf("no two-section SetConfig message %d reached the camera", id)
-	}
-	return string(found)
+	return found
 }
 
 // TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera is the
@@ -345,7 +367,7 @@ func TestServeApplySettingWritesThroughWriteBlockAndReachesTheCamera(t *testing.
 	// claims. writeBlock sends the Set request on its own connection
 	// (calls == 2 above), so it is writeCam that received it.
 	key := baichuan.AESKey(testProbeNonce, "")
-	sent := decodedSetConfigBody(t, writeCam.Received(), pair.Set, key)
+	sent := sentSetConfigBody(t, writeCam, pair.Set, key)
 	if !strings.Contains(sent, "<name>lounge</name>") {
 		t.Fatalf("the document actually sent to the camera does not carry the edit: %s", sent)
 	}

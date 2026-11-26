@@ -54,7 +54,7 @@ func TestPtzPadSendsZoomDiagonalsAndPatrol(t *testing.T) {
 		for end := time.Now().Add(2 * time.Second); cam.Closes() == 0 && time.Now().Before(end); {
 			time.Sleep(5 * time.Millisecond)
 		}
-		body := decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDPtzControl, key)
+		body := sentSetConfigBody(t, cam, baichuan.MsgIDPtzControl, key)
 		for _, w := range tc.want {
 			if !strings.Contains(body, w) {
 				t.Errorf("%v: sent %q, missing %s", tc.form, body, w)

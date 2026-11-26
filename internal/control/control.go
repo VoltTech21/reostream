@@ -19,6 +19,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -171,7 +172,10 @@ type Options struct {
 
 type Server struct {
 	opts Options
-	rend *webui.Renderer
+
+	// dataWarning is DataDirWarning for the config's folder, read once.
+	dataWarning string
+	rend        *webui.Renderer
 
 	// batteries is the last battery level each battery camera reported.
 	batteries batteryCache
@@ -381,6 +385,12 @@ func New(opts Options) (*Server, error) {
 	srv := &Server{
 		opts: opts,
 		rend: rend,
+		dataWarning: func() string {
+			if opts.ConfigPath == "" {
+				return ""
+			}
+			return DataDirWarning(filepath.Dir(opts.ConfigPath))
+		}(),
 		tmpl: tmpl,
 		auth: webui.Auth{
 			Store:           sessions,

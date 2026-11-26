@@ -248,6 +248,12 @@ function renderProbe(found) {
     ok.textContent = 'Turned on RTSP, ONVIF and the web page on this camera, so your recorder (and any second lens) can reach it.';
     result.appendChild(ok);
   }
+  if (found.note) {
+    var note = document.createElement('p');
+    note.className = 'hint';
+    note.textContent = found.note;
+    result.appendChild(note);
+  }
   streams.innerHTML = '<div class="discovered"></div>';
   var list = streams.firstChild;
   found.streams.forEach(function (s) {

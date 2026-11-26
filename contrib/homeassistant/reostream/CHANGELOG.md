@@ -3,6 +3,13 @@
 Each version of the add-on is the reostream release of the same version. The full notes
 for every release are at <https://github.com/VoltTech21/reostream/releases>.
 
+## 0.2.12
+
+Live view in the page plays closer to live. A camera that allows only one connection can be
+added from the page with its main stream.
+
+Notes: <https://github.com/VoltTech21/reostream/releases/tag/v0.2.12>
+
 ## 0.2.11
 
 reostream shows under Settings > Updates when a new release is out (with the cameras added

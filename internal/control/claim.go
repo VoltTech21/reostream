@@ -415,6 +415,10 @@ type claimPage struct {
 	// suggestion to fail.
 	Suggested string
 
+	// Warning is shown above everything else: a data directory in memory
+	// loses the claim at the next restart however the form goes (#46).
+	Warning string
+
 	// MinLength is claimPasswordMinLength, passed through so the form's
 	// own minlength attribute cannot drift from the rule the server
 	// actually enforces. The server check is authoritative either way;
@@ -453,6 +457,12 @@ func claimFormPage(errMsg string) claimPage {
 		Suggested: pw,
 		MinLength: claimPasswordMinLength,
 	}
+}
+
+func (s *Server) claimForm(errMsg string) claimPage {
+	p := claimFormPage(errMsg)
+	p.Warning = s.dataWarning
+	return p
 }
 
 // sameOriginPost reports whether a POST plausibly came from this page.
@@ -515,7 +525,7 @@ func (s *Server) serveClaimForm(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.render(w, r, "claim.html", claimFormPage(""))
+	s.render(w, r, "claim.html", s.claimForm(""))
 }
 
 // serveClaim checks the one-time token, takes the password, writes the
@@ -534,7 +544,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	if !sameOriginPost(r) {
 		w.WriteHeader(http.StatusForbidden)
-		s.render(w, r, "claim.html", claimFormPage("That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here."))
+		s.render(w, r, "claim.html", s.claimForm("That form was submitted from another site, so reostream did not use it. Open this page directly and set the password here."))
 		return
 	}
 
@@ -551,14 +561,14 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 	// docker-proxy the passer-by and the operator are the same key.
 	if !claimTokenMatches(s.claimToken(), r.FormValue("token")) {
 		w.WriteHeader(http.StatusForbidden)
-		s.render(w, r, "claim.html", claimFormPage("That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- a few lines below \"reostream: not yet claimed\". Copy it from there."))
+		s.render(w, r, "claim.html", s.claimForm("That is not the token this reostream printed. It is in the daemon's own log -- `docker logs` on the container, or journalctl on the service -- a few lines below \"reostream: not yet claimed\". Copy it from there."))
 		return
 	}
 
 	password := r.FormValue("password")
 	if err := validClaimPassword(password); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		s.render(w, r, "claim.html", claimFormPage(err.Error()))
+		s.render(w, r, "claim.html", s.claimForm(err.Error()))
 		return
 	}
 
@@ -580,7 +590,7 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
-		s.render(w, r, "claim.html", claimFormPage(err.Error()))
+		s.render(w, r, "claim.html", s.claimForm(err.Error()))
 		return
 	}
 

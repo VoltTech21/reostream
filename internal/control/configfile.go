@@ -66,9 +66,28 @@ func controlListen(c *config.Config) string {
 // nonroot, so this is the usual first-run failure; startup calls it to
 // warn before anyone gets as far as the claim page.
 func DataDirWritable(dir string) error {
-	f, err := os.CreateTemp(dir, ".reostream-probe-*")
+	// A data directory that is not there yet is fine as long as it can be
+	// made: the first save creates it. So probe the nearest folder that
+	// exists, which for a plain binary started with -data pointing at a
+	// fresh path is a parent the user owns, or is / for a missing /data
+	// (#57).
+	probe := dir
+	for {
+		if _, err := os.Stat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	f, err := os.CreateTemp(probe, ".reostream-probe-*")
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
+			if probe != dir {
+				return fmt.Errorf("reostream cannot create %s: %s is not writable by uid %d. Start it with -data and a folder you can write to, for example -data ./reostream-data", dir, probe, os.Getuid())
+			}
 			return dirNotWritable(dir)
 		}
 		return err
@@ -78,8 +97,8 @@ func DataDirWritable(dir string) error {
 }
 
 func dirNotWritable(dir string) error {
-	uid := os.Getuid()
-	return fmt.Errorf("reostream cannot write to %s: it runs as uid %d and the folder is not writable by that user. On the host, run chown -R %d:%d on the folder mounted at %s, then try again", dir, uid, uid, uid, dir)
+	uid, gid := os.Getuid(), os.Getgid()
+	return fmt.Errorf("reostream cannot write to %s: it runs as uid %d and the folder is not writable by that user. On the host, run chown -R %d:%d on the folder mounted at %s, then try again", dir, uid, uid, gid, dir)
 }
 
 // renameConfig is os.Rename, kept as a variable so a test can force the

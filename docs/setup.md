@@ -24,7 +24,9 @@ chmod +x reostream
 ./reostream -data ./reostream-data
 ```
 
-It prints the same claim token the container does. No runtime dependencies.
+It prints the same claim token the container does. No runtime dependencies. The config
+and pictures go in `-data`; without it, reostream uses `/data` if that folder exists (as
+in the container) and otherwise `reostream-data` in the folder it was started from.
 
 ### Mac
 
@@ -59,6 +61,12 @@ Use bridge networking (no `--network host`) and the same number on both sides of
 The setup page's battery camera search does not reach your network from inside Docker
 Desktop, so add battery cameras by address. Wired cameras need none of this. Tested
 2026-11-02 with Docker Desktop 29.3 on macOS 26.4.
+
+A firewall on the host (ufw, firewalld) gets in the way of battery cameras the same way:
+the camera answers on a UDP port reostream asks for, not the one the request went out from,
+so the firewall sees an unrelated packet and drops it, and the camera never connects
+("the camera did not answer in time"). Give reostream a fixed port with
+`REOSTREAM_BATTERY_UDP_PORT=41000` and allow it, for example `sudo ufw allow 41000/udp`.
 
 ### systemd
 
@@ -102,6 +110,11 @@ The template runs the container as `nobody:users` (`--user 99:100` under Extra
 Parameters), the user that owns appdata on Unraid, so the folder needs no setup. A
 template installed before v0.2.4 lacks that line: add `--user 99:100` under Advanced
 View > Extra Parameters, or the claim cannot save its config.
+
+Keep **Data** under `/mnt/user` (the default is `/mnt/user/appdata/reostream`). Any other
+path that is not on the array or a pool is in Unraid's memory: Docker makes it as an empty
+folder owned by root, and it is gone at the next reboot, so reostream asks to be claimed
+again. reostream says so in its log and on the claim page when Data is in memory.
 
 To add the template by hand instead, in the Unraid terminal:
 

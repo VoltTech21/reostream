@@ -285,7 +285,7 @@ func TestUndoPostsThePreviousDocumentThroughTheVerifiedWritePath(t *testing.T) {
 	}
 	// The proof is what reached the camera, not what the page claims: the
 	// previous document, byte for byte, on a real SetConfig.
-	sent := decodedSetConfigBody(t, undoCam.Received(), pair.Set, key)
+	sent := sentSetConfigBody(t, undoCam, pair.Set, key)
 	if !strings.Contains(sent, "<name>front</name>") {
 		t.Fatalf("undo sent the camera something other than its previous document: %s", sent)
 	}

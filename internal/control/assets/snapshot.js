@@ -7,6 +7,14 @@
 // latency chasing options below keep it at the edge, and seeking to the
 // end of the buffer on play covers the case where it has already drifted
 // before those take effect.
+// The IO stash holds incoming bytes back to hand them to the demuxer in
+// larger pieces. Good for a file, but on a live camera it keeps the picture
+// that much behind for the whole session: on the fisheye's page the player
+// ran a median 1.01 s behind the newest frame it had with it on and 0.84 s
+// with it off, three rounds each in Chrome, no stalls either way (#59).
+// Every live player passes this; the recording player keeps its stash.
+window.reostreamLive = {enableStashBuffer: false};
+
 window.reostreamPlayer = function (url, video) {
   // No liveBufferLatencyChasing. It keeps a timer polling the SourceBuffer,
   // and a player that has been destroyed leaves that timer behind: one page
@@ -16,7 +24,7 @@ window.reostreamPlayer = function (url, video) {
   // (The Live tab's own flood of those errors on a camera with a pan and
   // tilt pad was live.js never destroying the old player at all: see
   // stopMove there, 11-03.)
-  var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: url});
+  var player = mpegts.createPlayer({type: 'mpegts', isLive: true, url: url}, reostreamLive);
   if (video) {
     video.addEventListener('play', function () {
       try {

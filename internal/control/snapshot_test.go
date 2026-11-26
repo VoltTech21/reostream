@@ -97,7 +97,7 @@ func TestSnapshotServesTheCamerasOwnJPEG(t *testing.T) {
 	waitForCloses(t, cam, 1)
 
 	key := baichuan.AESKey(testSnapNonce, "")
-	sent := decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDSnap, key)
+	sent := sentSetConfigBody(t, cam, baichuan.MsgIDSnap, key)
 	if !strings.Contains(sent, "<streamType>sub</streamType>") {
 		t.Errorf("the snap asked for the wrong stream:\n%s", sent)
 	}
@@ -113,7 +113,7 @@ func TestSnapshotDefaultsToMain(t *testing.T) {
 		t.Fatalf("status %d: %s", resp.StatusCode, body)
 	}
 	waitForCloses(t, cam, 1)
-	sent := decodedSetConfigBody(t, cam.Received(), baichuan.MsgIDSnap, baichuan.AESKey(testSnapNonce, ""))
+	sent := sentSetConfigBody(t, cam, baichuan.MsgIDSnap, baichuan.AESKey(testSnapNonce, ""))
 	if !strings.Contains(sent, "<streamType>main</streamType>") {
 		t.Errorf("the snap asked for the wrong stream:\n%s", sent)
 	}
